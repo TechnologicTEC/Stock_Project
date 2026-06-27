@@ -1,0 +1,39 @@
+# --- Core app ---
+streamlit>=1.38
+plotly>=5.24
+pandas>=2.2
+
+# --- Technical indicators ---
+# Not the original pandas-ta - its PyPI history was wiped and ownership
+# changed hands under murky circumstances, and it predates numpy 2 anyway.
+# pandas-ta-classic is the actively maintained fork; it requires numpy>=2.0,
+# which is also what current pandas/streamlit/torch expect by now - so don't
+# pin numpy down, just let pip resolve a compatible numpy 2.x automatically.
+pandas-ta-classic>=0.6
+
+# --- Database ---
+sqlalchemy>=2.0
+
+# --- Data sources (all free-tier) ---
+finnhub-python>=2.4      # quotes, fundamentals, news, insider data
+yfinance>=0.2             # bulk historical OHLCV for backtesting
+fredapi>=0.5               # macroeconomic indicators
+alpaca-py>=0.30            # paper trading + market data
+# praw>=7.7                 # Reddit wrapper - dropped from default build; Reddit's June 2026
+                             # policy requires written approval for scraping/ML use, even
+                             # non-commercial. Uncomment only if you get approved access.
+
+# --- Parsing SEC EDGAR filings ---
+lxml>=5.0
+beautifulsoup4>=4.12
+
+# --- NLP / sentiment (FinBERT) ---
+transformers>=4.40
+torch>=2.0
+
+# --- Utilities ---
+python-dotenv>=1.0
+requests>=2.31
+
+# --- Backtesting upgrade (install when you reach Phase 5 — not needed yet) ---
+# vectorbt>=0.27

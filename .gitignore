@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Local database & cache
+*.db
+*.sqlite3
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
