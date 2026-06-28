@@ -1,39 +1,39 @@
-# Investment Platform — Phase 0: Data Plumbing
+# Investment Platform — Phase 0 + Phase 1
 
-This is Phase 0 from Section 7 of the blueprint: the data plumbing layer
-everything else gets built on top of. Nothing here has a UI yet — that's
-Phase 1.
+Phase 0 (Section 7): the data plumbing layer. Phase 1: the Portfolio
+Dashboard — the first thing that actually renders in a browser.
 
 ## What's here
 
 ```
 investment-platform/
+├── app/
+│   ├── main.py                  # Streamlit entry point — run this
+│   └── pages/
+│       └── 1_portfolio.py       # Portfolio Dashboard (Section 6.3)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
-│   │                    #   ApiCache (a generic TTL cache table for data
-│   │                    #   sources that don't have their own structured
-│   │                    #   cache table)
-│   └── session.py        # Engine/session setup. configure() lets tests
-│                          #   (or, later, Postgres per Section 13) swap
-│                          #   the database without touching this file.
+│   │                    #   ApiCache (generic TTL cache) and an
+│   │                    #   `asset_type` column on Holding (Section 6.3
+│   │                    #   needs it for the asset-type pie chart)
+│   └── session.py        # Engine/session setup, + a small built-in
+│                          #   migration so existing DB files pick up new
+│                          #   columns without losing data (see below)
 ├── engine/
 │   ├── config.py          # Loads .env once, on first import
 │   ├── time_utils.py       # Shared naive-UTC datetime helpers
-│   ├── cache.py            # THE cache layer — Section 5's rule lives here:
-│   │                       #   pages/engine code never call APIs directly,
-│   │                       #   only this file decides when a network call
-│   │                       #   is actually needed.
+│   ├── cache.py            # THE cache layer (Section 5's rule lives here)
+│   ├── portfolio.py        # Holdings CRUD, valuation, allocation,
+│   │                       #   and historical value reconstruction
 │   └── data_sources/
-│       ├── finnhub_client.py   # quotes, news, fundamentals, insider data
+│       ├── finnhub_client.py   # quotes, news, fundamentals, profile, insider data
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 19 tests, all mocked — no API keys needed to run these
+├── tests/                  # 43 tests, all mocked - no API keys needed to run these
 ├── scripts/
-│   └── verify_setup.py    # Real network calls against YOUR keys — run this
-│                           #   once .env is filled in, to confirm everything
-│                           #   actually works end-to-end.
+│   └── verify_setup.py    # Real network calls against YOUR keys
 ├── .env.example
 ├── .gitignore
 ├── pytest.ini
@@ -41,15 +41,33 @@ investment-platform/
 └── requirements-dev.txt    # just pytest, for running the test suite
 ```
 
-## Setup
-
-You said you've already done Section 14's setup (Python 3.11/3.12, venv,
-`pip install -r requirements.txt`). Two more things specific to this repo:
+## Running it
 
 ```bash
-pip install -r requirements-dev.txt      # adds pytest, for the test suite
-cp .env.example .env                      # then fill in your real API keys
+streamlit run app/main.py
 ```
+
+Then use the **Portfolio** page in the sidebar. You can:
+- add holdings one at a time, or import a CSV (template provided in-app)
+- see live-ish valuation, gain/loss, and today's change
+- view a value-over-time chart with a date-range selector (1M/3M/6M/YTD/1Y/All)
+- see allocation pie charts by ticker, asset type, and sector
+- see your holdings in a table with green/red conditional coloring (the
+  "heat map" look from Section 6.3) for gain/loss and today's % change
+
+If a price can't be fetched for a holding (missing key, bad ticker, API
+hiccup), that holding is flagged and excluded from totals rather than
+breaking the whole page — same philosophy as the rest of this project.
+
+## A migration note
+
+`Holding` gained an `asset_type` column in Phase 1 (needed for the
+asset-type allocation pie chart) that wasn't in the original Section 8
+schema sketch. If you already had a `db/investment.db` file from Phase 0,
+`init_db()` now detects the missing column and adds it automatically (via
+`ALTER TABLE`, not by recreating the table) — no need to delete your
+existing data. This is a hand-rolled, SQLite-only migration; if you move to
+Postgres later (Section 13), swap it for Alembic instead of extending it.
 
 ## Running the automated tests (no API keys needed)
 
@@ -57,23 +75,17 @@ cp .env.example .env                      # then fill in your real API keys
 pytest -v
 ```
 
-All 19 tests use mocked external calls, so they run instantly and never
-touch the network or your real database. They cover:
-- the cache layer's TTL logic (hit, miss, expiry, per-source isolation)
-- the DB schema (round-trips, the watchlist's uniqueness constraint)
-- data source clients (field mapping, and the "missing API key" error path)
+43 tests, all using mocked external calls. New in Phase 1: `test_portfolio.py`
+covers the holdings/valuation/allocation/history logic, and
+`test_portfolio_page.py` runs the actual Streamlit page end-to-end via
+Streamlit's own `AppTest` framework (catches UI-wiring bugs that testing
+`engine/portfolio.py` alone wouldn't).
 
 ## Verifying it against your real keys
 
 ```bash
 python scripts/verify_setup.py
 ```
-
-This makes real (cheap, free-tier) calls to Finnhub, yfinance, Alpaca, FRED,
-and SEC EDGAR, plus a cache round-trip — and tells you clearly which ones
-are missing a key, rather than failing silently. Expect some checks to fail
-until you've created every account from Section 11's checklist; that's
-normal, not a bug.
 
 ## The one rule everything above follows
 
@@ -82,21 +94,24 @@ normal, not a bug.
 > cached copy is fresh enough to reuse, and only then calls a function in
 > `engine/data_sources/`.
 
-Concretely: `engine/data_sources/*.py` functions are "dumb" — they always
-hit the network when called, with zero caching logic of their own. Every
-*caller* of those functions should go through `engine/cache.py` instead of
-calling them directly. This is what keeps the whole app inside Finnhub's
-60 req/min budget without you having to think about it on every feature.
+`engine/portfolio.py` follows this too: it never imports a data source
+directly without going through `engine/cache.py` (quotes, 5-minute TTL;
+sector profiles, 7-day TTL; price history, persisted indefinitely and
+topped up on demand).
 
-## Database
+## A note on running Streamlit pages directly
 
-A single SQLite file at `db/investment.db`, created automatically the
-first time `init_db()` runs (both `verify_setup.py` and your test fixtures
-already do this). It's gitignored — don't commit it.
+Streamlit only adds the **main script's** folder (`app/`) to `sys.path` —
+not the project root. Without an explicit fix, `import engine` / `import db`
+would fail the moment a page runs. Both `app/main.py` and
+`app/pages/1_portfolio.py` insert the project root into `sys.path`
+themselves at the top of the file for this reason — if you add new pages
+later, copy that same snippet into them too.
 
 ## What's next
 
-Phase 1 from Section 7: the Portfolio Dashboard (manual holdings entry +
-Streamlit + Plotly). That's the first phase that actually renders something
-in a browser, and it'll import `db.session` and `engine.cache` exactly as
-built here.
+Phase 2 from Section 7: the Investment Screener — explainable weighted
+scoring across valuation, growth, profitability, momentum, sentiment, and
+analyst confidence. It'll reuse `engine/cache.py` and the Finnhub client
+exactly as built here.
+

@@ -26,7 +26,12 @@ class Base(DeclarativeBase):
 
 class Holding(Base):
     """Your current positions (manual entry or CSV import — see Section 2:
-    there's no free way to auto-sync a real brokerage account)."""
+    there's no free way to auto-sync a real brokerage account).
+
+    `asset_type` isn't in the Section 8 schema sketch verbatim, but Section
+    6.3 explicitly calls for an asset-type allocation pie chart, so it's
+    added here (default "stock") — see db/session.py's lightweight
+    migration if you already created the DB file before this column existed."""
 
     __tablename__ = "holdings"
 
@@ -35,6 +40,7 @@ class Holding(Base):
     shares: Mapped[float] = mapped_column(Float)
     cost_basis: Mapped[float] = mapped_column(Float)
     purchase_date: Mapped[date_]
+    asset_type: Mapped[str] = mapped_column(String(20), default="stock", server_default="stock")
 
 
 class Transaction(Base):

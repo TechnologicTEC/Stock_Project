@@ -91,6 +91,24 @@ def get_insider_sentiment(ticker: str, from_date: date, to_date: date) -> dict:
     return _client().stock_insider_sentiment(ticker.upper(), from_date.isoformat(), to_date.isoformat())
 
 
+def get_company_profile(ticker: str) -> dict:
+    """
+    Sector/industry/country/market-cap metadata — feeds the Portfolio
+    Dashboard's allocation charts (Section 6.3). Finnhub's free tier
+    doesn't return a single clean "sector" field; `finnhubIndustry` is the
+    closest free substitute, and what we treat as "sector" throughout.
+    """
+    profile = _client().company_profile2(symbol=ticker.upper())
+    return {
+        "ticker": ticker.upper(),
+        "name": profile.get("name"),
+        "sector": profile.get("finnhubIndustry"),
+        "country": profile.get("country"),
+        "market_cap": profile.get("marketCapitalization"),
+        "currency": profile.get("currency"),
+    }
+
+
 def get_earnings_calendar(ticker: str, from_date: date, to_date: date) -> dict:
     """EPS estimate vs. actual — feeds the Earnings Analyzer (Section 6.5)."""
     return _client().earnings_calendar(_from=from_date.isoformat(), to=to_date.isoformat(), symbol=ticker.upper())

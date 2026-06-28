@@ -61,9 +61,51 @@ def get_engine() -> Engine:
 
 
 def init_db() -> None:
-    """Create all tables that don't already exist. Safe to call on every
-    app startup — it's a no-op if the schema is already there."""
+    """Create all tables that don't already exist, then apply any pending
+    lightweight column migrations (see _apply_lightweight_migrations).
+    Safe to call on every app startup."""
     Base.metadata.create_all(get_engine())
+    _apply_lightweight_migrations(get_engine())
+
+
+# --------------------------------------------------------------------------
+# Lightweight migrations
+#
+# Hand-rolled on purpose: Section 12's upgrade path is "Postgres only if you
+# add multiple users", and Alembic is overkill before that point. This just
+# means "if a model gained a column since your db file was created, add it
+# instead of erroring" — it never drops or renames anything, so it's safe to
+# run on every startup. If you do move to Postgres, replace this with
+# Alembic rather than extending it further.
+# --------------------------------------------------------------------------
+
+_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
+    # (table, column, DDL to add it)
+    ("holdings", "asset_type", "ALTER TABLE holdings ADD COLUMN asset_type VARCHAR(20) DEFAULT 'stock'"),
+]
+
+
+def _apply_lightweight_migrations(engine: Engine) -> None:
+    if engine.url.get_backend_name() != "sqlite":
+        return  # only the free-tier default needs this; Postgres should use Alembic
+    for table, column, ddl in _COLUMN_MIGRATIONS:
+        if _table_exists(engine, table) and not _column_exists(engine, table, column):
+            with engine.begin() as conn:
+                conn.exec_driver_sql(ddl)
+
+
+def _table_exists(engine: Engine, table: str) -> bool:
+    with engine.connect() as conn:
+        row = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        return row is not None
+
+
+def _column_exists(engine: Engine, table: str, column: str) -> bool:
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+        return any(r[1] == column for r in rows)
 
 
 @contextmanager
