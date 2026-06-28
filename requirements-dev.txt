@@ -1,0 +1,2 @@
+# Dev-only — not needed to run the app itself, only to run the test suite.
+pytest>=8.0
