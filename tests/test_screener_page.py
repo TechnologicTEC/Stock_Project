@@ -3,14 +3,18 @@ Exercises app/pages/2_screener.py itself via Streamlit's AppTest framework.
 engine/screener.py's scoring math already has thorough coverage in
 test_screener.py; what these tests catch is UI-wiring mistakes.
 """
+from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from engine import screener, watchlist
+from engine import cache, screener, watchlist
 
-PAGE_PATH = "app/pages/2_screener.py"
+# Absolute, not relative - see test_portfolio_page.py's PAGE_PATH comment
+# for why: AppTest.from_file()'s fallback path resolution is CWD-dependent
+# and fragile, so this sidesteps it entirely.
+PAGE_PATH = str(Path(__file__).resolve().parent.parent / "app" / "pages" / "2_screener.py")
 
 
 def _raw(ticker, pe=20.0, revenue_growth=10.0):
@@ -18,7 +22,8 @@ def _raw(ticker, pe=20.0, revenue_growth=10.0):
         ticker=ticker,
         fundamentals={"peTTM": pe, "revenueGrowthTTMYoy": revenue_growth},
         price_df=pd.DataFrame(columns=["open", "high", "low", "close", "volume"]),
-        recommendation=None, price_target=None, insider_mspr=None, errors=[],
+        recommendation=None, price_target=None, insider_mspr=None,
+        sector_bucket=screener.DEFAULT_SECTOR_BUCKET, raw_industry=None, errors=[],
     )
 
 
@@ -76,6 +81,28 @@ def test_screener_page_full_run_and_save():
     assert not at.exception
     history = screener.get_score_history("AAPL")
     assert len(history) == 1
+
+
+def test_screener_page_shows_known_limitations_banner():
+    watchlist.add_to_watchlist("AAPL")
+    raw = {"AAPL": _raw("AAPL")}
+
+    # The exact trigger path (a real 403 setting this flag) is covered in
+    # test_screener.py - this test only checks the page surfaces the note
+    # correctly once the flag is present.
+    cache.set_flag(screener.PRICE_TARGET_UNAVAILABLE_FLAG, True)
+
+    with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        at.multiselect[0].set_value(["AAPL"])
+        at.run(timeout=30)
+        run_button = next(b for b in at.button if "Run screener" in b.label)
+        run_button.click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    assert any("price-target endpoint" in el.value for el in at.info)
 
 
 def test_screener_page_warns_on_large_candidate_lists():

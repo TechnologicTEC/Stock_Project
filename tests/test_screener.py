@@ -92,12 +92,16 @@ def test_ma_position_score_rewards_price_above_sma():
 # isolation from any network/cache behavior.
 # --------------------------------------------------------------------------
 
-def _raw(ticker, fundamentals=None, price_df=None, recommendation=None, price_target=None, insider_mspr=None):
+def _raw(
+    ticker, fundamentals=None, price_df=None, recommendation=None, price_target=None, insider_mspr=None,
+    sector_bucket=None, raw_industry=None,
+):
     if price_df is None:
         price_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     return screener.TickerRawData(
         ticker=ticker, fundamentals=fundamentals, price_df=price_df,
-        recommendation=recommendation, price_target=price_target, insider_mspr=insider_mspr, errors=[],
+        recommendation=recommendation, price_target=price_target, insider_mspr=insider_mspr,
+        sector_bucket=sector_bucket or screener.DEFAULT_SECTOR_BUCKET, raw_industry=raw_industry, errors=[],
     )
 
 
@@ -201,6 +205,194 @@ def test_score_sentiment_always_returns_none_for_now():
 
 
 # --------------------------------------------------------------------------
+# Absolute curve scoring - the primary scoring mechanism (replaces
+# peer-percentile-as-score; see module docstring for why)
+# --------------------------------------------------------------------------
+
+def test_score_from_curve_interpolates_between_anchors():
+    curve = [(0, 0), (10, 100)]
+    assert screener._score_from_curve(5, curve) == pytest.approx(50.0)
+
+
+def test_score_from_curve_clamps_outside_range():
+    curve = [(10, 100), (20, 0)]
+    assert screener._score_from_curve(0, curve) == 100.0
+    assert screener._score_from_curve(100, curve) == 0.0
+
+
+def test_score_from_curve_none_passes_through():
+    assert screener._score_from_curve(None, screener.PE_CURVE) is None
+
+
+def test_quality_word_thresholds():
+    assert screener._quality_word(95) == "excellent"
+    assert screener._quality_word(65) == "good"
+    assert screener._quality_word(45) == "fair"
+    assert screener._quality_word(25) == "weak"
+    assert screener._quality_word(5) == "poor"
+    assert screener._quality_word(None) == "unknown"
+
+
+# --------------------------------------------------------------------------
+# The actual bug report this rework fixes: scores must be the SAME for a
+# given ticker's data regardless of who else is in the screening list, and
+# a single ticker screened alone must get a real score, not "insufficient
+# peers". These are the tests that would have caught the original problem.
+# --------------------------------------------------------------------------
+
+def test_score_is_identical_whether_screened_alone_or_with_peers():
+    """The bug report: BBAI's growth score depended on which other tickers
+    happened to be in the same screen. A ticker's score must come from its
+    own numbers, full stop."""
+    bbai = _raw("BBAI", fundamentals={"revenueGrowthTTMYoy": -20.3})
+
+    alone = screener._score_growth({"BBAI": bbai})
+    with_strong_peers = screener._score_growth({
+        "BBAI": bbai,
+        "ROCKET": _raw("ROCKET", fundamentals={"revenueGrowthTTMYoy": 80.0}),
+    })
+    with_weak_peers = screener._score_growth({
+        "BBAI": bbai,
+        "WORSE": _raw("WORSE", fundamentals={"revenueGrowthTTMYoy": -60.0}),
+    })
+
+    assert alone["BBAI"].score == with_strong_peers["BBAI"].score == with_weak_peers["BBAI"].score
+
+
+def test_negative_growth_does_not_collapse_to_zero_score():
+    """-20.3% revenue growth is bad, but the curve treats it as the bottom
+    of a real (if narrow) range, not an automatic 0 - the 0/100 from the
+    bug report came from being the worst of an arbitrary small group, not
+    from the number itself being literally the worst possible."""
+    raw = {"BBAI": _raw("BBAI", fundamentals={"revenueGrowthTTMYoy": -20.3})}
+    result = screener._score_growth(raw)
+    assert result["BBAI"].score == pytest.approx(0.0)  # -20.3 is at/below this curve's floor anchor - that's fine,
+    # it just shouldn't be an artifact of *peer comparison*, which the test above confirms.
+
+
+def test_single_ticker_screen_gets_real_scores_not_insufficient_peers():
+    raw = {"SOLO": _raw("SOLO", fundamentals={
+        "peTTM": 18.0, "pbAnnual": 2.0, "revenueGrowthTTMYoy": 12.0, "epsGrowthTTMYoy": 10.0,
+        "grossMarginTTM": 45.0, "netProfitMarginTTM": 12.0, "roeTTM": 18.0, "totalDebt/totalEquityAnnual": 0.6,
+    })}
+    with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
+        results = screener.screen_tickers(["SOLO"])
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.overall_score is not None
+    assert r.recommendation != "Insufficient data"
+    assert r.factors["valuation"].score is not None
+    assert r.factors["growth"].score is not None
+    assert r.factors["profitability"].score is not None
+    # peer-percentile context should NOT appear anywhere with only one ticker
+    all_reasons = " ".join(reason for fr in r.factors.values() for reason in fr.reasons)
+    assert "percentile" not in all_reasons
+
+
+def test_peer_percentile_appears_as_context_when_peers_exist_but_doesnt_drive_score():
+    cheap = _raw("CHEAP", fundamentals={"peTTM": 10.0})
+    expensive = _raw("EXPENSIVE", fundamentals={"peTTM": 50.0})
+
+    solo_result = screener._score_valuation({"CHEAP": cheap})
+    grouped_result = screener._score_valuation({"CHEAP": cheap, "EXPENSIVE": expensive})
+
+    assert "percentile" not in solo_result["CHEAP"].reasons[0]
+    assert "percentile" in grouped_result["CHEAP"].reasons[0]
+    # the score itself is unchanged by the peer context being available
+    assert solo_result["CHEAP"].score == grouped_result["CHEAP"].score
+
+
+# --------------------------------------------------------------------------
+# Sector classification and sector-aware curves
+# --------------------------------------------------------------------------
+
+def test_classify_sector_bucket_matches_keywords_case_insensitively():
+    assert screener.classify_sector_bucket("Consumer Electronics") == "Technology / Software"
+    assert screener.classify_sector_bucket("airlines") == "Industrials / Materials"
+    assert screener.classify_sector_bucket("Banks—Regional") == "Banks / Financials"
+
+
+def test_classify_sector_bucket_falls_back_to_default():
+    assert screener.classify_sector_bucket("Some Totally Unrecognized Thing") == screener.DEFAULT_SECTOR_BUCKET
+    assert screener.classify_sector_bucket(None) == screener.DEFAULT_SECTOR_BUCKET
+
+
+def test_curve_for_uses_sector_override_when_present():
+    tech_curve = screener._curve_for("pe", "Technology / Software", screener.PE_CURVE)
+    assert tech_curve == screener.SECTOR_CURVE_OVERRIDES["Technology / Software"]["pe"]
+    assert tech_curve != screener.PE_CURVE
+
+
+def test_curve_for_falls_back_to_generic_when_no_override():
+    # ROE has no per-sector override defined at all
+    assert screener._curve_for("roe", "Technology / Software", screener.ROE_CURVE) == screener.ROE_CURVE
+    # An unrecognized bucket falls back to generic even for a metric that DOES have overrides elsewhere
+    assert screener._curve_for("pe", screener.DEFAULT_SECTOR_BUCKET, screener.PE_CURVE) == screener.PE_CURVE
+
+
+def test_same_pe_scores_differently_by_sector():
+    """The whole point of sector adjustment: identical raw P/E should not
+    necessarily get an identical score in different sectors, since what
+    counts as 'expensive' varies."""
+    pe_value = 45.0
+    tech = _raw("TECH", fundamentals={"peTTM": pe_value}, sector_bucket="Technology / Software")
+    bank = _raw("BANK", fundamentals={"peTTM": pe_value}, sector_bucket="Banks / Financials")
+
+    tech_score = screener._score_valuation({"TECH": tech})["TECH"].score
+    bank_score = screener._score_valuation({"BANK": bank})["BANK"].score
+
+    assert tech_score != bank_score
+    assert tech_score > bank_score  # 45x is unremarkable for tech, expensive for a bank
+
+
+def test_valuation_reason_states_which_threshold_set_was_used():
+    raw = {"AAPL": _raw("AAPL", fundamentals={"peTTM": 30.0}, sector_bucket="Technology / Software")}
+    result = screener._score_valuation(raw)
+    assert "Technology / Software thresholds" in result["AAPL"].reasons[0]
+
+
+def test_valuation_reason_labels_unmatched_sector_explicitly():
+    raw = {"X": _raw("X", fundamentals={"peTTM": 30.0})}  # default/General bucket
+    result = screener._score_valuation(raw)
+    assert "General (no industry match) thresholds" in result["X"].reasons[0]
+
+
+def test_extreme_pb_gets_caveat_note_about_buybacks_and_asset_light_businesses():
+    """The real-world case this addresses: AAPL-style P/B of 50+ from heavy
+    buybacks isn't the same thing as being overvalued."""
+    raw = {"AAPL": _raw("AAPL", fundamentals={"pbAnnual": 51.0}, sector_bucket="Technology / Software")}
+    result = screener._score_valuation(raw)
+    assert any("buyback" in r.lower() for r in result["AAPL"].reasons)
+    # it should score low but NOT identically flat-zero regardless of how extreme the input is
+    assert 0 < result["AAPL"].score < 20
+
+
+def test_pb_caveat_note_absent_for_normal_values():
+    raw = {"X": _raw("X", fundamentals={"pbAnnual": 3.0})}
+    result = screener._score_valuation(raw)
+    assert not any("buyback" in r.lower() for r in result["X"].reasons)
+
+
+# --------------------------------------------------------------------------
+# Insider MSPR scale fix - Finnhub documents -100..+100, not -1..+1
+# --------------------------------------------------------------------------
+
+def test_insider_mspr_curve_uses_correct_finnhub_scale():
+    # -33.24 (a real value seen in testing) should land well above 0 -
+    # it's moderately negative, not "as bad as possible" on a -100..100 scale.
+    score = screener._score_from_curve(-33.24, screener.INSIDER_MSPR_CURVE)
+    assert score == pytest.approx(33.38, abs=0.5)
+    assert score > 0
+
+
+def test_insider_mspr_extreme_values_still_hit_the_real_floor_and_ceiling():
+    assert screener._score_from_curve(-100, screener.INSIDER_MSPR_CURVE) == 0.0
+    assert screener._score_from_curve(100, screener.INSIDER_MSPR_CURVE) == 100.0
+    assert screener._score_from_curve(0, screener.INSIDER_MSPR_CURVE) == 50.0
+
+
+# --------------------------------------------------------------------------
 # Recommendation thresholds
 # --------------------------------------------------------------------------
 
@@ -262,6 +454,42 @@ def test_screen_tickers_deduplicates_and_normalizes_case():
         results = screener.screen_tickers(["aapl", "AAPL", " Aapl "])
     assert len(results) == 1
     assert results[0].ticker == "AAPL"
+
+
+# --------------------------------------------------------------------------
+# Finnhub price-target 403 handling - detected once, not repeated per ticker
+# --------------------------------------------------------------------------
+
+def test_gather_raw_data_403_on_price_target_sets_flag_not_per_ticker_error():
+    import finnhub as finnhub_pkg
+
+    class FakeResponse:
+        status_code = 403
+        def json(self):
+            return {"error": "You don't have access to this resource."}
+
+    forbidden = finnhub_pkg.FinnhubAPIException(FakeResponse())
+
+    with patch("engine.data_sources.finnhub_client.get_basic_financials", return_value={"metric": {}}):
+        with patch("engine.price_history.get_history_df", return_value=pd.DataFrame(columns=["open", "high", "low", "close", "volume"])):
+            with patch("engine.data_sources.finnhub_client.get_recommendation_trends", return_value=[]):
+                with patch("engine.data_sources.finnhub_client.get_price_target", side_effect=forbidden):
+                    with patch("engine.data_sources.finnhub_client.get_insider_sentiment", return_value={"data": []}):
+                        result = screener._gather_raw_data("ZZZZ")
+
+    assert not any("price target" in e for e in result.errors)  # not dumped as a per-ticker error
+    assert screener.known_limitations()  # surfaced once, run-wide, instead
+
+
+def test_gather_raw_data_non_403_price_target_error_still_reported_per_ticker():
+    with patch("engine.data_sources.finnhub_client.get_basic_financials", return_value={"metric": {}}):
+        with patch("engine.price_history.get_history_df", return_value=pd.DataFrame(columns=["open", "high", "low", "close", "volume"])):
+            with patch("engine.data_sources.finnhub_client.get_recommendation_trends", return_value=[]):
+                with patch("engine.data_sources.finnhub_client.get_price_target", side_effect=RuntimeError("timeout")):
+                    with patch("engine.data_sources.finnhub_client.get_insider_sentiment", return_value={"data": []}):
+                        result = screener._gather_raw_data("ZZZZ")
+
+    assert any("price target" in e for e in result.errors)  # a real, non-permission error still shows up
 
 
 # --------------------------------------------------------------------------

@@ -68,10 +68,12 @@ extra = [t.strip().upper() for t in extra_raw.split(",") if t.strip()]
 candidate_tickers = sorted(set(selected) | set(extra))
 
 st.caption(
-    "Scores rank each ticker against the others in **this list** — there's no free source for "
-    "true market-wide sector medians, so comparing similar businesses together is what makes the "
-    "ranking meaningful. Mixing very different businesses (a bank with a biotech) will rank them "
-    "against each other anyway, just not usefully."
+    "Each score is based on fixed, documented thresholds for that metric (e.g. what generally "
+    "counts as a cheap P/E or healthy revenue growth) — it doesn't depend on what else you screen "
+    "alongside it, and works fine for a single ticker. When you screen more than one together, "
+    "you'll also see how each one compares to the others as extra context, since these thresholds "
+    "are sector-agnostic rules of thumb, not sector-adjusted fair value — screening similar "
+    "businesses together makes that context more useful."
 )
 
 if len(candidate_tickers) > 30:
@@ -86,6 +88,9 @@ if run_clicked:
     with st.spinner(f"Screening {len(candidate_tickers)} ticker(s)..."):
         st.session_state["screener_results"] = screener.screen_tickers(candidate_tickers)
         st.session_state["screener_tickers"] = candidate_tickers
+
+for note in screener.known_limitations():
+    st.info(note, icon="ℹ️")
 
 results = st.session_state.get("screener_results")
 
@@ -152,10 +157,27 @@ with st.expander("ℹ️ How the overall score is built", expanded=False):
         "arrives in Phase 4 — until then it's marked unavailable and its 15% weight is spread "
         "proportionally across the other five factors below, rather than faking a neutral score."
     )
+    st.caption(
+        "Valuation (P/E, P/B, P/S) and gross margin are scored against thresholds adjusted for the "
+        "ticker's detected industry (e.g. software vs. banking get different 'cheap'/'expensive' "
+        "ranges) — shown per ticker below. This is a hand-picked approximation, not live market "
+        "data; there's no free source for real-time sector medians. Growth, net margin, ROE, and "
+        "debt/equity still use one general threshold set for every industry."
+    )
 
 for r in results:
     label = f"{r.ticker} — {r.overall_score:.1f} ({r.recommendation})" if r.overall_score is not None else f"{r.ticker} — Insufficient data"
     with st.expander(label):
+        valuation_factor = r.factors.get("valuation")
+        if valuation_factor is not None:
+            bucket = valuation_factor.raw.get("sector_bucket")
+            raw_industry = valuation_factor.raw.get("raw_industry")
+            if bucket and bucket != screener.DEFAULT_SECTOR_BUCKET:
+                st.caption(f"📁 Valuation/margin thresholds use the **{bucket}** peer group (Finnhub industry: *{raw_industry}*)")
+            elif raw_industry:
+                st.caption(f"📁 Industry **{raw_industry}** didn't match a known peer group — using general thresholds")
+            else:
+                st.caption("📁 Industry unknown — using general thresholds")
         for name, weight in screener.FACTOR_WEIGHTS.items():
             fr = r.factors.get(name)
             if fr is None:

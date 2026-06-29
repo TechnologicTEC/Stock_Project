@@ -109,6 +109,19 @@ def get_company_profile(ticker: str) -> dict:
     }
 
 
+def is_permission_denied(exc: Exception) -> bool:
+    """
+    True if `exc` is Finnhub telling you a specific endpoint isn't included
+    on your plan (HTTP 403) - as opposed to a bad ticker, rate limit, or
+    network problem. Finnhub's free tier has been narrowing over time (see
+    blueprint Section 2's notes on Alpha Vantage/Polygon doing the same) -
+    `/stock/price-target` returning this is a known example as of mid-2026.
+    Callers use this to stop retrying a permanently-403'ing endpoint instead
+    of wasting calls and repeating the same error on every ticker.
+    """
+    return isinstance(exc, finnhub.FinnhubAPIException) and exc.status_code == 403
+
+
 def get_earnings_calendar(ticker: str, from_date: date, to_date: date) -> dict:
     """EPS estimate vs. actual — feeds the Earnings Analyzer (Section 6.5)."""
     return _client().earnings_calendar(_from=from_date.isoformat(), to=to_date.isoformat(), symbol=ticker.upper())

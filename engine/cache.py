@@ -275,3 +275,34 @@ def mark_news_fetched(ticker: str) -> None:
             session.add(ApiCache(cache_key=key, value_json="null", fetched_at=_utcnow()))
         else:
             row.fetched_at = _utcnow()
+
+
+# --------------------------------------------------------------------------
+# Generic flags - for things like "is this endpoint gated on my current
+# API plan", where re-discovering the answer means wasting a call on
+# something already known to fail. Built on the same ApiCache table as
+# get_or_fetch(), just read/written directly rather than wrapping a fetch.
+# --------------------------------------------------------------------------
+
+def get_flag(key: str, ttl_seconds: int | None = None) -> bool | None:
+    """Returns the previously-stored flag, or None if it was never set, or
+    if it's older than ttl_seconds (so a 'permanently' gated endpoint still
+    gets periodically rechecked rather than being assumed dead forever)."""
+    with get_session() as session:
+        row = session.get(ApiCache, key)
+        if row is None:
+            return None
+        if ttl_seconds is not None and _utcnow() - row.fetched_at >= timedelta(seconds=ttl_seconds):
+            return None
+        return bool(json.loads(row.value_json))
+
+
+def set_flag(key: str, value: bool) -> None:
+    with get_session() as session:
+        row = session.get(ApiCache, key)
+        payload = json.dumps(bool(value))
+        if row is None:
+            session.add(ApiCache(cache_key=key, value_json=payload, fetched_at=_utcnow()))
+        else:
+            row.value_json = payload
+            row.fetched_at = _utcnow()

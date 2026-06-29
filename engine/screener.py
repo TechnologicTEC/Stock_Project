@@ -5,26 +5,47 @@ surfaced, so "why this score" is always answerable from the output alone
 (Section 6.9's Explainable AI requirement falls out of this design rather
 than needing its own module).
 
-Two honest simplifications versus the blueprint's original factor table,
-flagged here rather than silently faked:
+How each factor is scored (revised from the first version of this file):
+every metric is scored against fixed, documented absolute thresholds (see
+the *_CURVE constants below) - e.g. a P/E of 12 scores well because 12 is
+generally considered cheap, not because it happens to be cheaper than
+whatever else you screened alongside it. This means a single ticker
+screened alone gets a fully-formed score, and a ticker's grade doesn't
+silently shift depending on what else happens to be in your list.
 
-1. Normalization (Section 6.1: "percentile rank within its sector") is done
-   within the comparison set you actually screen together, not against the
-   whole market's sector median - there's no free endpoint that returns
-   "every healthcare stock's P/E". Screen comparable tickers together for
-   this to mean anything (mixing a bank and a biotech won't rank fairly).
+When you screen more than one ticker together, each metric ALSO gets a
+peer percentile shown in its explanation - purely as bonus context ("also
+ranks 80th percentile among the tickers you screened"), never as part of
+the score itself. The original version of this screener did the reverse
+(peer-relative as the primary score, absolute thresholds nowhere) and that
+produced two real problems: a stock could land at a stark 0/100 on a
+metric just for being the worst of a small, arbitrary group even when its
+actual number was fine, and screening a single ticker returned "not enough
+peers to rank" for almost everything. Absolute-first fixes both.
 
-2. Sentiment (15% in the original weight table) needs FinBERT, which isn't
+The honest trade-off: these curves are rough, sector-agnostic rules of
+thumb, not sector-adjusted fair value. A 35x P/E or a 25% gross margin
+might be completely normal for one industry and a red flag for another,
+and these curves can't tell the difference - that's exactly the problem
+Section 6.1's original "percentile rank within sector" was meant to solve,
+and it isn't fully solved here since there's no free endpoint for true
+market-wide sector medians. Screening similar businesses together and
+reading the peer-percentile context is the practical mitigation: it won't
+correct the curves, but it tells you how this ticker compares to the
+others you're actually looking at.
+
+Two other simplifications, flagged here rather than silently faked:
+
+1. Sentiment (15% in the original weight table) needs FinBERT, which isn't
    built until Phase 4. Rather than faking a neutral placeholder score,
    that factor returns score=None and its weight is redistributed
    proportionally across the other five. Once Phase 4 wires in a real
    score, it slots back in here with no changes needed.
 
-Also out of scope for this phase: institutional ownership trend (Section 4
-flags this as needing SEC EDGAR 13F parsing). The Analyst & Institutional
-Confidence factor below uses recommendation trends, analyst price targets,
-and insider sentiment instead - 13F parsing can be added as a later
-enhancement.
+2. Institutional ownership trend (Section 4 flags this as needing SEC
+   EDGAR 13F parsing) is out of scope for this phase. The Analyst &
+   Institutional Confidence factor below uses recommendation trends,
+   analyst price targets, and insider sentiment instead.
 
 A note on Finnhub field names: `company_basic_financials`'s exact field set
 can vary by account/tier, and I can't verify live field names from this
@@ -32,7 +53,11 @@ build environment. `_METRIC_KEY_CANDIDATES` below tries several plausible
 names per metric and degrades gracefully (score=None for that input) if
 none match. If a factor keeps coming back as "no data available" for
 tickers that should have it, run `scripts/inspect_metrics.py YOUR_TICKER`
-and adjust the candidate list for that metric.
+and adjust the candidate list for that metric. Separately, Finnhub's
+price-target endpoint has been observed returning HTTP 403 ("not on your
+plan") as of mid-2026 - see PRICE_TARGET_UNAVAILABLE_FLAG below; this is
+detected automatically and surfaced once via known_limitations() rather
+than retried per ticker.
 """
 from __future__ import annotations
 
@@ -50,6 +75,7 @@ from engine.data_sources import finnhub_client
 
 FUNDAMENTALS_TTL_SECONDS = 20 * 60 * 60   # ~daily, per Section 8's "refreshed ~daily"
 ANALYST_DATA_TTL_SECONDS = 20 * 60 * 60   # recommendation trends / price targets / insider sentiment
+PROFILE_TTL_SECONDS = 7 * 24 * 60 * 60    # sector/industry rarely changes; 7 days is plenty
 MOMENTUM_LOOKBACK_DAYS = 220              # enough for a 200-day SMA with buffer for weekends/holidays
 MOMENTUM_RETURN_LOOKBACK_DAYS = 126       # ~6 months of trading days
 INSIDER_LOOKBACK_DAYS = 180
@@ -95,6 +121,172 @@ _METRIC_KEY_CANDIDATES = {
     "debt_to_equity": ["totalDebt/totalEquityAnnual", "totalDebt/totalEquityQuarterly"],
 }
 
+# --------------------------------------------------------------------------
+# Absolute scoring curves - (raw_value, score) anchor points, sorted by
+# value ascending. _score_from_curve() linearly interpolates between them
+# and clamps outside the range. These are rough, sector-agnostic rules of
+# thumb (see module docstring's honest trade-off note) - tune them here if
+# you'd rather be stricter/looser, or build sector-specific variants later.
+# --------------------------------------------------------------------------
+
+PE_CURVE = [(8, 100), (15, 80), (25, 55), (40, 25), (70, 5), (150, 0)]
+PB_CURVE = [(1, 100), (3, 65), (6, 35), (12, 10), (30, 2), (60, 0)]
+PS_CURVE = [(1, 100), (3, 70), (8, 35), (18, 10), (35, 2), (60, 0)]
+REVENUE_GROWTH_CURVE = [(-20, 0), (0, 30), (10, 60), (20, 85), (35, 100)]   # % YoY
+EPS_GROWTH_CURVE = [(-30, 0), (0, 30), (15, 60), (30, 85), (50, 100)]      # % YoY
+GROSS_MARGIN_CURVE = [(10, 10), (30, 40), (50, 65), (70, 85), (85, 100)]   # %
+NET_MARGIN_CURVE = [(-10, 0), (0, 20), (8, 55), (18, 80), (30, 100)]       # %
+ROE_CURVE = [(0, 10), (8, 40), (15, 65), (25, 85), (35, 100)]              # %
+DEBT_TO_EQUITY_CURVE = [(0, 100), (0.5, 80), (1.0, 60), (2.0, 30), (4.0, 0)]
+MOMENTUM_RETURN_CURVE = [(-30, 0), (-10, 30), (0, 50), (15, 70), (30, 90), (50, 100)]  # % over lookback
+ANALYST_UPSIDE_CURVE = [(-20, 0), (0, 40), (10, 60), (25, 80), (40, 100)]  # % to mean target
+INSIDER_MSPR_CURVE = [(-100, 0), (0, 50), (100, 100)]  # Finnhub's MSPR is documented as -100..+100, not -1..+1
+
+# --------------------------------------------------------------------------
+# Sector-bucket curve overrides.
+#
+# Finnhub's `finnhubIndustry` field is fine-grained (e.g. "Airlines",
+# "Semiconductors" - GICS sub-industry level, not the ~11 broad GICS
+# sectors), so there's no small fixed list to switch on exactly. Instead,
+# SECTOR_KEYWORDS does simple case-insensitive substring matching against
+# a handful of broader reference buckets; first match wins, and anything
+# that doesn't match any keyword falls back to DEFAULT_SECTOR_BUCKET (the
+# generic curves above).
+#
+# IMPORTANT - what this is and isn't: these are hand-picked, this-author's
+# best-guess thresholds for what's typical in each bucket, not live-computed
+# medians from real market data (no free endpoint provides that - see
+# module docstring). Treat the bucket and score as "roughly the right
+# ballpark for this kind of business," not as authoritative sector
+# benchmarking. Only valuation multiples (P/E, P/B, P/S) and gross margin
+# have overrides defined below; growth, net margin, ROE, and debt/equity
+# still use the generic curves for every sector for now - extend
+# SECTOR_CURVE_OVERRIDES here if you want those sector-adjusted too.
+# --------------------------------------------------------------------------
+
+DEFAULT_SECTOR_BUCKET = "General"
+
+SECTOR_KEYWORDS: dict[str, list[str]] = {
+    "Technology / Software": ["software", "internet", "semiconductor", "technology", "it services", "computer", "electronics"],
+    "Biotech / Pharma": ["biotechnology", "pharmaceutical", "drug", "life sciences"],
+    "Banks / Financials": ["bank", "insurance", "financial services", "asset management", "capital markets", "credit"],
+    "Utilities": ["utilit"],
+    "Energy": ["oil", "gas", "energy", "coal"],
+    "Real Estate / REITs": ["reit", "real estate"],
+    "Retail / Consumer": ["retail", "apparel", "restaurant", "grocery", "consumer", "e-commerce", "leisure", "beverage", "food"],
+    "Industrials / Materials": [
+        "industrial", "machinery", "aerospace", "defense", "construction", "airlines", "chemicals",
+        "materials", "metals", "mining", "auto", "transportation", "marine",
+    ],
+    "Telecom / Media": ["telecom", "communication services", "media", "broadcasting", "entertainment"],
+    "Healthcare Services": ["health care", "healthcare", "hospital", "medical"],
+}
+
+SECTOR_CURVE_OVERRIDES: dict[str, dict[str, list[tuple[float, float]]]] = {
+    "Technology / Software": {
+        "pe": [(15, 100), (25, 85), (40, 60), (60, 30), (90, 10), (150, 0)],
+        "pb": [(2, 100), (6, 70), (12, 40), (20, 15), (40, 3), (80, 0)],
+        "ps": [(2, 100), (6, 70), (12, 40), (20, 15), (35, 3), (60, 0)],
+        "gross_margin": [(40, 20), (60, 50), (75, 75), (85, 95), (92, 100)],
+    },
+    "Biotech / Pharma": {
+        "pe": [(10, 100), (20, 80), (35, 55), (55, 25), (80, 5), (130, 0)],
+        "pb": [(1.5, 100), (4, 65), (8, 35), (14, 10), (25, 2), (50, 0)],
+        "ps": [(2, 100), (6, 65), (12, 35), (20, 10), (35, 2), (60, 0)],
+    },
+    "Banks / Financials": {
+        "pe": [(6, 100), (10, 85), (14, 60), (20, 30), (28, 10), (45, 0)],
+        "pb": [(0.6, 100), (1.0, 80), (1.5, 55), (2.5, 25), (4, 0)],
+        "ps": [(1, 100), (3, 65), (6, 35), (10, 10), (16, 0)],
+    },
+    "Utilities": {
+        "pe": [(10, 100), (15, 85), (20, 60), (26, 30), (34, 10), (50, 0)],
+        "pb": [(0.8, 100), (1.5, 75), (2.2, 45), (3, 15), (4.5, 0)],
+        "ps": [(1, 100), (2, 70), (3.5, 40), (5, 15), (8, 0)],
+        "gross_margin": [(20, 30), (35, 55), (50, 75), (65, 90), (80, 100)],
+    },
+    "Energy": {
+        "pe": [(5, 100), (9, 85), (14, 55), (20, 25), (30, 5), (50, 0)],
+        "pb": [(0.6, 100), (1.2, 75), (2, 45), (3, 15), (5, 0)],
+        "ps": [(0.5, 100), (1.2, 70), (2.5, 40), (4, 15), (7, 0)],
+    },
+    "Real Estate / REITs": {
+        "pe": [(8, 100), (14, 80), (22, 55), (32, 25), (45, 5), (70, 0)],
+        "pb": [(0.7, 100), (1.2, 75), (2, 45), (3, 15), (5, 0)],
+    },
+    "Retail / Consumer": {
+        "pe": [(8, 100), (15, 85), (22, 60), (32, 30), (45, 10), (70, 0)],
+        "pb": [(1, 100), (3, 70), (6, 40), (10, 15), (18, 3), (35, 0)],
+        "ps": [(0.4, 100), (1, 75), (2, 45), (3.5, 15), (6, 0)],
+        "gross_margin": [(15, 20), (28, 50), (40, 75), (52, 92), (65, 100)],
+    },
+    "Industrials / Materials": {
+        "pe": [(8, 100), (14, 85), (20, 60), (28, 30), (38, 10), (60, 0)],
+        "pb": [(1, 100), (2.5, 70), (4.5, 40), (7, 15), (12, 0)],
+        "ps": [(0.5, 100), (1.2, 70), (2.2, 40), (3.5, 15), (6, 0)],
+    },
+    "Telecom / Media": {
+        "pe": [(8, 100), (13, 85), (18, 60), (25, 30), (35, 10), (55, 0)],
+        "pb": [(0.8, 100), (1.6, 75), (2.5, 45), (4, 15), (6, 0)],
+    },
+    "Healthcare Services": {
+        "pe": [(10, 100), (17, 85), (25, 60), (35, 30), (50, 10), (75, 0)],
+        "pb": [(1.2, 100), (3, 70), (5.5, 40), (9, 15), (15, 3), (30, 0)],
+    },
+}
+
+
+def classify_sector_bucket(raw_industry: str | None) -> str:
+    """Maps a Finnhub `finnhubIndustry` string to one of SECTOR_KEYWORDS's
+    broader buckets via case-insensitive substring matching, or
+    DEFAULT_SECTOR_BUCKET if nothing matches (including when the industry
+    is unknown). First matching bucket wins - keep that in mind if you add
+    more keyword lists with overlapping terms."""
+    if not raw_industry:
+        return DEFAULT_SECTOR_BUCKET
+    lowered = raw_industry.lower()
+    for bucket, keywords in SECTOR_KEYWORDS.items():
+        if any(kw in lowered for kw in keywords):
+            return bucket
+    return DEFAULT_SECTOR_BUCKET
+
+
+def _curve_for(metric: str, sector_bucket: str, generic_curve: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The sector-specific curve for `metric` if one's defined for this
+    bucket, else the generic fallback curve."""
+    return SECTOR_CURVE_OVERRIDES.get(sector_bucket, {}).get(metric, generic_curve)
+
+
+def _score_from_curve(value: float | None, curve: list[tuple[float, float]]) -> float | None:
+    """Linear interpolation between (value, score) anchor points; clamps
+    to the nearest endpoint's score outside the curve's range."""
+    if value is None:
+        return None
+    xs = [p[0] for p in curve]
+    ys = [p[1] for p in curve]
+    if value <= xs[0]:
+        return float(ys[0])
+    if value >= xs[-1]:
+        return float(ys[-1])
+    for i in range(len(xs) - 1):
+        if xs[i] <= value <= xs[i + 1]:
+            span = xs[i + 1] - xs[i]
+            frac = (value - xs[i]) / span if span else 0.0
+            return float(ys[i] + frac * (ys[i + 1] - ys[i]))
+    return float(ys[-1])  # unreachable given the clamps above
+
+
+_QUALITY_WORDS = [(80, "excellent"), (60, "good"), (40, "fair"), (20, "weak"), (0, "poor")]
+
+
+def _quality_word(score: float | None) -> str:
+    if score is None:
+        return "unknown"
+    for threshold, word in _QUALITY_WORDS:
+        if score >= threshold:
+            return word
+    return "poor"
+
 
 # --------------------------------------------------------------------------
 # Shared data shapes
@@ -115,6 +307,8 @@ class TickerRawData:
     recommendation: dict | None
     price_target: dict | None
     insider_mspr: float | None
+    sector_bucket: str          # one of SECTOR_KEYWORDS's keys, or DEFAULT_SECTOR_BUCKET
+    raw_industry: str | None    # Finnhub's finnhubIndustry string as-is, for display/debugging
     errors: list[str]
 
 
@@ -166,23 +360,47 @@ def _extract_metric(metrics: dict | None, name: str) -> float | None:
     return None
 
 
-def _metric_reason(label: str, value: float | None, rank: float | None, value_fmt: str = ".1f", rank_note: str = "") -> str | None:
-    """Builds a '<label> of <value> ranks in the Nth percentile' explanation,
-    falling back to just reporting the raw value when there weren't enough
-    peers in this comparison set to compute a percentile for it (e.g. only
-    one ticker in the group had this metric available)."""
+def _curve_reason(
+    label: str, value: float | None, score: float | None, peer_rank: float | None,
+    value_fmt: str = ".1f", unit: str = "", sector_label: str | None = None,
+) -> str | None:
+    """Builds '<label> of <value> - <quality> (<score>/100)', optionally
+    noting which threshold set was used (sector-specific or generic), with
+    an optional peer-percentile note tacked on as explicit "for reference"
+    context. The score itself never depends on peer_rank or on what else
+    was screened alongside this ticker - see module docstring."""
     if value is None:
         return None
-    if rank is None:
-        return f"{label} of {value:{value_fmt}} (not enough peers in this group to rank it)"
-    suffix = f" {rank_note}" if rank_note else ""
-    return f"{label} of {value:{value_fmt}} ranks in the {rank:.0f}th percentile{suffix} of this group"
+    text = f"{label} of {value:{value_fmt}}{unit} - {_quality_word(score)} ({score:.0f}/100)"
+    if sector_label:
+        text += f", scored against {sector_label} thresholds"
+    if peer_rank is not None:
+        text += f" (for reference only: ranks {peer_rank:.0f}th percentile among the tickers you screened this run)"
+    return text
 
 
 # --------------------------------------------------------------------------
 # Gathering raw data - one ticker at a time, each source independently
 # fault-tolerant so a single missing endpoint doesn't blank out the rest
 # --------------------------------------------------------------------------
+
+PRICE_TARGET_UNAVAILABLE_FLAG = "capability:finnhub_price_target_unavailable"
+PRICE_TARGET_RECHECK_TTL_SECONDS = 7 * 24 * 60 * 60  # recheck weekly in case your plan/Finnhub's tiers change
+
+
+def known_limitations() -> list[str]:
+    """Run-wide notes (as opposed to per-ticker data_errors) about data
+    sources known to be unavailable right now. The Streamlit page shows
+    these once, rather than repeating the same explanation for every ticker."""
+    notes = []
+    if cache.get_flag(PRICE_TARGET_UNAVAILABLE_FLAG, ttl_seconds=PRICE_TARGET_RECHECK_TTL_SECONDS) is True:
+        notes.append(
+            "Finnhub's price-target endpoint returned 'access denied' - it looks like it's no longer "
+            "included on the free tier (Finnhub has narrowed its free tier before; see blueprint Section "
+            "2). Analyst & Institutional Confidence runs without that input until this is rechecked."
+        )
+    return notes
+
 
 def _gather_raw_data(ticker: str) -> TickerRawData:
     ticker = ticker.upper()
@@ -217,12 +435,17 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
         errors.append(f"recommendation trends: {exc}")
 
     price_target = None
-    try:
-        price_target = cache.get_or_fetch(
-            f"target:{ticker}", ANALYST_DATA_TTL_SECONDS, lambda: finnhub_client.get_price_target(ticker)
-        )
-    except Exception as exc:
-        errors.append(f"price target: {exc}")
+    if cache.get_flag(PRICE_TARGET_UNAVAILABLE_FLAG, ttl_seconds=PRICE_TARGET_RECHECK_TTL_SECONDS) is not True:
+        try:
+            price_target = cache.get_or_fetch(
+                f"target:{ticker}", ANALYST_DATA_TTL_SECONDS, lambda: finnhub_client.get_price_target(ticker)
+            )
+        except Exception as exc:
+            if finnhub_client.is_permission_denied(exc):
+                cache.set_flag(PRICE_TARGET_UNAVAILABLE_FLAG, True)
+                # Surfaced once via known_limitations(), not repeated per ticker here.
+            else:
+                errors.append(f"price target: {exc}")
 
     insider_mspr = None
     try:
@@ -239,7 +462,20 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
     except Exception as exc:
         errors.append(f"insider sentiment: {exc}")
 
-    return TickerRawData(ticker, fundamentals, price_df, recommendation, price_target, insider_mspr, errors)
+    raw_industry = None
+    try:
+        profile = cache.get_or_fetch(
+            f"profile:{ticker}", PROFILE_TTL_SECONDS, lambda: finnhub_client.get_company_profile(ticker)
+        )
+        raw_industry = (profile or {}).get("sector")  # finnhub_client maps finnhubIndustry -> "sector"
+    except Exception as exc:
+        errors.append(f"company profile (for sector classification): {exc}")
+    sector_bucket = classify_sector_bucket(raw_industry)
+
+    return TickerRawData(
+        ticker, fundamentals, price_df, recommendation, price_target, insider_mspr,
+        sector_bucket, raw_industry, errors,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -248,31 +484,50 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
 # can treat them uniformly.
 # --------------------------------------------------------------------------
 
+def _sector_label_for(bucket: str) -> str:
+    return bucket if bucket != DEFAULT_SECTOR_BUCKET else "General (no industry match)"
+
+
 def _score_valuation(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorResult]:
     pe = {t: _extract_metric(d.fundamentals, "pe") for t, d in raw_by_ticker.items()}
     pe = {t: (v if v and v > 0 else None) for t, v in pe.items()}  # negative P/E isn't comparable on this scale
     pb = {t: _extract_metric(d.fundamentals, "pb") for t, d in raw_by_ticker.items()}
     ps = {t: _extract_metric(d.fundamentals, "ps") for t, d in raw_by_ticker.items()}
 
-    pe_ranks = _percentile_ranks(pe, higher_is_better=False)
-    pb_ranks = _percentile_ranks(pb, higher_is_better=False)
-    ps_ranks = _percentile_ranks(ps, higher_is_better=False)
+    # Each ticker can be in a different sector bucket, so curve selection
+    # happens per-ticker rather than once for the whole batch.
+    pe_scores = {t: _score_from_curve(pe[t], _curve_for("pe", raw_by_ticker[t].sector_bucket, PE_CURVE)) for t in raw_by_ticker}
+    pb_scores = {t: _score_from_curve(pb[t], _curve_for("pb", raw_by_ticker[t].sector_bucket, PB_CURVE)) for t in raw_by_ticker}
+    ps_scores = {t: _score_from_curve(ps[t], _curve_for("ps", raw_by_ticker[t].sector_bucket, PS_CURVE)) for t in raw_by_ticker}
+
+    # Peer percentile is bonus context only (see module docstring) - it
+    # does not drive the score, computed here purely for the explanation text.
+    pe_peer = _percentile_ranks(pe, higher_is_better=False)
+    pb_peer = _percentile_ranks(pb, higher_is_better=False)
+    ps_peer = _percentile_ranks(ps, higher_is_better=False)
 
     results = {}
     for t in raw_by_ticker:
-        sub = [r for r in (pe_ranks[t], pb_ranks[t], ps_ranks[t]) if r is not None]
+        bucket = raw_by_ticker[t].sector_bucket
+        sector_label = _sector_label_for(bucket)
+        sub = [s for s in (pe_scores[t], pb_scores[t], ps_scores[t]) if s is not None]
         reasons = [
             r for r in (
-                _metric_reason("P/E", pe[t], pe_ranks[t], rank_note="(cheaper)"),
-                _metric_reason("P/B", pb[t], pb_ranks[t], rank_note="(cheaper)"),
-                _metric_reason("P/S", ps[t], ps_ranks[t], rank_note="(cheaper)"),
+                _curve_reason("P/E", pe[t], pe_scores[t], pe_peer[t], sector_label=sector_label),
+                _curve_reason("P/B", pb[t], pb_scores[t], pb_peer[t], sector_label=sector_label),
+                _curve_reason("P/S", ps[t], ps_scores[t], ps_peer[t], sector_label=sector_label),
             ) if r is not None
         ]
+        if pb[t] is not None and pb[t] > 15:
+            reasons.append(
+                "Note: P/B tends to look artificially high for asset-light or heavy-buyback companies "
+                "(a low book value isn't necessarily overvaluation) - weight this one input cautiously."
+            )
         score = sum(sub) / len(sub) if sub else None
         results[t] = FactorResult(
             score=score,
             reasons=reasons or ["No valuation ratios available for this ticker"],
-            raw={"pe": pe[t], "pb": pb[t], "ps": ps[t]},
+            raw={"pe": pe[t], "pb": pb[t], "ps": ps[t], "sector_bucket": bucket, "raw_industry": raw_by_ticker[t].raw_industry},
         )
     return results
 
@@ -281,16 +536,19 @@ def _score_growth(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorRe
     revenue_growth = {t: _extract_metric(d.fundamentals, "revenue_growth") for t, d in raw_by_ticker.items()}
     eps_growth = {t: _extract_metric(d.fundamentals, "eps_growth") for t, d in raw_by_ticker.items()}
 
-    rev_ranks = _percentile_ranks(revenue_growth, higher_is_better=True)
-    eps_ranks = _percentile_ranks(eps_growth, higher_is_better=True)
+    rev_scores = {t: _score_from_curve(v, REVENUE_GROWTH_CURVE) for t, v in revenue_growth.items()}
+    eps_scores = {t: _score_from_curve(v, EPS_GROWTH_CURVE) for t, v in eps_growth.items()}
+
+    rev_peer = _percentile_ranks(revenue_growth, higher_is_better=True)
+    eps_peer = _percentile_ranks(eps_growth, higher_is_better=True)
 
     results = {}
     for t in raw_by_ticker:
-        sub = [r for r in (rev_ranks[t], eps_ranks[t]) if r is not None]
+        sub = [s for s in (rev_scores[t], eps_scores[t]) if s is not None]
         reasons = [
             r for r in (
-                _metric_reason("Revenue growth", revenue_growth[t], rev_ranks[t], value_fmt="+.1f"),
-                _metric_reason("EPS growth", eps_growth[t], eps_ranks[t], value_fmt="+.1f"),
+                _curve_reason("Revenue growth", revenue_growth[t], rev_scores[t], rev_peer[t], value_fmt="+.1f", unit="%"),
+                _curve_reason("EPS growth", eps_growth[t], eps_scores[t], eps_peer[t], value_fmt="+.1f", unit="%"),
             ) if r is not None
         ]
         score = sum(sub) / len(sub) if sub else None
@@ -308,20 +566,34 @@ def _score_profitability(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, F
     roe = {t: _extract_metric(d.fundamentals, "roe") for t, d in raw_by_ticker.items()}
     debt_to_equity = {t: _extract_metric(d.fundamentals, "debt_to_equity") for t, d in raw_by_ticker.items()}
 
-    gross_ranks = _percentile_ranks(gross_margin, higher_is_better=True)
-    net_ranks = _percentile_ranks(net_margin, higher_is_better=True)
-    roe_ranks = _percentile_ranks(roe, higher_is_better=True)
-    debt_ranks = _percentile_ranks(debt_to_equity, higher_is_better=False)  # lower debt is better
+    # Gross margin varies by sector about as dramatically as valuation
+    # multiples do (a 25% margin is unremarkable for a grocery retailer and
+    # alarming for a software company) - sector-aware, like P/E/P/B/P/S
+    # above. Net margin, ROE, and debt/equity use the generic curve for
+    # every sector for now (see SECTOR_CURVE_OVERRIDES's docstring).
+    gross_scores = {
+        t: _score_from_curve(gross_margin[t], _curve_for("gross_margin", raw_by_ticker[t].sector_bucket, GROSS_MARGIN_CURVE))
+        for t in raw_by_ticker
+    }
+    net_scores = {t: _score_from_curve(v, NET_MARGIN_CURVE) for t, v in net_margin.items()}
+    roe_scores = {t: _score_from_curve(v, ROE_CURVE) for t, v in roe.items()}
+    debt_scores = {t: _score_from_curve(v, DEBT_TO_EQUITY_CURVE) for t, v in debt_to_equity.items()}
+
+    gross_peer = _percentile_ranks(gross_margin, higher_is_better=True)
+    net_peer = _percentile_ranks(net_margin, higher_is_better=True)
+    roe_peer = _percentile_ranks(roe, higher_is_better=True)
+    debt_peer = _percentile_ranks(debt_to_equity, higher_is_better=False)  # lower debt is better
 
     results = {}
     for t in raw_by_ticker:
-        sub = [r for r in (gross_ranks[t], net_ranks[t], roe_ranks[t], debt_ranks[t]) if r is not None]
+        sector_label = _sector_label_for(raw_by_ticker[t].sector_bucket)
+        sub = [s for s in (gross_scores[t], net_scores[t], roe_scores[t], debt_scores[t]) if s is not None]
         reasons = [
             r for r in (
-                _metric_reason("Gross margin", gross_margin[t], gross_ranks[t], value_fmt=".1f"),
-                _metric_reason("Net margin", net_margin[t], net_ranks[t], value_fmt=".1f"),
-                _metric_reason("ROE", roe[t], roe_ranks[t], value_fmt=".1f"),
-                _metric_reason("Debt/equity", debt_to_equity[t], debt_ranks[t], value_fmt=".2f", rank_note="(lower is better)"),
+                _curve_reason("Gross margin", gross_margin[t], gross_scores[t], gross_peer[t], unit="%", sector_label=sector_label),
+                _curve_reason("Net margin", net_margin[t], net_scores[t], net_peer[t], unit="%"),
+                _curve_reason("ROE", roe[t], roe_scores[t], roe_peer[t], unit="%"),
+                _curve_reason("Debt/equity", debt_to_equity[t], debt_scores[t], debt_peer[t], value_fmt=".2f"),
             ) if r is not None
         ]
         score = sum(sub) / len(sub) if sub else None
@@ -383,19 +655,21 @@ def _absolute_ma_position_score(price: float | None, sma: float | None) -> float
 def _score_momentum(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorResult]:
     raw_values = {t: _compute_momentum_raw(d.price_df) for t, d in raw_by_ticker.items()}
     returns = {t: rv.get("period_return_pct") for t, rv in raw_values.items()}
-    return_ranks = _percentile_ranks(returns, higher_is_better=True)
+    return_scores = {t: _score_from_curve(v, MOMENTUM_RETURN_CURVE) for t, v in returns.items()}
+    return_peer = _percentile_ranks(returns, higher_is_better=True)
 
     results = {}
     for t in raw_by_ticker:
         rv = raw_values[t]
         rsi_score = _absolute_rsi_score(rv.get("rsi"))
         ma_score = _absolute_ma_position_score(rv.get("price"), rv.get("sma50"))
-        sub = [s for s in (return_ranks[t], rsi_score, ma_score) if s is not None]
+        sub = [s for s in (return_scores[t], rsi_score, ma_score) if s is not None]
 
         reasons = [
             r for r in (
-                _metric_reason(
-                    "Price return over the lookback window", rv.get("period_return_pct"), return_ranks[t], value_fmt="+.1f"
+                _curve_reason(
+                    "Price return over the lookback window", rv.get("period_return_pct"),
+                    return_scores[t], return_peer[t], value_fmt="+.1f", unit="%",
                 ),
             ) if r is not None
         ]
@@ -437,26 +711,32 @@ def _score_analyst_confidence(raw_by_ticker: dict[str, TickerRawData]) -> dict[s
         insider[t] = d.insider_mspr
         raw_values[t] = {"upside_pct": upside[t], "reco_net": reco_net[t], "insider_mspr": insider[t], "analyst_count": total_analysts}
 
-    upside_ranks = _percentile_ranks(upside, higher_is_better=True)
-    insider_ranks = _percentile_ranks(insider, higher_is_better=True)
+    upside_scores = {t: _score_from_curve(v, ANALYST_UPSIDE_CURVE) for t, v in upside.items()}
+    insider_scores = {t: _score_from_curve(v, INSIDER_MSPR_CURVE) for t, v in insider.items()}
+    upside_peer = _percentile_ranks(upside, higher_is_better=True)
+    insider_peer = _percentile_ranks(insider, higher_is_better=True)
     # reco_net is already on a naturally bounded -100..+100 scale - rescale directly
-    # instead of re-ranking it within the comparison set.
+    # instead of running it through a curve.
     reco_scores = {t: ((v + 100.0) / 2.0 if v is not None else None) for t, v in reco_net.items()}
 
     results = {}
     for t in raw_by_ticker:
-        sub = [s for s in (upside_ranks[t], reco_scores[t], insider_ranks[t]) if s is not None]
+        sub = [s for s in (upside_scores[t], reco_scores[t], insider_scores[t]) if s is not None]
         rv = raw_values[t]
         reasons = [
             r for r in (
-                _metric_reason("Analyst price target upside", rv["upside_pct"], upside_ranks[t], value_fmt="+.1f"),
+                _curve_reason(
+                    "Analyst price target upside", rv["upside_pct"], upside_scores[t], upside_peer[t],
+                    value_fmt="+.1f", unit="%",
+                ),
             ) if r is not None
         ]
         if rv["reco_net"] is not None:
             tilt = "bullish" if rv["reco_net"] > 0 else "bearish" if rv["reco_net"] < 0 else "neutral"
             reasons.append(f"Analyst recommendations ({rv['analyst_count']} analysts) net to a {tilt} consensus")
-        insider_reason = _metric_reason(
-            "Insider buying/selling ratio (trailing 6 months)", rv["insider_mspr"], insider_ranks[t], value_fmt="+.2f"
+        insider_reason = _curve_reason(
+            "Insider buying/selling ratio (trailing 6 months, Finnhub MSPR)", rv["insider_mspr"], insider_scores[t], insider_peer[t],
+            value_fmt="+.1f",
         )
         if insider_reason is not None:
             reasons.append(insider_reason)

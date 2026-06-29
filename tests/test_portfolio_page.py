@@ -7,13 +7,21 @@ tests catch is UI-wiring mistakes (wrong widget indices, a call that only
 breaks once Streamlit actually renders it, etc).
 """
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
 from engine import portfolio
 
-PAGE_PATH = "app/pages/1_portfolio.py"
+# Absolute, not relative - AppTest.from_file() first checks the path
+# relative to the CURRENT WORKING DIRECTORY, and only falls back to
+# resolving relative to this test file if that fails. That fallback would
+# look in tests/app/pages/... (wrong - app/ is a sibling of tests/, not
+# inside it), so anyone running pytest from somewhere other than the
+# project root would get a confusing FileNotFoundError. Building an
+# absolute path here sidesteps the whole CWD-dependent lookup.
+PAGE_PATH = str(Path(__file__).resolve().parent.parent / "app" / "pages" / "1_portfolio.py")
 
 
 def _fake_quote(ticker, price=100.0):

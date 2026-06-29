@@ -35,7 +35,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 85 tests, all mocked - no API keys needed to run these
+├── tests/                  # 107 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -66,24 +66,83 @@ ad-hoc), pick which ones to screen, and click **Run screener**. You'll get:
   table (Section 8) — this is what Phase 5's backtester will eventually
   read from
 
-## Two things worth knowing about how the screener works
+## How the screener actually scores things (revised twice now, both times from real-world testing)
 
-**Scores are relative to the list you screen, not the whole market.**
-Section 6.1 calls for "percentile rank within sector" — there's no free
-endpoint that returns "every healthcare stock's P/E," so this ranks each
-metric against the other tickers *you actually selected*. Screen similar
-businesses together for it to mean something; mixing a bank with a biotech
-will still produce a ranking, just not a useful one.
+The first version of this screener scored every metric by ranking it against
+whatever else was in the same screening run — which produced two real
+problems once tested against an actual portfolio: a stock could land at a
+stark 0/100 on a metric just for being the worst of a small, arbitrary
+group (even when the underlying number wasn't actually bad), and screening
+a single ticker returned "not enough peers to rank" for almost everything.
+
+**Scoring is absolute-first.** Every metric is scored against fixed,
+documented thresholds in `engine/screener.py` (the `*_CURVE` constants) —
+a P/E of 12 scores well because 12 is generally considered cheap, not
+because it's cheaper than whatever else you happened to screen alongside
+it. One ticker screened alone gets a fully-formed score, and a ticker's
+grade doesn't shift depending on what else is in your list.
+
+**Peer comparison still shows up, just as bonus context.** When you screen
+more than one ticker together, each metric's explanation also notes its
+percentile among the group, explicitly labeled "for reference only" — it
+never feeds the score itself.
+
+**Valuation and gross margin are sector-adjusted.** A second round of
+testing surfaced a real example: AAPL's P/B of 51 (driven by Apple's heavy
+share buybacks shrinking its book value, not by being overvalued) scored a
+flat 0/100 under one universal threshold. `engine/screener.py` now
+classifies each ticker into a broad peer group from Finnhub's
+`finnhubIndustry` field (e.g. "Technology / Software", "Banks /
+Financials", "Utilities" — see `SECTOR_KEYWORDS`/`classify_sector_bucket`)
+and scores P/E, P/B, P/S, and gross margin against thresholds appropriate
+to that group (`SECTOR_CURVE_OVERRIDES`) instead of one fixed curve for
+every company. The screener page shows which peer group was detected for
+every ticker, right above its factor breakdown. P/B specifically also gets
+an explicit caveat note whenever it's unusually high, since it's the
+metric most distorted by buybacks and asset-light balance sheets.
+
+**The honest limit of this:** the sector thresholds are hand-picked
+approximations based on general market knowledge, not live-computed
+medians from real market data — there's no free endpoint for that. Treat
+the peer-group label and score as "roughly the right ballpark for this
+kind of business," not authoritative sector benchmarking. Growth, net
+margin, ROE, and debt/equity don't have sector overrides yet and still use
+one threshold set for every industry (extend `SECTOR_CURVE_OVERRIDES` if
+you want those adjusted too). And even within a sector, very extreme
+values (a P/E of 800, say) will still floor out at the bottom of that
+sector's curve rather than being distinguished further — the curves are
+wide enough to avoid flattening *normal* extreme cases like AAPL's P/B to
+an indistinguishable zero, not infinitely granular.
 
 **Sentiment (15% of the original weight table) isn't scored yet.** It
 needs the FinBERT pipeline, which is Phase 4. Rather than faking a neutral
 score, that factor returns "not yet available" and its weight is
-automatically spread across the other five factors. Once Phase 4 builds
-FinBERT, it slots in with no changes needed to this phase's code. Same
-story for institutional ownership trend (Section 4 flags it as needing SEC
-EDGAR 13F parsing) — the Analyst & Institutional Confidence factor uses
-recommendation trends, analyst price targets, and insider sentiment
-instead for now.
+automatically spread across the other five factors. Institutional
+ownership trend (Section 4: needs SEC EDGAR 13F parsing) is similarly out
+of scope for now — Analyst & Institutional Confidence uses recommendation
+trends, analyst price targets, and insider sentiment instead.
+
+## A units bug worth knowing about
+
+Testing against a real portfolio also surfaced an actual bug, not just a
+calibration gap: Finnhub's insider-sentiment MSPR is documented as a
+**-100 to +100** scale, but `INSIDER_MSPR_CURVE` was built assuming -1 to
++1. A real (and unremarkable) value like -33 was landing at a flat 0/100 —
+"as bad as it's possible to get" — when it's actually just moderately
+negative. Fixed, with a regression test pinned to that exact value.
+
+## A free-tier endpoint that disappeared mid-build
+
+Finnhub's `/stock/price-target` endpoint started returning HTTP 403
+("access denied") during testing — it looks like it's no longer included
+on the free tier, the same kind of erosion the blueprint already documents
+happening to Alpha Vantage and Polygon (Section 2). The screener detects
+this automatically (a 403, specifically — not just any error) and stops
+calling that endpoint rather than retrying it per ticker; you'll see one
+consolidated note instead of the same error repeated for every ticker. It
+rechecks weekly in case Finnhub restores it or you upgrade your plan. If
+other Finnhub endpoints get similarly gated later, `engine/cache.py`'s
+`get_flag`/`set_flag` helpers are there to apply the same pattern.
 
 ## If a factor keeps showing "no data available"
 
@@ -105,9 +164,10 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-85 tests. New in Phase 2: `test_screener.py` covers the scoring math
-directly (normalization, weight redistribution, each factor's logic), and
-`test_screener_page.py` runs the actual page end-to-end via `AppTest`.
+107 tests. New in Phase 2: `test_screener.py` covers the scoring math
+directly (curve-based scoring, peer context vs. score independence, weight
+redistribution, each factor's logic), and `test_screener_page.py` runs the
+actual page end-to-end via `AppTest`.
 
 ## Verifying it against your real keys
 
