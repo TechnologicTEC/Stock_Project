@@ -16,8 +16,8 @@ from sqlalchemy import select
 
 from db.models import Holding, Transaction
 from db.session import get_session
-from engine import cache
-from engine.data_sources import alpaca_client, finnhub_client, yfinance_client
+from engine import cache, price_history
+from engine.data_sources import alpaca_client, finnhub_client
 
 QUOTE_TTL_SECONDS = 5 * 60          # Section 4: "cache for 5-15 min during market hours"
 PROFILE_TTL_SECONDS = 7 * 24 * 60 * 60  # sector/country/market-cap rarely changes; 7 days is plenty
@@ -287,23 +287,8 @@ def get_allocation_by_sector() -> list[dict]:
 # for tickers with no logged transactions (the simple manual-entry case).
 # --------------------------------------------------------------------------
 
-def _ensure_price_cache(ticker: str, start: date, end: date) -> None:
-    wanted_dates = set(pd.bdate_range(start=start, end=end).date)
-    cached_dates = cache.get_cached_price_dates(ticker, PRICE_HISTORY_SOURCE, start, end)
-    if wanted_dates - cached_dates:
-        bars = yfinance_client.get_historical_ohlcv(ticker, start, end)
-        if bars:
-            cache.save_price_bars(ticker, PRICE_HISTORY_SOURCE, bars)
-
-
 def _price_series(ticker: str, start: date, end: date, business_days) -> pd.Series:
-    _ensure_price_cache(ticker, start, end)
-    history = cache.get_price_history(ticker, PRICE_HISTORY_SOURCE, start, end)
-    if not history:
-        return pd.Series(0.0, index=business_days)
-    price_by_date = {h["date"]: h["close"] for h in history}
-    series = pd.Series([price_by_date.get(d) for d in business_days], index=business_days, dtype="float64")
-    return series.ffill().bfill().fillna(0.0)
+    return price_history.price_series(ticker, start, end, business_days, source=PRICE_HISTORY_SOURCE)
 
 
 def _shares_series(ticker: str, holdings: list[dict], transactions: list[dict], business_days) -> pd.Series:

@@ -40,7 +40,7 @@ def test_portfolio_page_renders_with_holdings_without_error():
 
     with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
         with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile in test")):
-            with patch("engine.portfolio.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
                 at = AppTest.from_file(PAGE_PATH)
                 at.run(timeout=30)
 

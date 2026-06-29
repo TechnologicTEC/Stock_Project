@@ -226,7 +226,7 @@ def test_value_history_uses_transactions_when_present():
         {"date": date(2026, 1, 5), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1},
         {"date": date(2026, 1, 6), "open": 10, "high": 10, "low": 10, "close": 12.0, "volume": 1},
     ]
-    with patch("engine.portfolio.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
         history = portfolio.get_value_history(date(2026, 1, 1), date(2026, 1, 6))
 
     by_date = {h["date"]: h["value"] for h in history}
@@ -239,7 +239,7 @@ def test_value_history_falls_back_to_holding_snapshot_without_transactions():
     portfolio.add_holding("AAPL", 4, 100.0, date(2026, 1, 5))  # no transaction logged for this one
 
     fake_bars = [{"date": date(2026, 1, 5), "open": 10, "high": 10, "low": 10, "close": 25.0, "volume": 1}]
-    with patch("engine.portfolio.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
         history = portfolio.get_value_history(date(2026, 1, 1), date(2026, 1, 5))
 
     by_date = {h["date"]: h["value"] for h in history}
