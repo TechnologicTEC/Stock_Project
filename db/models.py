@@ -66,6 +66,47 @@ class WatchlistItem(Base):
     added_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class Wallet(Base):
+    """Singleton cash balance (Phase 3.5, Section 6.10). Credited
+    automatically when a holding is sold; manual deposit/withdraw covers
+    everything else. engine/portfolio.py's `_get_or_create_wallet()` is the
+    only place that should ever insert a row here — there's deliberately no
+    DB-level constraint forcing a single row, since SQLite can't express
+    "at most one row" directly, so don't insert into this table elsewhere.
+
+    `balance` is the authoritative *current* balance (O(1) to read). For the
+    *history* of cash held at any past date — what the value-over-time chart
+    needs so a sold position becomes a flat cash pile rather than vanishing —
+    sale proceeds come from the `transactions` ledger (already dated) and
+    manual movements come from `CashFlow` below."""
+
+    __tablename__ = "wallet"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    balance: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class CashFlow(Base):
+    """Dated record of *manual* wallet movements — deposits and withdrawals
+    (Phase 3.5 follow-up). Sale proceeds are deliberately NOT stored here:
+    they're already dated in the `transactions` ledger (a "sell" row's
+    shares×price), so duplicating them would risk double-counting. Together,
+    `transactions` (sells) + `CashFlow` (manual) let engine/portfolio.py
+    reconstruct exactly how much cash was held on any past date, which is
+    what keeps the value-over-time chart consistent through a sale.
+
+    `amount` is always positive; the sign of its effect on cash is implied
+    by `type` (deposit = +, withdraw = -)."""
+
+    __tablename__ = "cash_flows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    type: Mapped[str] = mapped_column(String(8))  # "deposit" / "withdraw"
+    amount: Mapped[float] = mapped_column(Float)
+    date: Mapped[date_]
+
+
 # --------------------------------------------------------------------------
 # Cache tables — everything engine/cache.py reads from / writes to.
 # This is the layer that keeps the whole app inside free-tier rate limits.

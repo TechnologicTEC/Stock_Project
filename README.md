@@ -1,9 +1,11 @@
-# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3
+# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5
 
 Phase 0 (Section 7): data plumbing. Phase 1: Portfolio Dashboard. Phase 2:
 the Investment Screener — explainable weighted-factor scoring. Phase 3:
 Portfolio Health Evaluation — concentration, beta, Sharpe ratio, drawdown,
-and rule-based flags.
+and rule-based flags. Phase 3.5 (Section 6.10): sell support, a cash
+wallet, and a transaction-history backfill that closes the gap behind the
++3920% return bug documented below.
 
 ## What's here
 
@@ -17,8 +19,9 @@ investment-platform/
 │       └── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
-│   │                    #   ApiCache (generic TTL cache) and an
-│   │                    #   `asset_type` column on Holding
+│   │                    #   ApiCache (generic TTL cache), an `asset_type`
+│   │                    #   column on Holding, and Wallet + CashFlow
+│   │                    #   (Phase 3.5)
 │   └── session.py        # Engine/session setup + a small built-in
 │                          #   migration for existing DB files
 ├── engine/
@@ -30,7 +33,8 @@ investment-platform/
 │   │                       #   and health.py (SPY benchmark history)
 │   ├── portfolio.py        # Holdings CRUD, valuation, allocation (ticker,
 │   │                       #   asset type, sector, country, market cap),
-│   │                       #   historical value reconstruction
+│   │                       #   historical value reconstruction, sell flow
+│   │                       #   + wallet + transaction backfill (Phase 3.5)
 │   ├── watchlist.py         # Watchlist CRUD - the screener's candidate list
 │   ├── screener.py          # The Investment Screener's scoring engine
 │   ├── health.py            # Portfolio Health Evaluation: concentration,
@@ -41,7 +45,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 163 tests, all mocked - no API keys needed to run these
+├── tests/                  # 195 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -63,7 +67,10 @@ streamlit run app/main.py
 **Portfolio** page: as before (Phase 1), plus two allocation charts added in
 Phase 3 — by country and by market-cap bucket, completing the four-way
 breakdown Section 6.3 originally called for (sector, country, market cap,
-asset type).
+asset type). Phase 3.5 adds a **Wallet** expander (cash balance, deposit,
+withdraw) and a **Sell a holding** expander (pick a holding, choose shares
+or "sell all", confirm a price defaulting to the live quote) — see below
+for the full reasoning.
 
 **Screener** page: add tickers to your watchlist (or just type some in
 ad-hoc), pick which ones to screen, and click **Run screener**. You'll get:
@@ -166,6 +173,66 @@ drawdown worse than -30%. All are Section 6.4's own thresholds where it
 specifies them (single holding, sector, beta); the rest are reasonable
 extensions in the same spirit, easy to retune in one place.
 
+## Sell support, transaction consistency, and the wallet (Section 6.10, Phase 3.5)
+
+This phase exists because of the +3920% bug documented above. The root
+cause traced back further than the health page's return calculation: most
+holdings had **no transaction history at all**, because "Add a holding"
+only ever wrote to the `holdings` table, never to `transactions`. The
+health page's mid-window-contribution warning treats the symptom; this
+phase fixes the actual gap.
+
+**`add_holding()` now writes a matching "buy" transaction in the same
+commit** — same ticker, shares, price (the cost-basis/share you entered),
+and date. CSV import goes through `add_holding()` too, so it's covered for
+free. Every holding added from this phase onward is guaranteed to have a
+complete transaction history.
+
+**`backfill_missing_transactions()` handles everything added before this
+phase.** For any holding whose ticker has zero transactions on record, it
+creates one synthetic "buy" transaction from that holding's existing
+`purchase_date`/`shares`/`cost_basis`. It's called on every Portfolio page
+load (cheap — a couple of indexed queries) and is safe to call repeatedly:
+once a ticker has a transaction, it's never touched again, so it doesn't
+fight with `add_holding()`'s now-automatic transactions or double-count
+anything on a second pass.
+
+**Selling** (`sell_holding()`) records a "sell" transaction and reduces the
+holding's share count; if that brings it to zero, the holding is removed
+from current positions but its transaction history is never deleted — past
+points on the value-over-time chart are unaffected, the position just
+stops accruing from the sale date onward. Cost basis on a partial sell
+uses **average-cost accounting**: the schema stores one aggregate
+`cost_basis` per holding rather than individual lots, so a partial sell
+just leaves that average untouched for the remaining shares. This isn't
+tax-accurate (no FIFO/LIFO lot selection) — Section 6.10 calls this out
+explicitly as an accepted MVP limitation, not an oversight.
+
+**The wallet is a singleton cash balance**, separate from any holding.
+Selling credits the sale proceeds automatically; deposit/withdraw cover
+everything else (outside money in, cash out, starting balance). The
+Portfolio page's **Total value** metric is now invested holdings *plus*
+the wallet balance — but **Total gain/loss** is still computed from
+invested value only, since the wallet has no cost basis and shouldn't
+dilute that figure.
+
+**The value-over-time chart includes cash, so selling never erases
+history.** Originally the chart summed only *current* share holdings, so
+the moment a position's share count hit zero its entire line vanished and
+the cash you got for it appeared nowhere — the total looked like it
+collapsed. Now the reconstruction (`get_value_history`) draws its tickers
+from the *transaction ledger* rather than current holdings, so a
+fully-sold position keeps its pre-sale history, and it adds a **cash
+series**: cumulative sale proceeds (dated from the "sell" transactions)
+plus manual deposits/withdrawals. A sold holding's line therefore converts
+into a flat cash pile from the sale date onward instead of disappearing,
+and selling *everything* leaves a flat total rather than dropping to zero.
+The chart's final point equals the Total value metric (holdings + wallet),
+keeping the two views consistent. Manual deposits/withdrawals are dated in
+a small new `cash_flows` table (sale proceeds stay in `transactions` to
+avoid double-counting); `backfill_wallet_cash_flows()` reconciles any
+wallet balance that pre-dates that table, once, on page load.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -264,14 +331,22 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-163 tests. New in Phase 2: `test_screener.py` covers the scoring math
+195 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
 covers beta/Sharpe/drawdown/return math against synthetic data with known,
 hand-computed expected values (not just "doesn't crash"), and
 `test_health_page.py` runs the health page end-to-end, including the
-worst-case no-network/no-API-key path.
+worst-case no-network/no-API-key path. New in Phase 3.5: `test_portfolio.py`
+covers selling (partial, full, over-selling, nonexistent holdings), the
+wallet (deposit, withdraw, insufficient-balance), the backfill's
+idempotency, and the value-over-time cash series (sold positions become a
+flat cash pile, the "sold everything" flat line, partial-sell + cash,
+deposits in the chart, and the chart endpoint matching Total value);
+`test_portfolio_page.py` and `test_models.py` cover the same ground through
+the actual page (including the sold-everything state) and the `Wallet` /
+`CashFlow` models respectively.
 
 ## Verifying it against your real keys
 
@@ -305,19 +380,16 @@ snippet into them too.
 
 ## What's next
 
-The blueprint's roadmap was revised after this phase, based on real usage
+The blueprint's roadmap was revised after Phase 3, based on real usage
 rather than advance planning — see the `investment_platform_blueprint.md`
-included alongside this code for the full reasoning, but in short: **Phase
-3.5** (next) adds sell support, a cash wallet, and fixes a real gap where
-holdings created via "Add a holding" had no transaction history backing
-them — the same root cause behind the +3920% bug above. **Phase 4** (News
-+ Earnings Analyzer, FinBERT) comes after that, and is also what unlocks
-the screener's Sentiment factor (currently marked unavailable, its 15%
-weight redistributed across the other five) — once Phase 4 produces a real
-sentiment score, it slots into `engine/screener.py`'s `_score_sentiment()`
-with no changes needed anywhere else. **Phase 5.5** (Forward-Looking
-Projections — a statistical price-range projection, explicitly not a
-prediction) comes after Phase 5's backtester, so the projection
-methodology can be validated against real historical outcomes before
-being trusted.
+included alongside this code for the full reasoning. Phase 3.5 (above) is
+now done. **Phase 4** (News + Earnings Analyzer, FinBERT) is next, and is
+also what unlocks the screener's Sentiment factor (currently marked
+unavailable, its 15% weight redistributed across the other five) — once
+Phase 4 produces a real sentiment score, it slots into
+`engine/screener.py`'s `_score_sentiment()` with no changes needed
+anywhere else. **Phase 5.5** (Forward-Looking Projections — a statistical
+price-range projection, explicitly not a prediction) comes after Phase 5's
+backtester, so the projection methodology can be validated against real
+historical outcomes before being trusted.
 

@@ -2,7 +2,7 @@ from datetime import date
 
 from sqlalchemy import select
 
-from db.models import Holding, Transaction, WatchlistItem
+from db.models import CashFlow, Holding, Transaction, Wallet, WatchlistItem
 from db.session import get_session
 
 
@@ -25,6 +25,25 @@ def test_transaction_round_trip():
         txns = session.execute(select(Transaction).where(Transaction.ticker == "MSFT")).scalars().all()
         assert len(txns) == 2
         assert {t.type for t in txns} == {"buy", "sell"}
+
+
+def test_wallet_round_trip():
+    with get_session() as session:
+        session.add(Wallet(balance=250.0))
+
+    with get_session() as session:
+        wallet = session.execute(select(Wallet)).scalar_one()
+        assert wallet.balance == 250.0
+
+
+def test_cash_flow_round_trip():
+    with get_session() as session:
+        session.add(CashFlow(type="deposit", amount=500.0, date=date(2025, 6, 1)))
+        session.add(CashFlow(type="withdraw", amount=200.0, date=date(2025, 6, 15)))
+
+    with get_session() as session:
+        flows = session.execute(select(CashFlow).order_by(CashFlow.date)).scalars().all()
+        assert [(f.type, f.amount) for f in flows] == [("deposit", 500.0), ("withdraw", 200.0)]
 
 
 def test_watchlist_ticker_is_unique():

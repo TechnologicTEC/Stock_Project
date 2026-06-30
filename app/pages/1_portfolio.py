@@ -22,6 +22,8 @@ from engine import portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()  # safe to call every run - no-op if the schema's already current
+portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
+portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
 
 st.title("Portfolio")
 st.caption(
@@ -68,9 +70,84 @@ with st.expander("📄 Import holdings from CSV", expanded=False):
         if result.added:
             st.rerun()
 
+# --------------------------------------------------------------------------
+# Wallet (Section 6.10) — independent of holdings, so it's usable even
+# before you've added a single position.
+# --------------------------------------------------------------------------
+
+with st.expander("👛 Wallet", expanded=False):
+    wallet_balance = portfolio.get_wallet_balance()
+    st.metric("Cash balance", f"${wallet_balance:,.2f}")
+
+    w1, w2 = st.columns(2)
+    with w1:
+        with st.form("deposit_form", clear_on_submit=True):
+            deposit_amount = st.number_input("Deposit ($)", min_value=0.0, step=10.0, format="%.2f")
+            if st.form_submit_button("Deposit"):
+                try:
+                    portfolio.deposit_to_wallet(deposit_amount)
+                    st.success(f"Deposited ${deposit_amount:,.2f}.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+    with w2:
+        with st.form("withdraw_form", clear_on_submit=True):
+            withdraw_amount = st.number_input("Withdraw ($)", min_value=0.0, step=10.0, format="%.2f")
+            if st.form_submit_button("Withdraw"):
+                try:
+                    portfolio.withdraw_from_wallet(withdraw_amount)
+                    st.success(f"Withdrew ${withdraw_amount:,.2f}.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
 holdings = portfolio.list_holdings()
 
-if not holdings:
+if holdings:
+    with st.expander("💵 Sell a holding", expanded=False):
+        sell_options = {f"{h['ticker']}  ·  {h['shares']} shares  (id {h['id']})": h for h in holdings}
+        sell_choice_label = st.selectbox("Holding to sell", list(sell_options.keys()), key="sell_holding_select")
+        sell_choice = sell_options[sell_choice_label]
+
+        default_price = sell_choice["cost_basis"]
+        try:
+            default_price = portfolio.get_quote_cached(sell_choice["ticker"])["current_price"] or default_price
+        except Exception:
+            pass  # fine to fall back to cost basis if a live quote isn't available
+
+        sell_all = st.checkbox("Sell all shares", key="sell_all_checkbox")
+        with st.form("sell_holding_form", clear_on_submit=True):
+            s1, s2, s3 = st.columns(3)
+            shares_to_sell = s1.number_input(
+                "Shares to sell", min_value=0.0,
+                max_value=float(sell_choice["shares"]),
+                value=float(sell_choice["shares"]) if sell_all else 0.0,
+                step=1.0, format="%.4f",
+            )
+            sell_price = s2.number_input(
+                "Sale price / share ($)", min_value=0.0, value=float(default_price), step=1.0, format="%.2f"
+            )
+            sell_date = s3.date_input("Sale date", value=date.today(), max_value=date.today())
+            sell_submitted = st.form_submit_button("Sell")
+
+        if sell_submitted:
+            try:
+                result = portfolio.sell_holding(sell_choice["id"], shares_to_sell, sell_price, sell_date)
+                st.success(
+                    f"Sold {result['shares_sold']} shares of {result['ticker']} for "
+                    f"${result['proceeds']:,.2f} — credited to your wallet."
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+# We keep showing the dashboard (summary + value-over-time) even with no
+# *current* holdings, as long as there's history or cash to show — e.g. once
+# you've sold everything, your proceeds still sit in the wallet and the chart
+# stays meaningful. Only the truly-empty case gets the getting-started note.
+has_history = bool(portfolio.list_transactions()) or portfolio.get_wallet_balance() > 0
+
+if not holdings and not has_history:
     st.info(
         "You haven't added any holdings yet. Use **Add a holding** above to enter one manually, "
         "or **Import holdings from CSV** if you're bringing in a list."
@@ -91,7 +168,7 @@ if summary["holdings_with_errors"]:
         "Their values are excluded from the totals below until a price is available."
     )
 
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Total value", f"${summary['total_value']:,.2f}")
 m2.metric(
     "Total gain / loss",
@@ -100,6 +177,7 @@ m2.metric(
 )
 m3.metric("Today's change", f"${summary['total_day_change']:,.2f}")
 m4.metric("Cost basis", f"${summary['total_cost']:,.2f}")
+m5.metric("Wallet (cash)", f"${summary['wallet_balance']:,.2f}")
 
 st.divider()
 
@@ -108,6 +186,7 @@ st.divider()
 # --------------------------------------------------------------------------
 
 st.subheader("Value over time")
+st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
 
 range_choice = st.radio(
     "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
@@ -120,7 +199,7 @@ range_starts = {
     "YTD": date(today.year, 1, 1),
     "1Y": today - timedelta(days=365),
 }
-start_date = range_starts.get(range_choice) or portfolio.earliest_holding_date() or (today - timedelta(days=365))
+start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date() or (today - timedelta(days=365))
 
 try:
     with st.spinner("Loading price history..."):
@@ -137,6 +216,10 @@ if history:
     st.plotly_chart(fig, width="stretch", key="value_history_chart")
 else:
     st.caption("No historical value to show for this range yet.")
+
+if not holdings:
+    st.info("You've sold all your positions — your proceeds are sitting in the wallet. Add a holding to start investing again.")
+    st.stop()
 
 st.divider()
 
