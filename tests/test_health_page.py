@@ -108,3 +108,57 @@ def test_health_page_lookback_selector_changes_results():
                     at.run(timeout=30)
 
     assert not at.exception
+
+
+def test_health_page_warns_on_mid_window_contribution():
+    """Regression test for the reported bug: a holding added partway
+    through the lookback window inflated trailing return into the
+    hundreds/thousands of percent. The number is still shown (this
+    project never hides computed values), but it must now be accompanied
+    by a clear warning naming the ticker responsible."""
+    portfolio.add_holding("OLD", 10, 100.0, date.today() - timedelta(days=300))
+    portfolio.add_holding("NEW", 50, 100.0, date.today() - timedelta(days=5))
+
+    days = 365
+    today = date.today()
+    fake_bars = [
+        {"date": today - timedelta(days=days - i), "open": p, "high": p, "low": p, "close": p, "volume": 1000}
+        for i, p in enumerate(np.linspace(100, 110, days))
+    ]
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
+            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+                with patch("engine.health.fred_client.get_series", return_value=[{"date": "2026-01-01", "value": 4.0}]):
+                    at = AppTest.from_file(PAGE_PATH)
+                    at.run(timeout=30)
+
+    assert not at.exception
+    warning_text = " ".join(el.value for el in at.warning)
+    assert "NEW" in warning_text
+    assert "partway through" in warning_text
+
+    metric_values = {m.label: m.value for m in at.metric}
+    assert metric_values["Trailing annualized return"] != "—"  # still shown, not hidden
+
+
+def test_health_page_no_contribution_warning_when_holdings_predate_window():
+    portfolio.add_holding("AAPL", 10, 100.0, date.today() - timedelta(days=400))
+
+    days = 365
+    today = date.today()
+    fake_bars = [
+        {"date": today - timedelta(days=days - i), "open": p, "high": p, "low": p, "close": p, "volume": 1000}
+        for i, p in enumerate(np.linspace(100, 110, days))
+    ]
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
+            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+                with patch("engine.health.fred_client.get_series", return_value=[{"date": "2026-01-01", "value": 4.0}]):
+                    at = AppTest.from_file(PAGE_PATH)
+                    at.run(timeout=30)
+
+    assert not at.exception
+    warning_text = " ".join(el.value for el in at.warning)
+    assert "partway through" not in warning_text

@@ -28,11 +28,10 @@ if not portfolio.list_holdings():
     st.info("You haven't added any holdings yet. Add some on the **Portfolio** page first, then come back here.")
     st.stop()
 
-LOOKBACK_OPTIONS = {"3M": 90, "6M": 182, "1Y": 365, "2Y": 730}
 lookback_label = st.radio(
-    "Lookback window", list(LOOKBACK_OPTIONS.keys()), index=2, horizontal=True, label_visibility="collapsed"
+    "Lookback window", list(health.LOOKBACK_OPTIONS.keys()), index=2, horizontal=True, label_visibility="collapsed"
 )
-lookback_days = LOOKBACK_OPTIONS[lookback_label]
+lookback_days = health.LOOKBACK_OPTIONS[lookback_label]
 
 with st.spinner("Computing health metrics..."):
     report = health.get_health_report(lookback_days=lookback_days)
@@ -46,6 +45,32 @@ if report.errors:
     with st.expander("⚠️ Some metrics had data issues"):
         for err in report.errors:
             st.caption(f"- {err}")
+
+# --------------------------------------------------------------------------
+# Mid-window contribution warning - shown ABOVE the four metrics, since it
+# affects how trustworthy every one of them is for this window. See
+# engine/health.py's _detect_mid_window_contributions() docstring.
+# --------------------------------------------------------------------------
+
+if report.mid_window_contributions:
+    added_list = ", ".join(
+        f"**{c.ticker}** (added {c.purchase_date.isoformat()})" for c in report.mid_window_contributions
+    )
+    suggestion = ""
+    if report.recommended_clean_lookback_days is not None:
+        clean_label = next(
+            label for label, days in health.LOOKBACK_OPTIONS.items() if days == report.recommended_clean_lookback_days
+        )
+        suggestion = f" Try the **{clean_label}** window instead — your other holdings have been stable that long."
+    else:
+        suggestion = " None of the available windows are fully clean yet — check back once your holdings have settled."
+
+    st.warning(
+        f"You added {added_list} partway through this {lookback_label} window. The four numbers below "
+        f"can't tell the difference between new money arriving and the market actually moving, so they're "
+        f"likely distorted by that contribution rather than reflecting real performance." + suggestion,
+        icon="⚠️",
+    )
 
 # --------------------------------------------------------------------------
 # Headline metrics

@@ -41,7 +41,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 152 tests, all mocked - no API keys needed to run these
+├── tests/                  # 163 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -137,6 +137,25 @@ as "concentration risk" would be actively misleading (it's a missing-data
 problem, not a real finding about your portfolio), so the health module
 explicitly never flags the "Unknown" bucket, regardless of its percentage —
 the table still shows it, so the gap itself is visible.
+
+**A real bug found via real usage, not testing:** a user reported a
+trailing annualized return of **+3920%**. The cause was the cash-flow
+limitation already documented above, manifesting concretely: they'd added
+a new holding partway through the selected lookback window, and the
+portfolio's value jumped sharply on that date — not because of a market
+move, but because new money arrived. `last ÷ first` annualized that jump
+into an absurd percentage. The fix isn't to attempt a full time-weighted-
+return rewrite (still out of scope, as above) but to detect the situation
+directly: `_detect_mid_window_contributions()` checks whether any current
+holding was purchased after the value series' effective start date, and if
+so, the health page shows a prominent warning naming exactly which
+holding and when, rather than a vague caveat — plus a concrete suggestion
+("try the 3M window instead — your other holdings have been stable that
+long") computed by finding the largest lookback option that predates every
+current holding's purchase. The raw number is still shown rather than
+hidden, consistent with this project's "always show the work" approach
+throughout — it's just no longer presented without the context needed to
+interpret it correctly.
 
 **Rule-based thresholds**, documented as named constants in
 `engine/health.py` (same style as the screener's `*_CURVE` constants): any
@@ -245,7 +264,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-152 tests. New in Phase 2: `test_screener.py` covers the scoring math
+163 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -286,10 +305,19 @@ snippet into them too.
 
 ## What's next
 
-Phase 4 from Section 7: the News Analyzer and Earnings Analyzer, sharing a
-FinBERT sentiment pipeline across both. This is also what unlocks the
-screener's Sentiment factor (currently marked unavailable, its 15% weight
-redistributed across the other five) — once Phase 4 produces a real
+The blueprint's roadmap was revised after this phase, based on real usage
+rather than advance planning — see the `investment_platform_blueprint.md`
+included alongside this code for the full reasoning, but in short: **Phase
+3.5** (next) adds sell support, a cash wallet, and fixes a real gap where
+holdings created via "Add a holding" had no transaction history backing
+them — the same root cause behind the +3920% bug above. **Phase 4** (News
++ Earnings Analyzer, FinBERT) comes after that, and is also what unlocks
+the screener's Sentiment factor (currently marked unavailable, its 15%
+weight redistributed across the other five) — once Phase 4 produces a real
 sentiment score, it slots into `engine/screener.py`'s `_score_sentiment()`
-with no changes needed anywhere else.
+with no changes needed anywhere else. **Phase 5.5** (Forward-Looking
+Projections — a statistical price-range projection, explicitly not a
+prediction) comes after Phase 5's backtester, so the projection
+methodology can be validated against real historical outcomes before
+being trusted.
 
