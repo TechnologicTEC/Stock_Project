@@ -2,6 +2,7 @@
 streamlit>=1.38
 plotly>=5.24
 pandas>=2.2
+numpy>=2.0                  # used directly by engine/health.py (Phase 3); also pandas/pandas-ta-classic's own dependency
 
 # --- Technical indicators ---
 # Not the original pandas-ta - its PyPI history was wiped and ownership

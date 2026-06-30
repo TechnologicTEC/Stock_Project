@@ -281,6 +281,61 @@ def get_allocation_by_sector() -> list[dict]:
     return _allocation_from(valuation, sector_for)
 
 
+# A few common ones for nicer display - Finnhub returns ISO-ish 2-letter
+# codes (e.g. "US", "DE"). Falls back to the raw code for anything not
+# listed here rather than maintaining an exhaustive table.
+_COUNTRY_DISPLAY_NAMES = {
+    "US": "United States", "CA": "Canada", "GB": "United Kingdom", "DE": "Germany",
+    "FR": "France", "JP": "Japan", "CN": "China", "HK": "Hong Kong", "TW": "Taiwan",
+    "KR": "South Korea", "IN": "India", "AU": "Australia", "NL": "Netherlands",
+    "CH": "Switzerland", "SE": "Sweden", "IE": "Ireland", "IL": "Israel", "BR": "Brazil",
+    "ES": "Spain", "IT": "Italy", "ID": "Indonesia", "SG": "Singapore", "MX": "Mexico",
+}
+
+
+def get_allocation_by_country() -> list[dict]:
+    valuation = get_live_valuation()
+
+    def country_for(v):
+        profile = get_profile_cached(v["ticker"])
+        code = profile["country"] if profile else None
+        return _COUNTRY_DISPLAY_NAMES.get(code, code) if code else None
+
+    return _allocation_from(valuation, country_for)
+
+
+# Market-cap bucket thresholds in millions of USD - Finnhub's
+# marketCapitalization field is documented (and confirmed via real
+# examples) to be in millions, not raw dollars. Standard, widely-used
+# convention; tweak here if you'd rather use different breakpoints.
+MARKET_CAP_BUCKETS = [
+    (200_000, "Mega cap (>$200B)"),
+    (10_000, "Large cap ($10B-$200B)"),
+    (2_000, "Mid cap ($2B-$10B)"),
+    (300, "Small cap ($300M-$2B)"),
+    (0, "Micro cap (<$300M)"),
+]
+
+
+def bucket_market_cap(market_cap_millions: float | None) -> str | None:
+    if market_cap_millions is None:
+        return None
+    for floor, label in MARKET_CAP_BUCKETS:
+        if market_cap_millions >= floor:
+            return label
+    return MARKET_CAP_BUCKETS[-1][1]
+
+
+def get_allocation_by_market_cap() -> list[dict]:
+    valuation = get_live_valuation()
+
+    def market_cap_bucket_for(v):
+        profile = get_profile_cached(v["ticker"])
+        return bucket_market_cap(profile["market_cap"]) if profile else None
+
+    return _allocation_from(valuation, market_cap_bucket_for)
+
+
 # --------------------------------------------------------------------------
 # Historical value — reconstructed from transactions where available,
 # falling back to "this holding's full share count since its purchase_date"

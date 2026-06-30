@@ -134,7 +134,7 @@ if history:
     fig = px.line(history_df, x="date", y="value", labels={"date": "", "value": "Portfolio value ($)"})
     fig.update_traces(line_color="#2563eb")
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified")
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key="value_history_chart")
 else:
     st.caption("No historical value to show for this range yet.")
 
@@ -146,7 +146,8 @@ st.divider()
 
 st.subheader("Allocation")
 
-a1, a2, a3 = st.columns(3)
+a1, a2 = st.columns(2)
+a3, a4, a5 = st.columns(3)
 
 with a1:
     st.caption("By ticker")
@@ -154,7 +155,7 @@ with a1:
     if by_ticker:
         st.plotly_chart(
             px.pie(pd.DataFrame(by_ticker), values="value", names="label", hole=0.35),
-            width="stretch",
+            width="stretch", key="alloc_ticker",
         )
 
 with a2:
@@ -163,7 +164,7 @@ with a2:
     if by_type:
         st.plotly_chart(
             px.pie(pd.DataFrame(by_type), values="value", names="label", hole=0.35),
-            width="stretch",
+            width="stretch", key="alloc_asset_type",
         )
 
 with a3:
@@ -173,7 +174,27 @@ with a3:
     if by_sector:
         st.plotly_chart(
             px.pie(pd.DataFrame(by_sector), values="value", names="label", hole=0.35),
-            width="stretch",
+            width="stretch", key="alloc_sector",
+        )
+
+with a4:
+    st.caption("By country")
+    with st.spinner("Looking up countries..."):
+        by_country = portfolio.get_allocation_by_country()
+    if by_country:
+        st.plotly_chart(
+            px.pie(pd.DataFrame(by_country), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_country",
+        )
+
+with a5:
+    st.caption("By market cap")
+    with st.spinner("Looking up market caps..."):
+        by_market_cap = portfolio.get_allocation_by_market_cap()
+    if by_market_cap:
+        st.plotly_chart(
+            px.pie(pd.DataFrame(by_market_cap), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_market_cap",
         )
 
 st.divider()

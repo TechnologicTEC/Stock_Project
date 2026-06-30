@@ -204,6 +204,47 @@ def test_allocation_by_asset_type_groups_correctly():
     assert labels == {"stock", "etf"}
 
 
+def test_bucket_market_cap_thresholds():
+    assert portfolio.bucket_market_cap(250_000) == "Mega cap (>$200B)"
+    assert portfolio.bucket_market_cap(50_000) == "Large cap ($10B-$200B)"
+    assert portfolio.bucket_market_cap(5_000) == "Mid cap ($2B-$10B)"
+    assert portfolio.bucket_market_cap(1_000) == "Small cap ($300M-$2B)"
+    assert portfolio.bucket_market_cap(100) == "Micro cap (<$300M)"
+    assert portfolio.bucket_market_cap(None) is None
+
+
+def test_allocation_by_market_cap_groups_by_bucket():
+    portfolio.add_holding("MEGA", 10, 100.0, date(2025, 1, 1))
+    portfolio.add_holding("MICRO", 10, 100.0, date(2025, 1, 1))
+
+    def fake_profile(ticker):
+        cap = 500_000 if ticker == "MEGA" else 100
+        return {"ticker": ticker, "name": ticker, "sector": "Tech", "country": "US", "market_cap": cap, "currency": "USD"}
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, 100.0)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=fake_profile):
+            allocation = portfolio.get_allocation_by_market_cap()
+
+    labels = {a["label"] for a in allocation}
+    assert labels == {"Mega cap (>$200B)", "Micro cap (<$300M)"}
+
+
+def test_allocation_by_country_uses_display_names_with_fallback():
+    portfolio.add_holding("US_STOCK", 10, 100.0, date(2025, 1, 1))
+    portfolio.add_holding("XX_STOCK", 10, 100.0, date(2025, 1, 1))
+
+    def fake_profile(ticker):
+        country = "US" if ticker == "US_STOCK" else "ZZ"  # unmapped code
+        return {"ticker": ticker, "name": ticker, "sector": "Tech", "country": country, "market_cap": 1000, "currency": "USD"}
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, 100.0)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=fake_profile):
+            allocation = portfolio.get_allocation_by_country()
+
+    labels = {a["label"] for a in allocation}
+    assert labels == {"United States", "ZZ"}  # known code mapped, unknown code falls back to raw
+
+
 def test_allocation_by_sector_falls_back_to_unknown_on_profile_failure():
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 1, 1))
 
