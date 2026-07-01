@@ -27,7 +27,10 @@ st.markdown(
 Use the pages in the sidebar to get around:
 
 - **Portfolio** — your holdings, current valuation, and allocation
-- *Screener, Health, News, Backtest, Paper Trading, and Chat are coming in later phases.*
+- **Screener** — explainable weighted-factor stock scoring
+- **Health** — concentration, beta, Sharpe ratio, drawdown, and flags
+- **News** — headline + earnings-release sentiment (FinBERT), per ticker
+- *Backtest, Paper Trading, and Chat are coming in later phases.*
 
 If you haven't added any holdings yet, head to the **Portfolio** page —
 you can add them one at a time or import a CSV.

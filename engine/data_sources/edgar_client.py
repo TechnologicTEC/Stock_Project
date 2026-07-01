@@ -4,10 +4,10 @@ requires a descriptive User-Agent that identifies *you* (not your app);
 SEC blocks generic or missing ones. Set EDGAR_USER_AGENT in .env, e.g.
 "Jane Doe jane@example.com".
 
-This module only covers company lookup + the filings index for Phase 0.
-Parsing the actual 8-K EX-99.1 exhibit text is Phase 4's job (Earnings
-Analyzer, Section 6.5) — keeping that out of here keeps this client simple
-and reusable for the Form 4 / 13F use cases too (Section 4).
+Company lookup + the filings index were built in Phase 0; Phase 4 adds
+`get_8k_press_release()` for the Earnings Analyzer (Section 6.5) — it walks
+recent 8-K filings, finds the EX-99.1 exhibit (the earnings press release),
+and returns its plain text.
 """
 from __future__ import annotations
 
@@ -97,3 +97,76 @@ def get_company_filings(cik: str, form_type: str | None = None, limit: int = 20)
 def _text_or_none(entry, tag_name: str) -> str | None:
     tag = entry.find(tag_name)
     return tag.text if tag else None
+
+
+# --------------------------------------------------------------------------
+# 8-K earnings press release (EX-99.1) — Phase 4, Section 6.5
+# --------------------------------------------------------------------------
+
+_MAX_RELEASE_CHARS = 20_000  # a press release is a few KB of text; cap defensively
+
+
+def _find_ex99_document_url(index_url: str) -> str | None:
+    """From a filing's index page, return the absolute URL of its EX-99.1
+    exhibit (the press release), or None if the filing has no such exhibit.
+    The index page's 'Document Format Files' table lists each document with a
+    Type column; we match the row whose type starts with 'EX-99.1' (falling
+    back to any 'EX-99')."""
+    resp = _throttled_get(index_url)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    best_href = None
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 4:
+            continue
+        doc_type = cells[3].get_text(strip=True).upper()
+        link = cells[2].find("a")
+        if not (link and link.get("href")):
+            continue
+        if doc_type.startswith("EX-99.1"):
+            return _absolute(link["href"])
+        if doc_type.startswith("EX-99") and best_href is None:
+            best_href = _absolute(link["href"])  # fallback if no exact EX-99.1
+    return best_href
+
+
+def _absolute(href: str) -> str:
+    return href if href.startswith("http") else f"{_BASE}{href}"
+
+
+def _document_text(url: str) -> str:
+    """Fetch a filing document and return its visible text (HTML stripped)."""
+    resp = _throttled_get(url)
+    if url.lower().endswith((".htm", ".html")):
+        text = BeautifulSoup(resp.text, "html.parser").get_text(" ", strip=True)
+    else:
+        text = resp.text
+    return text[:_MAX_RELEASE_CHARS]
+
+
+def get_8k_press_release(cik: str, max_filings: int = 6) -> dict | None:
+    """The most recent 8-K earnings press release for a company.
+
+    Walks the last few 8-K filings (newest first) and returns the first one
+    that carries an EX-99.1 exhibit — that's the press release. Returns
+    {"filing_date", "url", "text"} or None if none of the recent 8-Ks have one
+    (not every 8-K is an earnings release). Individual filing failures are
+    skipped rather than raising, so one malformed filing doesn't hide an
+    older, readable release."""
+    for filing in get_company_filings(cik, "8-K", limit=max_filings):
+        index_url = filing.get("href")
+        if not index_url:
+            continue
+        try:
+            doc_url = _find_ex99_document_url(index_url)
+            if doc_url is None:
+                continue
+            return {
+                "filing_date": filing.get("filing_date"),
+                "url": doc_url,
+                "text": _document_text(doc_url),
+            }
+        except requests.RequestException:
+            continue
+    return None

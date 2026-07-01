@@ -1,11 +1,14 @@
-# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5
+# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4
 
 Phase 0 (Section 7): data plumbing. Phase 1: Portfolio Dashboard. Phase 2:
 the Investment Screener — explainable weighted-factor scoring. Phase 3:
 Portfolio Health Evaluation — concentration, beta, Sharpe ratio, drawdown,
 and rule-based flags. Phase 3.5 (Section 6.10): sell support, a cash
 wallet, and a transaction-history backfill that closes the gap behind the
-+3920% return bug documented below.
++3920% return bug documented below. Phase 4 (Sections 6.2 + 6.5): the News
+& Earnings Analyzer — Finnhub + Google News RSS headlines scored with
+FinBERT sentiment, plus SEC 8-K earnings press releases and Finnhub
+beat/miss numbers.
 
 ## What's here
 
@@ -16,7 +19,8 @@ investment-platform/
 │   └── pages/
 │       ├── 1_portfolio.py       # Portfolio Dashboard (Section 6.3)
 │       ├── 2_screener.py        # Investment Screener (Section 6.1)
-│       └── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
+│       ├── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
+│       └── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -41,13 +45,17 @@ investment-platform/
 │   ├── screener.py          # The Investment Screener's scoring engine
 │   ├── health.py            # Portfolio Health Evaluation: concentration,
 │   │                        #   beta, Sharpe ratio, max drawdown, flags
+│   ├── sentiment.py         # FinBERT sentiment behind score_text() (Phase 4)
+│   ├── news.py              # News Analyzer: fetch/cache/score/summarize (6.2)
+│   ├── earnings.py          # Earnings Analyzer: beat/miss + 8-K release (6.5)
 │   └── data_sources/
-│       ├── finnhub_client.py   # quotes, news, fundamentals, profile, insider data
+│       ├── finnhub_client.py   # quotes, news, fundamentals, profile, earnings
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
-│       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 220 tests, all mocked - no API keys needed to run these
+│       ├── edgar_client.py     # SEC filings + 8-K EX-99.1 press releases
+│       └── rss_client.py       # Google News RSS headlines (Phase 4)
+├── tests/                  # 246 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -292,6 +300,45 @@ container-query units shrink it further on narrow columns, so every digit
 stays readable from a few hundred dollars up to hundreds of millions, at any
 width. Values are always shown to 2 decimal places.
 
+## News & Earnings Analyzer (Sections 6.2 + 6.5, Phase 4)
+
+The **News** page scores what's being said about a ticker. Headlines come from
+**Finnhub company news + Google News RSS** (two free sources, merged and deduped
+by URL — one being down or rate-limited just means the other fills in), each
+scored by **FinBERT** (`engine/sentiment.py`) into a −1..+1 sentiment
+(`P(pos) − P(neg)`), then rolled up into an overall score with
+positive/neutral/negative counts and a plain-English summary. That signed
+mean is remapped for display onto a **0–100 scale where 50 = neutral**
+(`scale_to_100`, so 0 = extremely negative, 100 = extremely positive) —
+users kept reading a raw "−8/100" as broken rather than "slightly
+net-negative", and a 0–100 grade is the intuitive convention; a caption on
+the page explains it (and that it's *headline-only*, so it can differ from
+your own read of the full article). The **Earnings** view pairs Finnhub's
+beat/miss numbers (EPS actual vs. estimate per quarter) with the company's
+latest **SEC 8-K EX-99.1 press release**, pulled and text-extracted from EDGAR
+(`edgar_client.get_8k_press_release`) and run through the same sentiment model.
+
+Three design choices carried over from the rest of the build:
+
+- **Sentiment is one function, model behind it.** Callers only ever use
+  `sentiment.score_text(text) -> float`; `import torch`/`transformers` happens
+  *inside* the lazily-built pipeline, so importing the module is cheap and tests
+  patch `score_text` to stay model-free. Swapping the model is a one-file change
+  — but there's deliberately no premature multi-backend machinery (see the
+  git history for why we cut that).
+- **Caching is the same rule as everywhere else.** Headlines live in the
+  `news_cache` table (deduped by URL) behind a per-ticker staleness marker;
+  earnings surprises and the press-release text go through the generic TTL
+  cache. Sentiment is scored *once, at fetch time*, and stored — so a page
+  reload never re-hits an API or reloads the model.
+- **Everything degrades gracefully.** No FinBERT install → headlines still show,
+  just unscored. Foreign filer with no 8-K, or a ticker Finnhub has no earnings
+  calendar for → that part of the report is simply empty, never an error.
+  (Verified live: ASML news scored 69/100 across 40 headlines — i.e. mildly
+  net-positive on the 0–100 scale; AAPL's Q2 8-K release read Positive; ASML —
+  a 6-K filer — cleanly showed "no 8-K found".) The model (`ProsusAI/finbert`,
+  ~440 MB) downloads on first use.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -390,7 +437,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-214 tests. New in Phase 2: `test_screener.py` covers the scoring math
+246 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -416,7 +463,15 @@ and unsupported-currency failures, and formatting) plus a page test that
 toggles to NZD and checks the metrics convert at the mocked rate. The chart
 event markers add `value_history_markers` tests (on-line positioning,
 weekend→prior-business-day, out-of-range dropped, empty inputs) and a page
-test that toggles the markers on and off.
+test that toggles the markers on and off. New in Phase 4: `test_sentiment.py`
+(FinBERT's 3-probability output collapsed to a scalar, empty text short-
+circuits the model, availability check) — all with the pipeline patched so no
+model loads; `test_news.py` (merge + dedupe across sources, aggregation and
+labels, one source failing, no-model degradation, fetch-only-when-stale
+caching); `test_earnings.py` (surprise parsing/sorting, press-release sentiment,
+graceful None paths); `test_data_sources.py` gains the Google News RSS parser
+and the EDGAR 8-K EX-99.1 index-walk; and `test_news_page.py` drives the page's
+News and Earnings views end-to-end.
 
 ## Verifying it against your real keys
 
@@ -452,14 +507,22 @@ snippet into them too.
 
 The blueprint's roadmap was revised after Phase 3, based on real usage
 rather than advance planning — see the `investment_platform_blueprint.md`
-included alongside this code for the full reasoning. Phase 3.5 (above) is
-now done. **Phase 4** (News + Earnings Analyzer, FinBERT) is next, and is
-also what unlocks the screener's Sentiment factor (currently marked
-unavailable, its 15% weight redistributed across the other five) — once
-Phase 4 produces a real sentiment score, it slots into
-`engine/screener.py`'s `_score_sentiment()` with no changes needed
-anywhere else. **Phase 5.5** (Forward-Looking Projections — a statistical
-price-range projection, explicitly not a prediction) comes after Phase 5's
-backtester, so the projection methodology can be validated against real
-historical outcomes before being trusted.
+included alongside this code for the full reasoning. Phase 3.5 and **Phase 4**
+(News + Earnings Analyzer, FinBERT) are now done. A natural follow-on: Phase 4
+now produces a real sentiment score (`sentiment.score_text`), so the screener's
+Sentiment factor — currently marked unavailable, its 15% weight redistributed
+across the other five — can be wired into `engine/screener.py`'s
+`_score_sentiment()` (e.g. averaging recent `news.analyze_ticker` sentiment)
+with no changes needed elsewhere. **Phase 5** is the Backtesting Engine.
+**Phase 5.5** (Forward-Looking Projections — a statistical price-range
+projection, explicitly not a prediction) comes after Phase 5's backtester, so
+the projection methodology can be validated against real historical outcomes
+before being trusted.
+
+**Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
+which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target
+is **Hugging Face Spaces** (free CPU tier, 16 GB RAM, native Streamlit + secrets
+support). Any cloud host has an ephemeral filesystem, so a real deployment also
+means moving the SQLite DB to a free hosted Postgres (e.g. Supabase) per the
+blueprint's Section 13.
 
