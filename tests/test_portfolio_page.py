@@ -79,6 +79,26 @@ def test_portfolio_page_currency_toggle_converts_displayed_values_to_nzd():
     assert metric_values["Cost basis"] == "NZ$2,000.00"    # 10 * $100 = $1,000 -> NZ$2,000
 
 
+def test_portfolio_page_event_markers_toggle_renders_both_ways():
+    portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))  # writes a buy transaction
+    portfolio.deposit_to_wallet(500.0, when=date(2025, 6, 2))   # a cash-flow event too
+    fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
+            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+                at = AppTest.from_file(PAGE_PATH)
+                at.run(timeout=30)
+                assert not at.exception  # markers shown by default
+
+                marker_toggle = next(cb for cb in at.checkbox if "event markers" in cb.label)
+                assert marker_toggle.value is True
+                marker_toggle.set_value(False)
+                at.run(timeout=30)
+
+    assert not at.exception  # toggling markers off still renders cleanly
+
+
 def test_portfolio_page_add_holding_form_round_trip():
     at = AppTest.from_file(PAGE_PATH)
     at.run(timeout=30)

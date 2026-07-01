@@ -47,7 +47,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 214 tests, all mocked - no API keys needed to run these
+├── tests/                  # 220 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -235,6 +235,19 @@ a small new `cash_flows` table (sale proceeds stay in `transactions` to
 avoid double-counting); `backfill_wallet_cash_flows()` reconciles any
 wallet balance that pre-dates that table, once, on page load.
 
+**Event markers on the chart.** The value-over-time line carries coloured
+dots for your ledger events — buys (green), sells (red), deposits (blue),
+withdrawals (amber) — with a category legend and hover text like "Bought
+0.71 ASML @ $1,396.07" or "Deposited $500.00" (a toggle hides them). The
+positioning is a pure, tested engine helper (`value_history_markers()`):
+each event is placed at the portfolio value on the nearest business day on
+or before it, so the dot sits on the line even when the event lands on a
+weekend; events outside the selected range are dropped, and several events
+on one day merge into a single dot whose hover lists them all. The page
+(`event_marker_traces()`) turns those into one Plotly scatter per category
+and honours the currency toggle for both the dot's height and its hover
+amounts.
+
 **Transaction history & undoing mistakes.** The Portfolio page shows a
 **Transaction history** — a chronological log of every buy, sell, deposit,
 and withdrawal (`list_activity()` merges the `transactions` and `cash_flows`
@@ -400,7 +413,10 @@ reset; `test_portfolio_page.py` drives the history table, an undo, and a
 reset through the real page. The currency toggle adds `test_currency.py`
 (USD identity, NZD from the latest FRED observation, caching, the empty-rate
 and unsupported-currency failures, and formatting) plus a page test that
-toggles to NZD and checks the metrics convert at the mocked rate.
+toggles to NZD and checks the metrics convert at the mocked rate. The chart
+event markers add `value_history_markers` tests (on-line positioning,
+weekend→prior-business-day, out-of-range dropped, empty inputs) and a page
+test that toggles the markers on and off.
 
 ## Verifying it against your real keys
 

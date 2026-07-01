@@ -759,3 +759,73 @@ def test_value_history_window_starting_after_a_sale_shows_cash_from_the_start():
         history = portfolio.get_value_history(date(2026, 1, 12), date(2026, 1, 13))
 
     assert all(point["value"] == 120.0 for point in history)
+
+
+# --------------------------------------------------------------------------
+# Value-history event markers (chart indicators)
+# --------------------------------------------------------------------------
+
+def _history(pairs):
+    return [{"date": d, "value": v} for d, v in pairs]
+
+
+def _activity_event(action, when, *, ticker=None, shares=None, price=None, amount=None, entry_id=1):
+    kind = "transaction" if action in ("Buy", "Sell") else "cash_flow"
+    return {"kind": kind, "id": entry_id, "date": when, "action": action,
+            "ticker": ticker, "shares": shares, "price": price, "amount": amount}
+
+
+def test_value_history_markers_position_events_on_the_line():
+    history = _history([
+        (date(2026, 1, 5), 100.0), (date(2026, 1, 6), 110.0),
+        (date(2026, 1, 7), 120.0), (date(2026, 1, 8), 130.0),
+    ])
+    activity = [
+        _activity_event("Buy", date(2026, 1, 6), ticker="AAPL", shares=10, price=50.0),
+        _activity_event("Deposit", date(2026, 1, 8), amount=500.0),
+    ]
+    markers = portfolio.value_history_markers(activity, history)
+
+    assert [(m["date"], m["value"], m["category"]) for m in markers] == [
+        (date(2026, 1, 6), 110.0, "buy"),
+        (date(2026, 1, 8), 130.0, "deposit"),
+    ]
+
+
+def test_value_history_markers_skip_events_outside_the_range():
+    history = _history([(date(2026, 1, 5), 100.0), (date(2026, 1, 6), 110.0)])
+    activity = [
+        _activity_event("Buy", date(2026, 1, 1), ticker="A", shares=1, price=1.0),   # before start
+        _activity_event("Sell", date(2026, 2, 1), ticker="A", shares=1, price=1.0),  # after end
+        _activity_event("Buy", date(2026, 1, 5), ticker="A", shares=1, price=1.0),   # in range
+    ]
+    markers = portfolio.value_history_markers(activity, history)
+
+    assert [m["date"] for m in markers] == [date(2026, 1, 5)]
+
+
+def test_value_history_markers_map_weekend_events_to_the_prior_business_day():
+    history = _history([(date(2026, 1, 9), 100.0), (date(2026, 1, 12), 120.0)])  # Fri, Mon
+    activity = [_activity_event("Withdraw", date(2026, 1, 10), amount=50.0)]      # Saturday
+
+    markers = portfolio.value_history_markers(activity, history)
+
+    assert markers[0]["date"] == date(2026, 1, 9)  # nearest business day on/before
+    assert markers[0]["value"] == 100.0
+    assert markers[0]["category"] == "withdraw"
+
+
+def test_value_history_markers_embed_the_source_event():
+    history = _history([(date(2026, 1, 5), 100.0)])
+    event = _activity_event("Sell", date(2026, 1, 5), ticker="BBAI", shares=160, price=3.67)
+
+    markers = portfolio.value_history_markers([event], history)
+
+    assert markers[0]["event"] is event
+    assert markers[0]["category"] == "sell"
+
+
+def test_value_history_markers_handle_empty_inputs():
+    assert portfolio.value_history_markers([], []) == []
+    assert portfolio.value_history_markers([], _history([(date(2026, 1, 5), 1.0)])) == []
+    assert portfolio.value_history_markers([_activity_event("Deposit", date(2026, 1, 5), amount=1.0)], []) == []

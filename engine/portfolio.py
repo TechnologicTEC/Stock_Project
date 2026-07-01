@@ -7,6 +7,7 @@ cache layer (Section 5's rule).
 """
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import IO
@@ -833,3 +834,41 @@ def get_value_history(start: date, end: date) -> list[dict]:
     total = total.add(_cash_series(all_transactions, cash_flows, business_days), fill_value=0.0)
 
     return [{"date": d, "value": round(v, 2)} for d, v in total.items()]
+
+
+def value_history_markers(activity: list[dict], history: list[dict]) -> list[dict]:
+    """Position each activity event (from list_activity()) on the value-over-
+    time line, for plotting as chart markers. Returns one marker dict per
+    event that falls within the history's date range:
+
+        {"date": <chart date>, "value": <portfolio value there, USD>,
+         "category": "buy"|"sell"|"deposit"|"withdraw", "event": <the activity>}
+
+    `value` is taken from the portfolio value on the nearest history date on or
+    before the event, so the marker sits on the line even when the event lands
+    on a weekend/holiday. Values are USD — the caller converts for display.
+    Pure and presentation-agnostic so it can be unit-tested directly."""
+    if not history or not activity:
+        return []
+
+    hist_dates = [h["date"] for h in history]  # ascending (business days)
+    value_by_date = {h["date"]: h["value"] for h in history}
+    start, end = hist_dates[0], hist_dates[-1]
+
+    markers = []
+    for event in activity:
+        d = event["date"]
+        if d < start or d > end:
+            continue  # outside the visible range
+        if d in value_by_date:
+            chart_date = d
+        else:
+            i = bisect.bisect_right(hist_dates, d) - 1  # nearest business day on/before d
+            chart_date = hist_dates[i] if i >= 0 else hist_dates[0]
+        markers.append({
+            "date": chart_date,
+            "value": value_by_date[chart_date],
+            "category": event["action"].lower(),  # Buy/Sell/Deposit/Withdraw -> lower
+            "event": event,
+        })
+    return markers

@@ -15,6 +15,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from db.session import init_db
@@ -101,6 +102,56 @@ def _alloc_df(data):
     df = pd.DataFrame(data)
     df["value"] = df["value"] * fx_rate
     return df
+
+
+# Event categories drawn on the value-over-time chart, with a legend label
+# and colour each (matches the ledger's four action types).
+_EVENT_CATEGORIES = {
+    "buy": ("Buy", "#22c55e"),        # green
+    "sell": ("Sell", "#ef4444"),      # red
+    "deposit": ("Deposit", "#3b82f6"),  # blue
+    "withdraw": ("Withdraw", "#f59e0b"),  # amber
+}
+
+
+def _event_marker_label(event) -> str:
+    """A one-line description of a ledger event for the chart's hover, in the
+    display currency — e.g. 'Bought 0.71 ASML @ $1,396.07' or 'Withdrew $50.00'."""
+    if event["kind"] == "transaction":
+        verb = "Bought" if event["action"] == "Buy" else "Sold"
+        return f"{verb} {event['shares']:g} {event['ticker']} @ {money(event['price'])}"
+    verb = "Deposited" if event["action"] == "Deposit" else "Withdrew"
+    return f"{verb} {money(event['amount'])}"
+
+
+def event_marker_traces(markers: list[dict]) -> list[go.Scatter]:
+    """Turn positioned ledger markers (portfolio.value_history_markers) into
+    one Plotly scatter trace per category, so the chart gets coloured dots on
+    the line with a category legend and per-event hover text. Events sharing a
+    date+category are merged into a single dot whose hover lists them all."""
+    grouped: dict[tuple, list[dict]] = {}
+    for m in markers:
+        grouped.setdefault((m["date"], m["category"]), []).append(m)
+
+    traces = []
+    for category, (legend_name, color) in _EVENT_CATEGORIES.items():
+        xs, ys, texts = [], [], []
+        for (marker_date, cat), items in grouped.items():
+            if cat != category:
+                continue
+            xs.append(marker_date)
+            ys.append(items[0]["value"] * fx_rate)  # sits on the (converted) line
+            lines = "<br>".join(_event_marker_label(i["event"]) for i in items)
+            texts.append(f"<b>{marker_date:%b %d, %Y}</b><br>{lines}")
+        if xs:
+            traces.append(
+                go.Scatter(
+                    x=xs, y=ys, mode="markers", name=legend_name, text=texts,
+                    marker=dict(size=11, color=color, line=dict(width=1.5, color="#0e1117")),
+                    hovertemplate="%{text}<extra></extra>",
+                )
+            )
+    return traces
 
 
 # --------------------------------------------------------------------------
@@ -271,8 +322,13 @@ st.divider()
 st.subheader("Value over time")
 st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
 
+activity = portfolio.list_activity()  # also drives the Transaction history section below
+
 range_choice = st.radio(
     "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
+)
+show_markers = st.checkbox(
+    "Show event markers (buys, sells, deposits, withdrawals)", value=True, key="show_value_markers"
 )
 today = date.today()
 range_starts = {
@@ -298,9 +354,24 @@ if history:
         history_df, x="date", y="value",
         labels={"date": "", "value": f"Portfolio value ({active_currency})"},
     )
-    fig.update_traces(line_color="#2563eb")
-    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified")
+    fig.update_traces(line_color="#2563eb", showlegend=False)  # keep the line out of the legend
+
+    marker_traces = []
+    if show_markers:
+        markers = portfolio.value_history_markers(activity, history)
+        marker_traces = event_marker_traces(markers)
+        for trace in marker_traces:
+            fig.add_trace(trace)
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=10),
+        hovermode="x unified",
+        showlegend=bool(marker_traces),
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
+    )
     st.plotly_chart(fig, width="stretch", key="value_history_chart")
+    if show_markers and not marker_traces:
+        st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
 else:
     st.caption("No historical value to show for this range yet.")
 
@@ -317,8 +388,7 @@ st.caption(
     "restored exactly as if it never happened."
 )
 
-activity = portfolio.list_activity()
-if not activity:
+if not activity:  # fetched once, up by the chart
     st.caption("No activity yet.")
 else:
     activity_df = pd.DataFrame(
