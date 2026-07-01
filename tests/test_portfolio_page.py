@@ -57,6 +57,28 @@ def test_portfolio_page_renders_with_holdings_without_error():
     assert metric_values["Total value"] == "$1,500.00"  # AAPL: 10*$100 + VTI: 5*$100, fake quote price=100
 
 
+def test_portfolio_page_currency_toggle_converts_displayed_values_to_nzd():
+    portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
+    fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
+    fx_series = [{"date": "2026-06-30", "value": 0.5}]  # USD per NZD = 0.5, so 1 USD = 2 NZD
+
+    at = AppTest.from_file(PAGE_PATH)
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, price=150.0)):
+        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
+            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+                with patch("engine.currency.fred_client.get_series", return_value=fx_series):
+                    at.run(timeout=30)
+                    assert {m.label: m.value for m in at.metric}["Total value"] == "$1,500.00"  # USD default
+
+                    next(r for r in at.radio if r.label == "Display currency").set_value("NZD")
+                    at.run(timeout=30)
+
+    assert not at.exception
+    metric_values = {m.label: m.value for m in at.metric}
+    assert metric_values["Total value"] == "NZ$3,000.00"  # 10 * $150 = $1,500 -> NZ$3,000
+    assert metric_values["Cost basis"] == "NZ$2,000.00"    # 10 * $100 = $1,000 -> NZ$2,000
+
+
 def test_portfolio_page_add_holding_form_round_trip():
     at = AppTest.from_file(PAGE_PATH)
     at.run(timeout=30)

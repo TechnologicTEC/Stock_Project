@@ -18,7 +18,7 @@ import plotly.express as px
 import streamlit as st
 
 from db.session import init_db
-from engine import portfolio
+from engine import currency, portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()  # safe to call every run - no-op if the schema's already current
@@ -29,6 +29,79 @@ st.title("Portfolio")
 st.caption(
     "Personal, educational tool — not financial advice. Free-tier data can be delayed or incomplete."
 )
+
+# --------------------------------------------------------------------------
+# Display currency (USD default; NZD via FRED's USD/NZD rate). Everything is
+# stored and priced in USD — this only converts what's *shown*. Amounts you
+# enter (cost basis, sale price, deposits) stay in USD.
+# --------------------------------------------------------------------------
+
+currency_choice = st.radio(
+    "Display currency", currency.SUPPORTED_CURRENCIES, horizontal=True, key="display_currency",
+    help="Shows all values in this currency. Data is priced in USD; amounts you enter stay in USD.",
+)
+try:
+    fx_rate = currency.get_rate(currency_choice)
+    active_currency = currency_choice
+except Exception:
+    if currency_choice != currency.BASE_CURRENCY:
+        st.warning(f"Couldn't load the {currency_choice} exchange rate right now — showing USD.")
+    active_currency, fx_rate = currency.BASE_CURRENCY, 1.0
+
+
+def money(amount_usd):
+    """Format a USD amount in the currently-selected display currency."""
+    return currency.format_amount(amount_usd, active_currency, fx_rate)
+
+
+def _metric_value_max_rem(longest_value_len: int) -> float:
+    """Largest font (rem) to show metric values at, shrinking as the values
+    get longer so six/seven-figure or NZD amounts ('NZ$172,642.82') stay
+    fully readable instead of getting ellipsis-clipped by st.metric."""
+    for max_len, rem in ((9, 1.9), (12, 1.55), (14, 1.3), (16, 1.1)):
+        if longest_value_len <= max_len:
+            return rem
+    return 0.95
+
+
+def apply_metric_value_sizing(values: list[str]) -> None:
+    """Size the metric-value font to the longest value on show and stop it
+    truncating. Streamlit's st.metric has no adaptive sizing, so this injects
+    a small scoped style. The font is driven by container-query units (a % of
+    the metric's own width), with the coefficient sized so the *current*
+    longest value fills its column without overflowing — so values shrink as
+    the numbers grow and columns narrow, staying fully readable at any width.
+    `base_rem` caps it so short values don't balloon on very wide screens."""
+    max_len = max((len(v) for v in values), default=1)
+    base_rem = _metric_value_max_rem(max_len)
+    # ~160/len keeps the longest value inside its column (chars average well
+    # under 0.6em wide); clamped so it never gets absurdly large or too small.
+    cqi = max(9.0, min(18.0, 160.0 / max_len))
+    st.markdown(
+        f"""
+        <style>
+        div[data-testid="stMetric"] {{ container-type: inline-size; }}
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] > div {{
+            white-space: nowrap; overflow: visible; text-overflow: clip;
+        }}
+        div[data-testid="stMetricValue"] {{
+            font-size: {base_rem}rem;                          /* fallback: no container-query support */
+            font-size: clamp(0.7rem, {cqi:.1f}cqi, {base_rem}rem);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _alloc_df(data):
+    """Allocation rows (label/value in USD) with the value converted to the
+    display currency, for the pie-chart hovers."""
+    df = pd.DataFrame(data)
+    df["value"] = df["value"] * fx_rate
+    return df
+
 
 # --------------------------------------------------------------------------
 # Add a holding
@@ -77,7 +150,7 @@ with st.expander("📄 Import holdings from CSV", expanded=False):
 
 with st.expander("👛 Wallet", expanded=False):
     wallet_balance = portfolio.get_wallet_balance()
-    st.metric("Cash balance", f"${wallet_balance:,.2f}")
+    st.metric("Cash balance", money(wallet_balance))
 
     w1, w2 = st.columns(2)
     with w1:
@@ -168,16 +241,26 @@ if summary["holdings_with_errors"]:
         "Their values are excluded from the totals below until a price is available."
     )
 
+total_value_str = money(summary["total_value"])
+gain_loss_str = money(summary["total_gain_loss"])
+day_change_str = money(summary["total_day_change"])
+cost_basis_str = money(summary["total_cost"])
+wallet_str = money(summary["wallet_balance"])
+
+# Size the value font to the longest of these so nothing gets ellipsis-clipped
+# (worse in NZD / six-figure totals) — see apply_metric_value_sizing.
+apply_metric_value_sizing([total_value_str, gain_loss_str, day_change_str, cost_basis_str, wallet_str])
+
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Total value", f"${summary['total_value']:,.2f}")
+m1.metric("Total value", total_value_str)
 m2.metric(
     "Total gain / loss",
-    f"${summary['total_gain_loss']:,.2f}",
+    gain_loss_str,
     f"{summary['total_gain_loss_pct']:.2f}%" if summary["total_gain_loss_pct"] is not None else None,
 )
-m3.metric("Today's change", f"${summary['total_day_change']:,.2f}")
-m4.metric("Cost basis", f"${summary['total_cost']:,.2f}")
-m5.metric("Wallet (cash)", f"${summary['wallet_balance']:,.2f}")
+m3.metric("Today's change", day_change_str)
+m4.metric("Cost basis", cost_basis_str)
+m5.metric("Wallet (cash)", wallet_str)
 
 st.divider()
 
@@ -210,7 +293,11 @@ except Exception as exc:
 
 if history:
     history_df = pd.DataFrame(history)
-    fig = px.line(history_df, x="date", y="value", labels={"date": "", "value": "Portfolio value ($)"})
+    history_df["value"] = history_df["value"] * fx_rate
+    fig = px.line(
+        history_df, x="date", y="value",
+        labels={"date": "", "value": f"Portfolio value ({active_currency})"},
+    )
     fig.update_traces(line_color="#2563eb")
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified")
     st.plotly_chart(fig, width="stretch", key="value_history_chart")
@@ -241,8 +328,8 @@ else:
                 "Action": e["action"],
                 "Ticker": e["ticker"] or "—",
                 "Shares": f"{e['shares']:,.4f}" if e["shares"] is not None else "—",
-                "Price": f"${e['price']:,.2f}" if e["price"] is not None else "—",
-                "Amount": f"${e['amount']:,.2f}",
+                "Price": money(e["price"]),
+                "Amount": money(e["amount"]),
             }
             for e in activity
         ]
@@ -252,9 +339,9 @@ else:
     with st.expander("↩️ Undo / delete an entry"):
         def _entry_label(e):
             if e["kind"] == "transaction":
-                base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ ${e['price']:,.2f}"
+                base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ {money(e['price'])}"
             else:
-                base = f"{e['date']} · {e['action']} ${e['amount']:,.2f}"
+                base = f"{e['date']} · {e['action']} {money(e['amount'])}"
             return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
 
         entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
@@ -298,7 +385,7 @@ with a1:
     by_ticker = portfolio.get_allocation_by_ticker()
     if by_ticker:
         st.plotly_chart(
-            px.pie(pd.DataFrame(by_ticker), values="value", names="label", hole=0.35),
+            px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
             width="stretch", key="alloc_ticker",
         )
 
@@ -307,7 +394,7 @@ with a2:
     by_type = portfolio.get_allocation_by_asset_type()
     if by_type:
         st.plotly_chart(
-            px.pie(pd.DataFrame(by_type), values="value", names="label", hole=0.35),
+            px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
             width="stretch", key="alloc_asset_type",
         )
 
@@ -317,7 +404,7 @@ with a3:
         by_sector = portfolio.get_allocation_by_sector()
     if by_sector:
         st.plotly_chart(
-            px.pie(pd.DataFrame(by_sector), values="value", names="label", hole=0.35),
+            px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
             width="stretch", key="alloc_sector",
         )
 
@@ -327,7 +414,7 @@ with a4:
         by_country = portfolio.get_allocation_by_country()
     if by_country:
         st.plotly_chart(
-            px.pie(pd.DataFrame(by_country), values="value", names="label", hole=0.35),
+            px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
             width="stretch", key="alloc_country",
         )
 
@@ -337,7 +424,7 @@ with a5:
         by_market_cap = portfolio.get_allocation_by_market_cap()
     if by_market_cap:
         st.plotly_chart(
-            px.pie(pd.DataFrame(by_market_cap), values="value", names="label", hole=0.35),
+            px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
             width="stretch", key="alloc_market_cap",
         )
 
@@ -372,11 +459,18 @@ table_df = pd.DataFrame(valuation)[
     }
 )
 
+# Convert the USD money columns into the display currency (% columns are
+# unit-invariant, so they're left alone).
+money_columns = ["Cost/share", "Price", "Market value"]
+for col in money_columns:
+    table_df[col] = pd.to_numeric(table_df[col], errors="coerce") * fx_rate
+
+money_fmt = currency.symbol(active_currency) + "{:,.2f}"
 styled = (
     table_df.style.map(_pct_color, subset=["Gain/loss %", "Today %"])
     .format(
         {
-            "Cost/share": "${:,.2f}", "Price": "${:,.2f}", "Market value": "${:,.2f}",
+            "Cost/share": money_fmt, "Price": money_fmt, "Market value": money_fmt,
             "Gain/loss %": "{:+.2f}%", "Today %": "{:+.2f}%", "Shares": "{:,.4f}",
         },
         na_rep="—",

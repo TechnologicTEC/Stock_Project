@@ -36,6 +36,7 @@ investment-platform/
 │   │                       #   historical value reconstruction, sell flow
 │   │                       #   + wallet + transaction backfill (Phase 3.5),
 │   │                       #   activity history + undo/delete/reset
+│   ├── currency.py         # USD/NZD display conversion (FRED DEXUSNZ rate)
 │   ├── watchlist.py         # Watchlist CRUD - the screener's candidate list
 │   ├── screener.py          # The Investment Screener's scoring engine
 │   ├── health.py            # Portfolio Health Evaluation: concentration,
@@ -46,7 +47,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 206 tests, all mocked - no API keys needed to run these
+├── tests/                  # 214 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -253,6 +254,31 @@ but left its transactions behind, so the chart still showed it), and
 `reset_portfolio()` (behind a confirmation checkbox) wipes all holdings,
 transactions, cash flows, and the wallet back to an empty slate.
 
+**Display currency (USD / NZD).** A toggle at the top of the Portfolio page
+switches every displayed value between USD (default) and NZD. Everything is
+*stored and priced in USD* — the free data sources all quote USD — so this is
+purely a render-time conversion (`engine/currency.py`): USD is the identity
+rate, and NZD uses FRED's `DEXUSNZ` (USD per NZD) pulled through the cache
+layer, cached ~12h. The toggle converts the summary metrics, the value-over-
+time chart (and its axis label), the holdings table, the allocation hovers,
+and the transaction-history amounts; percentages (gain/loss %, today %) are
+unit-invariant and left alone, and amounts you *enter* (cost basis, sale
+price, deposits) stay in USD since that's how the underlying trades are
+priced. If the FX rate can't be fetched, it falls back to USD with a notice
+rather than erroring. It's session-only display state — nothing is written to
+the database.
+
+**Adaptive metric sizing.** The five headline metrics (total value, gain/loss,
+today's change, cost basis, wallet) sit in one row of narrow columns, and
+`st.metric` ellipsis-*clips* a value that doesn't fit — which bit as soon as
+NZD (the `NZ$` prefix plus a bigger number) or six-/seven-figure totals came
+in, so you'd see `NZ$17,64…`. `apply_metric_value_sizing()` fixes this by
+injecting a small scoped style that sizes the value font to the longest value
+currently shown (smaller as the numbers get bigger) and never truncates;
+container-query units shrink it further on narrow columns, so every digit
+stays readable from a few hundred dollars up to hundreds of millions, at any
+width. Values are always shown to 2 decimal places.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -351,7 +377,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-206 tests. New in Phase 2: `test_screener.py` covers the scoring math
+214 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -371,7 +397,10 @@ add another layer: `test_portfolio.py` checks the unified log, undoing a
 buy/sell/deposit, the two guard rails (orphaned sell, negative wallet), that
 an undo leaves the chart byte-for-byte as before, position purge, and full
 reset; `test_portfolio_page.py` drives the history table, an undo, and a
-reset through the real page.
+reset through the real page. The currency toggle adds `test_currency.py`
+(USD identity, NZD from the latest FRED observation, caching, the empty-rate
+and unsupported-currency failures, and formatting) plus a page test that
+toggles to NZD and checks the metrics convert at the mocked rate.
 
 ## Verifying it against your real keys
 
