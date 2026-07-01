@@ -1,4 +1,4 @@
-# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4
+# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4 + Phase 5
 
 Phase 0 (Section 7): data plumbing. Phase 1: Portfolio Dashboard. Phase 2:
 the Investment Screener — explainable weighted-factor scoring. Phase 3:
@@ -8,7 +8,10 @@ wallet, and a transaction-history backfill that closes the gap behind the
 +3920% return bug documented below. Phase 4 (Sections 6.2 + 6.5): the News
 & Earnings Analyzer — Finnhub + Google News RSS headlines scored with
 FinBERT sentiment, plus SEC 8-K earnings press releases and Finnhub
-beat/miss numbers.
+beat/miss numbers. Phase 5 (Section 6.7): the Backtesting Engine — a
+vectorized, no-look-ahead pandas backtester for technical strategies,
+benchmarked against buy-&-hold and SPY (see the honesty note below on why
+it doesn't backtest the fundamental screener).
 
 ## What's here
 
@@ -20,7 +23,8 @@ investment-platform/
 │       ├── 1_portfolio.py       # Portfolio Dashboard (Section 6.3)
 │       ├── 2_screener.py        # Investment Screener (Section 6.1)
 │       ├── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
-│       └── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
+│       ├── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
+│       └── 5_backtest.py        # Backtesting (Section 6.7)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -48,6 +52,7 @@ investment-platform/
 │   ├── sentiment.py         # FinBERT sentiment behind score_text() (Phase 4)
 │   ├── news.py              # News Analyzer: fetch/cache/score/summarize (6.2)
 │   ├── earnings.py          # Earnings Analyzer: beat/miss + 8-K release (6.5)
+│   ├── backtest.py          # Backtesting: vectorized technical strategies (6.7)
 │   └── data_sources/
 │       ├── finnhub_client.py   # quotes, news, fundamentals, profile, earnings
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
@@ -55,7 +60,7 @@ investment-platform/
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       ├── edgar_client.py     # SEC filings + 8-K EX-99.1 press releases
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 246 tests, all mocked - no API keys needed to run these
+├── tests/                  # 257 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -101,6 +106,16 @@ ad-hoc), pick which ones to screen, and click **Run screener**. You'll get:
 - a concentration table across all five breakdowns (single holding,
   sector, asset type, country, market cap), each showing the largest item
   and whether it crosses that breakdown's threshold
+
+**News & Earnings** page: pick a ticker (holdings/watchlist or ad-hoc), and
+get FinBERT-scored headlines with a 0–100 overall sentiment (50 = neutral),
+or the Earnings view's beat/miss history plus the latest SEC 8-K release.
+
+**Backtest** page: pick a ticker, a technical strategy, a period, and a
+starting capital, then **Run backtest** to see it charted against buy-&-hold
+and SPY, with a return/Sharpe/drawdown/volatility comparison table and a
+**Save this run** button (writes to `backtest_runs`). See the honesty note
+below on what it can and can't validate.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -339,6 +354,35 @@ Three design choices carried over from the rest of the build:
   a 6-K filer — cleanly showed "no 8-K found".) The model (`ProsusAI/finbert`,
   ~440 MB) downloads on first use.
 
+## Backtesting, honestly (Phase 5, Section 6.7)
+
+The **Backtest** page runs a **technical** strategy on a ticker over a chosen
+window and compares it to buying-&-holding that ticker *and* to holding SPY.
+Strategies are computed purely from cached price history — buy-&-hold, price
+vs its 50-day SMA (trend-following), the 50/200 golden cross, and RSI(14)
+mean-reversion — and each is turned into a daily 0/1 position signal. The
+engine (`engine/backtest.py`) is a small vectorized pandas simulation:
+`strategy_return[t] = signal.shift(1)[t] × asset_return[t]`, so a signal built
+from prices up to day *t* is only acted on day *t+1* — **no look-ahead**.
+Indicators warm up on extra history fetched *before* the window, so the
+reported period starts with valid signals rather than a flat gap. Reporting
+(total/annualized return, Sharpe, max drawdown, volatility) reuses
+`engine/health.py`'s already-tested metric functions, and runs can be saved
+to the `backtest_runs` table to compare strategy tweaks over time.
+
+**Why it deliberately does *not* backtest the fundamental Screener.** The
+Screener (`engine/screener.py`) scores using *today's* fundamentals, analyst
+ratings, and insider data, and free-tier APIs have **no point-in-time history**
+for those. Replaying it at a past date would silently use information that
+wasn't knowable then — textbook **look-ahead bias**, which makes any result
+meaningless (and would contradict this project's whole not-faking-it ethos).
+So Phase 5 backtests only what *can* be computed honestly from price history.
+The real path to validating the Screener is walk-forward: keep saving daily
+`screener_scores` snapshots and, once enough accumulate, check them against
+what actually happened next. That's noted in the UI rather than faked here.
+Backtests also assume no trading costs/slippage and are in nominal USD — stated
+plainly on the page, same as the Health page's cash-flow caveat.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -437,7 +481,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-246 tests. New in Phase 2: `test_screener.py` covers the scoring math
+257 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -471,7 +515,13 @@ labels, one source failing, no-model degradation, fetch-only-when-stale
 caching); `test_earnings.py` (surprise parsing/sorting, press-release sentiment,
 graceful None paths); `test_data_sources.py` gains the Google News RSS parser
 and the EDGAR 8-K EX-99.1 index-walk; and `test_news_page.py` drives the page's
-News and Earnings views end-to-end.
+News and Earnings views end-to-end. New in Phase 5: `test_backtest.py` covers
+the strategy signals (buy-&-hold, SMA trend investing in an uptrend / sitting
+in cash in a downtrend, RSI mean-reversion), the no-look-ahead pipeline (a
+buy-&-hold *strategy* reproduces buy-&-hold exactly; trend-following stays flat
+through a decline), the empty-history and unknown-strategy paths, and
+save/list persistence — all against synthetic price series; `test_backtest_page.py`
+runs the page, executes a backtest, and saves a run through the real UI.
 
 ## Verifying it against your real keys
 
