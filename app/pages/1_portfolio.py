@@ -217,6 +217,67 @@ if history:
 else:
     st.caption("No historical value to show for this range yet.")
 
+st.divider()
+
+# --------------------------------------------------------------------------
+# Transaction / activity history — and undoing mistakes
+# --------------------------------------------------------------------------
+
+st.subheader("Transaction history")
+st.caption(
+    "Every buy, sell, deposit, and withdrawal. Delete an entry to undo a mistake "
+    "(wrong stock, wrong amount, ...) — your holdings, wallet, and the chart above are "
+    "restored exactly as if it never happened."
+)
+
+activity = portfolio.list_activity()
+if not activity:
+    st.caption("No activity yet.")
+else:
+    activity_df = pd.DataFrame(
+        [
+            {
+                "Date": e["date"].isoformat(),
+                "Action": e["action"],
+                "Ticker": e["ticker"] or "—",
+                "Shares": f"{e['shares']:,.4f}" if e["shares"] is not None else "—",
+                "Price": f"${e['price']:,.2f}" if e["price"] is not None else "—",
+                "Amount": f"${e['amount']:,.2f}",
+            }
+            for e in activity
+        ]
+    )
+    st.dataframe(activity_df, width="stretch", hide_index=True)
+
+    with st.expander("↩️ Undo / delete an entry"):
+        def _entry_label(e):
+            if e["kind"] == "transaction":
+                base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ ${e['price']:,.2f}"
+            else:
+                base = f"{e['date']} · {e['action']} ${e['amount']:,.2f}"
+            return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
+
+        entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
+        entry_choice = st.selectbox("Entry to remove", list(entry_options.keys()), key="activity_delete_select")
+        if st.button("Delete entry", type="secondary", key="activity_delete_btn"):
+            try:
+                portfolio.delete_activity(*entry_options[entry_choice])
+                st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    with st.expander("⚠️ Reset everything"):
+        st.caption(
+            "Permanently delete **all** holdings, transactions, deposits/withdrawals, and reset "
+            "the wallet to $0. This can't be undone."
+        )
+        reset_confirmed = st.checkbox("Yes, clear everything.", key="reset_confirm")
+        if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
+            portfolio.reset_portfolio()
+            st.success("Portfolio reset to an empty slate.")
+            st.rerun()
+
 if not holdings:
     st.info("You've sold all your positions — your proceeds are sitting in the wallet. Add a holding to start investing again.")
     st.stop()
@@ -324,8 +385,12 @@ styled = (
 st.dataframe(styled, width="stretch", hide_index=True)
 
 with st.expander("🗑️ Remove a holding"):
-    options = {f"{h['ticker']}  ·  {h['shares']} shares  (id {h['id']})": h["id"] for h in holdings}
+    st.caption("Erases the position and its entire transaction history — use this for an entry added by mistake. To undo just one buy/sell, use **Transaction history** above instead.")
+    options = {f"{h['ticker']}  ·  {h['shares']} shares": h["ticker"] for h in holdings}
     choice = st.selectbox("Holding", list(options.keys()))
     if st.button("Delete", type="secondary"):
-        portfolio.delete_holding(options[choice])
-        st.rerun()
+        try:
+            portfolio.delete_position(options[choice])
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))

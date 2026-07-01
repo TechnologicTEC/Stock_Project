@@ -273,6 +273,130 @@ def test_earliest_activity_date_considers_holdings_and_transactions():
 
 
 # --------------------------------------------------------------------------
+# Activity history & corrections (undo / delete)
+# --------------------------------------------------------------------------
+
+def test_list_activity_includes_all_action_types_newest_first():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))  # buy
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))           # sell
+    portfolio.deposit_to_wallet(500.0, when=date(2026, 3, 1))                # deposit
+    portfolio.withdraw_from_wallet(50.0, when=date(2026, 4, 1))              # withdraw
+
+    activity = portfolio.list_activity()
+    assert [e["action"] for e in activity] == ["Withdraw", "Deposit", "Sell", "Buy"]  # newest first
+    buy = next(e for e in activity if e["action"] == "Buy")
+    assert (buy["kind"], buy["ticker"], buy["shares"], buy["amount"]) == ("transaction", "AAPL", 10, 1000.0)
+    deposit = next(e for e in activity if e["action"] == "Deposit")
+    assert (deposit["kind"], deposit["ticker"], deposit["amount"]) == ("cash_flow", None, 500.0)
+
+
+def test_delete_activity_undoes_a_buy_and_removes_it_from_history():
+    portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    buy = portfolio.list_activity()[0]
+
+    portfolio.delete_activity(buy["kind"], buy["id"])
+
+    assert portfolio.list_holdings() == []          # the position is gone
+    assert portfolio.list_activity() == []          # and so is its history entry
+
+
+def test_delete_activity_undoes_a_sell_restoring_shares_and_debiting_the_wallet():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # 6 shares left, $600 in wallet
+    sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
+
+    portfolio.delete_activity(sell["kind"], sell["id"])
+
+    holdings = portfolio.list_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["shares"] == 10            # shares restored
+    assert holdings[0]["cost_basis"] == 100.0      # average cost unchanged
+    assert portfolio.get_wallet_balance() == 0.0   # proceeds removed from the wallet
+    assert [e["action"] for e in portfolio.list_activity()] == ["Buy"]  # only the buy remains
+
+
+def test_delete_activity_undoes_a_deposit():
+    portfolio.deposit_to_wallet(500.0, when=date(2026, 1, 5))
+    deposit = portfolio.list_activity()[0]
+
+    portfolio.delete_activity(deposit["kind"], deposit["id"])
+
+    assert portfolio.get_wallet_balance() == 0.0
+    assert portfolio.list_cash_flows() == []
+
+
+def test_delete_activity_refuses_to_orphan_a_later_sell():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))
+    buy = next(e for e in portfolio.list_activity() if e["action"] == "Buy")
+
+    with pytest.raises(ValueError, match="more shares sold than bought"):
+        portfolio.delete_activity(buy["kind"], buy["id"])
+
+    # nothing changed — the deletion rolled back
+    assert portfolio.list_holdings()[0]["shares"] == 6
+    assert {e["action"] for e in portfolio.list_activity()} == {"Buy", "Sell"}
+
+
+def test_delete_activity_refuses_when_it_would_make_the_wallet_negative():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # +$600
+    portfolio.withdraw_from_wallet(600.0, when=date(2026, 3, 1))    # wallet back to $0
+    sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
+
+    with pytest.raises(ValueError, match="negative"):
+        portfolio.delete_activity(sell["kind"], sell["id"])
+
+    assert portfolio.get_wallet_balance() == 0.0  # unchanged
+    assert {e["action"] for e in portfolio.list_activity()} == {"Buy", "Sell", "Withdraw"}
+
+
+def test_delete_activity_undo_leaves_the_value_chart_as_if_it_never_happened():
+    holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
+    fake_bars = [
+        {"date": date(2026, 1, 5), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1},
+        {"date": date(2026, 1, 6), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1},
+    ]
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+        before = portfolio.get_value_history(date(2026, 1, 5), date(2026, 1, 6))
+
+        portfolio.sell_holding(holding_id, 5, 30.0, date(2026, 1, 6))   # mistaken sale
+        sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
+        portfolio.delete_activity(sell["kind"], sell["id"])             # undo it
+
+        after = portfolio.get_value_history(date(2026, 1, 5), date(2026, 1, 6))
+
+    assert after == before  # the chart is identical to before the mistaken sale
+
+
+def test_delete_position_purges_holding_and_its_transactions():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.add_holding("MSFT", 5, 200.0, date(2026, 1, 5))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # AAPL: $600 proceeds in wallet
+
+    portfolio.delete_position("AAPL")
+
+    assert {h["ticker"] for h in portfolio.list_holdings()} == {"MSFT"}
+    assert portfolio.list_transactions("AAPL") == []
+    assert portfolio.get_wallet_balance() == 0.0  # AAPL's sale proceeds removed with it
+    assert {e["ticker"] for e in portfolio.list_activity() if e["kind"] == "transaction"} == {"MSFT"}
+
+
+def test_reset_portfolio_clears_everything():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))
+    portfolio.deposit_to_wallet(500.0)
+
+    portfolio.reset_portfolio()
+
+    assert portfolio.list_holdings() == []
+    assert portfolio.list_transactions() == []
+    assert portfolio.list_cash_flows() == []
+    assert portfolio.get_wallet_balance() == 0.0
+    assert portfolio.list_activity() == []
+
+
+# --------------------------------------------------------------------------
 # CSV import
 # --------------------------------------------------------------------------
 

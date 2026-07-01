@@ -34,7 +34,8 @@ investment-platform/
 │   ├── portfolio.py        # Holdings CRUD, valuation, allocation (ticker,
 │   │                       #   asset type, sector, country, market cap),
 │   │                       #   historical value reconstruction, sell flow
-│   │                       #   + wallet + transaction backfill (Phase 3.5)
+│   │                       #   + wallet + transaction backfill (Phase 3.5),
+│   │                       #   activity history + undo/delete/reset
 │   ├── watchlist.py         # Watchlist CRUD - the screener's candidate list
 │   ├── screener.py          # The Investment Screener's scoring engine
 │   ├── health.py            # Portfolio Health Evaluation: concentration,
@@ -45,7 +46,7 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       └── edgar_client.py     # SEC filings index (CIK lookup, 8-K/4/13F)
-├── tests/                  # 195 tests, all mocked - no API keys needed to run these
+├── tests/                  # 206 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -233,6 +234,25 @@ a small new `cash_flows` table (sale proceeds stay in `transactions` to
 avoid double-counting); `backfill_wallet_cash_flows()` reconciles any
 wallet balance that pre-dates that table, once, on page load.
 
+**Transaction history & undoing mistakes.** The Portfolio page shows a
+**Transaction history** — a chronological log of every buy, sell, deposit,
+and withdrawal (`list_activity()` merges the `transactions` and `cash_flows`
+ledgers). Because holdings, the wallet, and the chart are all *derived* from
+those ledgers, undoing a mistake is just deleting the ledger row and
+recomputing the derived state: `delete_activity(kind, id)` removes the entry,
+replays the affected ticker's remaining transactions to rebuild its holding
+(average-cost), and recomputes the wallet — so after an undo everything looks
+exactly as if the action never happened, the chart included. Two guard rails
+keep the ledger coherent and refuse a deletion (rolling it back) that would
+leave a ticker with more shares sold than bought, or the wallet negative
+because dependent cash was already withdrawn — in both cases the message
+tells you to undo the later action first. `delete_position(ticker)` is the
+heavier "erase this position and its whole history" option (it also fixes a
+latent inconsistency where the old "Remove a holding" deleted the holding row
+but left its transactions behind, so the chart still showed it), and
+`reset_portfolio()` (behind a confirmation checkbox) wipes all holdings,
+transactions, cash flows, and the wallet back to an empty slate.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -331,7 +351,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-195 tests. New in Phase 2: `test_screener.py` covers the scoring math
+206 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -346,7 +366,12 @@ flat cash pile, the "sold everything" flat line, partial-sell + cash,
 deposits in the chart, and the chart endpoint matching Total value);
 `test_portfolio_page.py` and `test_models.py` cover the same ground through
 the actual page (including the sold-everything state) and the `Wallet` /
-`CashFlow` models respectively.
+`CashFlow` models respectively. The activity history and undo/delete/reset
+add another layer: `test_portfolio.py` checks the unified log, undoing a
+buy/sell/deposit, the two guard rails (orphaned sell, negative wallet), that
+an undo leaves the chart byte-for-byte as before, position purge, and full
+reset; `test_portfolio_page.py` drives the history table, an undo, and a
+reset through the real page.
 
 ## Verifying it against your real keys
 

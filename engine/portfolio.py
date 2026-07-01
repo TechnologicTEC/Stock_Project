@@ -373,6 +373,174 @@ def earliest_activity_date() -> date | None:
 
 
 # --------------------------------------------------------------------------
+# Activity history & corrections
+#
+# The ledger (transactions + cash_flows) is the source of truth: holdings,
+# the wallet, and the value-over-time chart are all derived from it. So
+# "undo a mistake" is just "delete the ledger row and recompute the derived
+# state" — afterwards everything looks exactly as if the entry never
+# happened, the chart included. Two safety rails keep the ledger coherent:
+# a deletion that would leave a ticker with more shares sold than bought, or
+# the wallet negative (because dependent cash already left), is refused.
+# --------------------------------------------------------------------------
+
+def list_activity() -> list[dict]:
+    """Unified, newest-first log of every recorded action: buys/sells (from
+    the transactions ledger) and deposits/withdrawals (from the cash-flow
+    ledger). Each entry carries a (kind, id) handle for delete_activity()."""
+    entries: list[dict] = []
+    for t in list_transactions():
+        entries.append({
+            "kind": "transaction", "id": t["id"], "date": t["date"],
+            "action": t["type"].capitalize(),  # Buy / Sell
+            "ticker": t["ticker"], "shares": t["shares"], "price": t["price"],
+            "amount": round(t["shares"] * t["price"], 2),
+        })
+    for c in list_cash_flows():
+        entries.append({
+            "kind": "cash_flow", "id": c["id"], "date": c["date"],
+            "action": c["type"].capitalize(),  # Deposit / Withdraw
+            "ticker": None, "shares": None, "price": None, "amount": c["amount"],
+        })
+    entries.sort(key=lambda e: (e["date"], e["kind"], e["id"]), reverse=True)
+    return entries
+
+
+def delete_activity(kind: str, entry_id: int) -> None:
+    """Undo a single recorded action. Deletes the ledger row, then recomputes
+    the affected ticker's holding (for a buy/sell) and the wallet from what
+    remains — so holdings, cash, and the chart are restored to as-if it never
+    happened. Raises ValueError (rolling the deletion back) if it would leave
+    an inconsistent state."""
+    with get_session() as session:
+        if kind == "transaction":
+            txn = session.get(Transaction, entry_id)
+            if txn is None:
+                raise ValueError("That entry no longer exists.")
+            ticker = txn.ticker
+            session.delete(txn)
+            session.flush()
+            _recompute_ticker_holding(session, ticker)
+        elif kind == "cash_flow":
+            cash_flow = session.get(CashFlow, entry_id)
+            if cash_flow is None:
+                raise ValueError("That entry no longer exists.")
+            session.delete(cash_flow)
+            session.flush()
+        else:
+            raise ValueError(f"Unknown entry kind: {kind!r}")
+        _recompute_wallet(session)
+        session.flush()
+
+
+def delete_position(ticker: str) -> None:
+    """Remove a position entirely — its holding row(s) and its whole
+    transaction history — then recompute the wallet (since removing its sells
+    removes their proceeds). Use this for "I entered this by mistake, erase
+    it"; for undoing a single action use delete_activity() instead."""
+    ticker = ticker.strip().upper()
+    with get_session() as session:
+        for holding in session.execute(select(Holding).where(Holding.ticker == ticker)).scalars().all():
+            session.delete(holding)
+        for txn in session.execute(select(Transaction).where(Transaction.ticker == ticker)).scalars().all():
+            session.delete(txn)
+        session.flush()
+        _recompute_wallet(session)
+        session.flush()
+
+
+def reset_portfolio() -> None:
+    """Clear all portfolio data — holdings, transactions, cash flows, and the
+    wallet balance — back to an empty slate. Leaves the watchlist, screener
+    history, and caches untouched."""
+    with get_session() as session:
+        for model in (Holding, Transaction, CashFlow):
+            for row in session.execute(select(model)).scalars().all():
+                session.delete(row)
+        wallet = session.execute(select(Wallet)).scalars().first()
+        if wallet is not None:
+            wallet.balance = 0.0
+            wallet.updated_at = utcnow()
+        session.flush()
+
+
+def _recompute_ticker_holding(session, ticker: str) -> None:
+    """Rebuild a ticker's single holding row by replaying its remaining
+    buy/sell transactions in date order (average-cost accounting). Collapses
+    any duplicate rows for the ticker into one, preserves its asset_type, and
+    deletes the row entirely if nothing's left held. Raises if a sell would
+    exceed the shares held at that point (i.e. the deletion broke causality)."""
+    txns = session.execute(
+        select(Transaction).where(Transaction.ticker == ticker).order_by(Transaction.date, Transaction.id)
+    ).scalars().all()
+
+    shares = 0.0
+    total_cost = 0.0
+    first_buy_date: date | None = None
+    for t in txns:
+        if t.type == "buy":
+            total_cost += t.shares * t.price
+            shares += t.shares
+            if first_buy_date is None:
+                first_buy_date = t.date
+        else:  # sell
+            if t.shares > shares + 1e-9:
+                raise ValueError(
+                    f"Can't delete that — it would leave {ticker} with more shares sold than bought. "
+                    "Undo the later sale first."
+                )
+            avg_cost = total_cost / shares if shares > 1e-9 else 0.0
+            shares -= t.shares
+            total_cost = avg_cost * shares
+
+    existing = session.execute(select(Holding).where(Holding.ticker == ticker)).scalars().all()
+    asset_type = existing[0].asset_type if existing else "stock"
+    for extra in existing[1:]:  # collapse any duplicate rows for this ticker
+        session.delete(extra)
+
+    if shares <= 1e-9:
+        if existing:
+            session.delete(existing[0])
+        return
+
+    avg_cost = round(total_cost / shares, 6)
+    if existing:
+        holding = existing[0]
+        holding.shares = shares
+        holding.cost_basis = avg_cost
+        holding.purchase_date = first_buy_date or holding.purchase_date
+        holding.asset_type = asset_type
+    else:
+        session.add(Holding(
+            ticker=ticker, shares=shares, cost_basis=avg_cost,
+            purchase_date=first_buy_date or date.today(), asset_type=asset_type,
+        ))
+
+
+def _recompute_wallet(session) -> None:
+    """Recompute the wallet balance from the ledger: deposits − withdrawals +
+    sale proceeds. Matches how the balance is maintained incrementally, so a
+    plain recompute is exact. Raises if the result is negative (cash that's
+    been withdrawn depended on the entry being deleted)."""
+    deposits = sum(c.amount for c in session.execute(
+        select(CashFlow).where(CashFlow.type == "deposit")).scalars())
+    withdrawals = sum(c.amount for c in session.execute(
+        select(CashFlow).where(CashFlow.type == "withdraw")).scalars())
+    proceeds = sum(round(t.shares * t.price, 2) for t in session.execute(
+        select(Transaction).where(Transaction.type == "sell")).scalars())
+
+    balance = round(deposits - withdrawals + proceeds, 2)
+    if balance < -0.005:
+        raise ValueError(
+            "Can't delete that — it would make your wallet balance negative, because cash that "
+            "depended on it has already been withdrawn. Undo the later withdrawal first."
+        )
+    wallet = _get_or_create_wallet(session)
+    wallet.balance = max(balance, 0.0)
+    wallet.updated_at = utcnow()
+
+
+# --------------------------------------------------------------------------
 # Live valuation — current-ish prices, via the cache layer
 # --------------------------------------------------------------------------
 

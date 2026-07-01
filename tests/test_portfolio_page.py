@@ -94,6 +94,52 @@ def test_portfolio_page_delete_holding_round_trip():
 
     assert not at.exception
     assert portfolio.list_holdings() == []
+    assert portfolio.list_transactions("AAPL") == []  # removing the position purges its history too
+
+
+def test_portfolio_page_undo_a_sell_from_history_round_trip():
+    holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
+    portfolio.sell_holding(holding_id, 4, 150.0, date(2025, 6, 2))  # 6 left, $600 in wallet
+    sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
+
+    at = AppTest.from_file(PAGE_PATH)
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
+        at.run(timeout=30)
+
+        entry_select = next(sb for sb in at.selectbox if sb.label == "Entry to remove")
+        # pick the Sell entry's label
+        sell_label = next(o for o in entry_select.options if "Sell" in o)
+        entry_select.set_value(sell_label)
+        at.run(timeout=30)
+
+        next(b for b in at.button if b.label == "Delete entry").click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    assert portfolio.list_holdings()[0]["shares"] == 10     # shares restored
+    assert portfolio.get_wallet_balance() == 0.0            # proceeds removed
+    assert all(e["action"] != "Sell" for e in portfolio.list_activity())
+
+
+def test_portfolio_page_reset_clears_everything():
+    portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
+    portfolio.deposit_to_wallet(500.0)
+
+    at = AppTest.from_file(PAGE_PATH)
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
+        at.run(timeout=30)
+
+        # the reset button is disabled until the confirmation checkbox is ticked
+        next(cb for cb in at.checkbox if "clear everything" in cb.label).set_value(True)
+        at.run(timeout=30)
+
+        next(b for b in at.button if b.label == "Reset portfolio").click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    assert portfolio.list_holdings() == []
+    assert portfolio.list_activity() == []
+    assert portfolio.get_wallet_balance() == 0.0
 
 
 def test_portfolio_page_wallet_deposit_and_withdraw_round_trip():
