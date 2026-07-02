@@ -52,10 +52,13 @@ def forward_return_pct(ticker: str, as_of: date, horizon_days: int) -> float | N
 
 
 def walk_forward(ticker: str, start: date, end: date,
-                 step_days: int = DEFAULT_STEP_DAYS, horizon_days: int = DEFAULT_HORIZON_DAYS) -> list[dict]:
+                 step_days: int = DEFAULT_STEP_DAYS, horizon_days: int = DEFAULT_HORIZON_DAYS,
+                 include_news: bool = True) -> list[dict]:
     """Score `ticker` every `step_days` across [start, end] and pair each score
     with its subsequent `horizon_days` return. Points with no score or no
-    measurable forward return are skipped."""
+    measurable forward return are skipped. `include_news` gates the GDELT
+    news-sentiment factor (a BigQuery query per date) — see
+    screener_history.historical_screener_score."""
     ticker = ticker.strip().upper()
     today = date.today()
     # A forward return over the next `horizon_days` only exists once that window
@@ -75,7 +78,7 @@ def walk_forward(ticker: str, start: date, end: date,
     points: list[dict] = []
     current = start
     while current <= last_scorable:
-        scored = screener_history.historical_screener_score(ticker, current)
+        scored = screener_history.historical_screener_score(ticker, current, include_news=include_news)
         if scored and scored["overall_score"] is not None:
             fwd = forward_return_pct(ticker, current, horizon_days)
             if fwd is not None:
@@ -84,6 +87,7 @@ def walk_forward(ticker: str, start: date, end: date,
                     "score": scored["overall_score"],
                     "recommendation": scored["recommendation"],
                     "forward_return_pct": round(fwd, 2),
+                    "factors": scored.get("factor_scores"),  # per-factor breakdown, incl. sentiment
                 })
         current += timedelta(days=step_days)
     return points

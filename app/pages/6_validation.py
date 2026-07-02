@@ -31,14 +31,18 @@ with st.expander("ℹ️ What this checks (and its limits)", expanded=False):
     st.markdown(
         "The live Screener uses *today's* fundamentals, so it can't be replayed in the past directly. "
         "Instead this **reconstructs** what it would have scored on past dates using only data knowable "
-        "then — quarterly fundamentals from **SEC EDGAR** (respecting each filing's date, so no "
-        "look-ahead) combined with the historical price — run through the **exact same scoring curves**. "
-        "It then pairs each past score with the stock's **actual return over the following months** and "
-        "asks: did higher scores tend to precede higher returns?\n\n"
-        "**Read it as suggestive, not proof.** It's a single ticker and a small sample; the rigorous "
-        "version is cross-sectional across many names. And it currently reconstructs the "
-        "fundamentals + momentum core (~75% of the score) — the analyst and news-sentiment factors "
-        "aren't reconstructed historically yet."
+        "then, run through the **exact same scoring curves**, then pairs each past score with the stock's "
+        "**actual return over the following months** and asks: did higher scores tend to precede higher "
+        "returns?\n\n"
+        "All six factors are reconstructed point-in-time: **fundamentals** (P/E, margins, growth, …) from "
+        "**SEC EDGAR**, respecting each filing's date so there's no look-ahead; **momentum** from the "
+        "historical price; **analyst** consensus approximated from the dated stream of rating changes; and "
+        "**news sentiment** from **GDELT** article tone over the prior 30 days.\n\n"
+        "**Read it as suggestive, not proof.** It's a single ticker and a small sample (the rigorous "
+        "version is cross-sectional across many names); the analyst factor is an *approximation* of "
+        "consensus from change events, and the sentiment factor is GDELT's own tone rather than FinBERT. "
+        "The **information coefficient** below is a rank correlation from **−1 to +1** — above 0 means "
+        "higher scores tended to precede higher returns; 0 means no relationship."
     )
 
 # --------------------------------------------------------------------------
@@ -64,19 +68,30 @@ lookback_label = f1.selectbox("Look back", list(LOOKBACKS.keys()), index=0)
 horizon_label = f2.selectbox("Forward return horizon", list(HORIZONS.keys()), index=1)
 step_label = f3.selectbox("Score", list(STEPS.keys()), index=0)
 
+include_news = st.checkbox(
+    "Include news sentiment (queries GDELT on BigQuery — slower, uses your free quota)",
+    value=False,
+    help="Off: a fast, quota-free run on 5 factors (fundamentals, momentum, analyst). On: adds the 6th "
+         "factor — GDELT news tone — which scans ~2 GB of BigQuery per month of look-back and is cached "
+         "after the first run for a ticker.",
+)
+
 today = date.today()
 start_date = today - timedelta(days=LOOKBACKS[lookback_label])
 horizon_days = HORIZONS[horizon_label]
 step_days = STEPS[step_label]
 
 if st.button("▶️ Run validation", type="primary"):
+    sources = "SEC filings, prices, analyst ratings" + (", and GDELT news" if include_news else "")
     with st.spinner(
-        f"Reconstructing point-in-time scores for {ticker} from SEC filings + prices "
-        "— the first run for a ticker can take up to a minute…"
+        f"Reconstructing point-in-time scores for {ticker} from {sources} — the first run for a ticker "
+        "can take a couple of minutes (cached afterwards)…"
     ):
-        points = validation.walk_forward(ticker, start_date, today, step_days=step_days, horizon_days=horizon_days)
+        points = validation.walk_forward(
+            ticker, start_date, today, step_days=step_days, horizon_days=horizon_days, include_news=include_news
+        )
         st.session_state["validation_result"] = {
-            "ticker": ticker, "horizon_days": horizon_days,
+            "ticker": ticker, "horizon_days": horizon_days, "include_news": include_news,
             "points": points, "summary": validation.summarize(points),
         }
 
@@ -101,8 +116,9 @@ m1, m2, m3 = st.columns(3)
 m1.metric("Observations", summary["n"])
 m2.metric(
     "Information coefficient", f"{ic:+.2f}" if ic is not None else "—",
-    help="Rank correlation between the score and the subsequent return. Above 0 means higher scores "
-         "tended to precede higher returns; near 0 means no relationship; below 0 is the opposite.",
+    help="Spearman rank correlation between the score and the subsequent return, from −1 to +1. "
+         "Above 0 means higher scores tended to precede higher returns; near 0 means no relationship; "
+         "below 0 is the opposite. Real single-name ICs are small — consistently above ~+0.05 is notable.",
 )
 m3.metric("Forward horizon", f"{result['horizon_days']} days")
 
@@ -147,11 +163,32 @@ fig.add_hline(y=0, line_dash="dot", line_color="#888780")
 fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="top", y=-0.15, x=0))
 st.plotly_chart(fig, width="stretch", key="validation_scatter")
 
-with st.expander("All observations"):
-    table = df.rename(columns={
-        "date": "Date", "score": "Score", "recommendation": "Recommendation", "forward_return_pct": "Forward return %",
-    })
-    st.dataframe(
-        table.style.format({"Score": "{:.1f}", "Forward return %": "{:+.1f}%"}),
-        width="stretch", hide_index=True,
-    )
+# --------------------------------------------------------------------------
+# Per-observation factor breakdown — shows every factor (news included)
+# actually feeding each score, not just the final number.
+# --------------------------------------------------------------------------
+
+st.subheader("Factor breakdown per observation")
+st.caption(
+    "Each score is the weighted blend of these factors (a factor with no data has its weight "
+    "redistributed). **News** is GDELT article tone over the 30 days before each date — populated only "
+    "when *Include news sentiment* is ticked (GDELT provides tone, not the individual headlines)."
+)
+_FACTOR_COLUMNS = [
+    ("valuation", "Valuation"), ("growth", "Growth"), ("profitability", "Profitability"),
+    ("momentum", "Momentum"), ("analyst_confidence", "Analyst"), ("sentiment", "News"),
+]
+breakdown_rows = []
+for p in points:
+    factors = p.get("factors") or {}
+    row = {"Date": p["date"], "Score": p["score"]}
+    for key, label in _FACTOR_COLUMNS:
+        row[label] = factors.get(key)
+    breakdown_rows.append(row)
+
+breakdown_df = pd.DataFrame(breakdown_rows)
+factor_fmt = {label: "{:.0f}" for _, label in _FACTOR_COLUMNS}
+st.dataframe(
+    breakdown_df.style.format({"Score": "{:.1f}", **factor_fmt}, na_rep="—"),
+    width="stretch", hide_index=True,
+)

@@ -118,6 +118,20 @@ def test_historical_score_includes_reconstructed_analyst_and_gdelt_sentiment():
     assert result["factor_scores"]["sentiment"] == 72.0
 
 
+def test_historical_score_skips_gdelt_when_news_excluded():
+    with patch("engine.screener_history.edgar_fundamentals.get_pit_fundamentals", return_value=_synthetic_series()), \
+         patch("engine.screener_history.price_history.get_history_df", side_effect=_price_df), \
+         patch("engine.screener_history._profile_bits", return_value=(screener.DEFAULT_SECTOR_BUCKET, None, "Test Co")), \
+         patch("engine.screener_history.analyst_history.recommendation_as_of", return_value=None), \
+         patch("engine.screener_history.gdelt_client.sentiment_as_of") as gdelt_call:
+        result = screener_history.historical_screener_score("TEST", date(2023, 6, 1), include_news=False)
+
+    # No BigQuery touched, and sentiment scores None (its weight redistributes).
+    gdelt_call.assert_not_called()
+    assert result["factor_scores"]["sentiment"] is None
+    assert result["overall_score"] is not None
+
+
 def test_historical_score_none_when_edgar_has_no_data():
     with patch("engine.screener_history.edgar_fundamentals.get_pit_fundamentals", return_value={}):
         assert screener_history.historical_screener_score("NOPE", date(2023, 6, 1)) is None

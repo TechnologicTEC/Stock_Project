@@ -145,11 +145,15 @@ def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | 
     return metrics
 
 
-def historical_screener_score(ticker: str, as_of: date) -> dict | None:
+def historical_screener_score(ticker: str, as_of: date, include_news: bool = True) -> dict | None:
     """The Screener's overall score for `ticker` **as it would have scored on
     `as_of`**, using only then-knowable data and the live scoring curves.
     Returns None if EDGAR has nothing for the ticker; the score itself can still
-    be None if too little was filed by that date."""
+    be None if too little was filed by that date.
+
+    `include_news` gates the GDELT news-sentiment factor (a BigQuery query per
+    call). With it False, sentiment scores None and its weight is redistributed
+    — a fast, quota-free 5-factor reconstruction."""
     ticker = ticker.strip().upper()
     # One price fetch feeds both the as-of price (for P/E-P/B-P/S) and the
     # momentum factor's window.
@@ -175,10 +179,14 @@ def historical_screener_score(ticker: str, as_of: date) -> dict | None:
     by_ticker = {ticker: raw}
     # Every factor uses the live scorers *except* sentiment: the live sentiment
     # scorer reads current news (look-ahead for a past date), so reconstruct it
-    # point-in-time from GDELT tone instead (step 6).
+    # point-in-time from GDELT tone instead (step 6) — but only if asked, since
+    # that's a BigQuery query. Otherwise it's None and its weight redistributes.
     factors = {name: screener.FACTOR_SCORERS[name](by_ticker)[ticker]
                for name in screener.FACTOR_WEIGHTS if name != "sentiment"}
-    factors["sentiment"] = _historical_sentiment_factor(company_name, as_of)
+    factors["sentiment"] = (
+        _historical_sentiment_factor(company_name, as_of) if include_news
+        else screener.FactorResult(score=None, reasons=["News sentiment not included in this run"])
+    )
     overall = screener.combine_factor_scores(factors)
 
     return {

@@ -129,8 +129,9 @@ below on what it can and can't validate.
 horizon, then **Run validation** to *reconstruct* what the Screener would have
 scored on past dates (point-in-time, from SEC EDGAR + prices) and check whether
 higher scores actually preceded higher returns — an information coefficient, an
-average-return-by-score-band table, and a score-vs-forward-return scatter. See
-the validation section below for how and why.
+average-return-by-score-band table, a score-vs-forward-return scatter, and a
+per-observation factor breakdown (so you can see every factor, news sentiment
+included, feeding each score). See the validation section below for how and why.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -453,8 +454,9 @@ rigorous test is cross-sectional across many names); the analyst factor is an
 *approximation* of consensus from change events (not a true PIT feed) and the
 sentiment factor is GDELT's own tone (not FinBERT); and — a documented
 approximation — it uses the *current* sector for the valuation curves since
-sectors rarely change. It also only works for US filers in EDGAR (foreign
-20-F/IFRS filers like ASML/TSM come back empty, handled gracefully). Verified
+sectors rarely change. It works for any filer that tags **us-gaap** in EDGAR —
+most US filers and some foreign ones (ASML does); a purely-IFRS foreign filer
+comes back empty, handled gracefully. Verified
 live: AAPL over ~2 years scored a positive IC (~+0.26) with the "Buy"-scored
 dates preceding materially higher forward returns than "Hold" — suggestive, not
 proof, which is exactly how the page frames it.
