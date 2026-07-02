@@ -306,3 +306,29 @@ def set_flag(key: str, value: bool) -> None:
         else:
             row.value_json = payload
             row.fetched_at = _utcnow()
+
+
+def get_value(key: str, ttl_seconds: int | None = None) -> Any | None:
+    """Read a JSON value stored via set_value(), or None if it was never
+    stored (or is older than ttl_seconds). Generalizes get_flag() to any
+    JSON-serializable payload — used e.g. to remember a validation IC so the
+    projections page can reuse it without re-running the walk-forward."""
+    with get_session() as session:
+        row = session.get(ApiCache, key)
+        if row is None:
+            return None
+        if ttl_seconds is not None and _utcnow() - row.fetched_at >= timedelta(seconds=ttl_seconds):
+            return None
+        return json.loads(row.value_json)
+
+
+def set_value(key: str, value: Any) -> None:
+    """Store a JSON-serializable value under `key` (upsert, timestamped)."""
+    with get_session() as session:
+        row = session.get(ApiCache, key)
+        payload = json.dumps(value, default=str)
+        if row is None:
+            session.add(ApiCache(cache_key=key, value_json=payload, fetched_at=_utcnow()))
+        else:
+            row.value_json = payload
+            row.fetched_at = _utcnow()

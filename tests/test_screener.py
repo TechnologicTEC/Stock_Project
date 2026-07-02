@@ -8,6 +8,17 @@ import pytest
 from engine import screener
 
 
+@pytest.fixture(autouse=True)
+def _no_news_by_default():
+    """_score_sentiment now calls news.analyze_ticker (FinBERT pipeline).
+    Default every test to 'no recent news' so screen_tickers stays network-
+    and model-free; the sentiment-specific tests patch it themselves."""
+    from engine import news
+    empty = news.NewsAnalysis(ticker="", headlines=[], overall_score=None, has_sentiment=False, total_count=0)
+    with patch("engine.news.analyze_ticker", return_value=empty):
+        yield
+
+
 # --------------------------------------------------------------------------
 # Percentile ranking helper
 # --------------------------------------------------------------------------
@@ -197,11 +208,24 @@ def test_score_analyst_confidence_bullish_consensus_beats_bearish():
     assert result["BULLISH"].score > result["BEARISH"].score
 
 
-def test_score_sentiment_always_returns_none_for_now():
-    raw = {"X": _raw("X")}
-    result = screener._score_sentiment(raw)
+def test_score_sentiment_maps_news_overall_score():
+    from engine import news
+    scored = news.NewsAnalysis(
+        ticker="X", headlines=[], overall_score=68, positive=5, neutral=2,
+        negative=1, scored_count=8, total_count=8, has_sentiment=True,
+    )
+    with patch("engine.news.analyze_ticker", return_value=scored):
+        result = screener._score_sentiment({"X": _raw("X")})
+    assert result["X"].score == 68.0
+    assert "68/100" in result["X"].reasons[0]
+
+
+def test_score_sentiment_none_when_no_recent_news():
+    # The autouse fixture returns a no-news analysis, so the factor abstains
+    # (score None) rather than faking a neutral 50.
+    result = screener._score_sentiment({"X": _raw("X")})
     assert result["X"].score is None
-    assert "Phase 4" in result["X"].reasons[0]
+    assert "No recent news" in result["X"].reasons[0]
 
 
 # --------------------------------------------------------------------------
@@ -412,8 +436,8 @@ def test_recommendation_thresholds(score, expected):
 # --------------------------------------------------------------------------
 
 def test_screen_tickers_redistributes_sentiments_weight():
-    """Sentiment always returns None right now, so its 15% weight should be
-    spread across the other five factors rather than just dropped."""
+    """With no recent news (the autouse default), sentiment abstains, so its
+    15% weight should be spread across the other factors rather than dropped."""
     raw = {
         "A": _raw("A", fundamentals={"peTTM": 15.0}),
         "B": _raw("B", fundamentals={"peTTM": 25.0}),

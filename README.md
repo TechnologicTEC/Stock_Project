@@ -22,7 +22,8 @@ investment-platform/
 │   └── pages/
 │       ├── 1_portfolio.py       # Portfolio Dashboard (Section 6.3)
 │       ├── 2_screener.py        # Investment Screener (Section 6.1)
-│       ├── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
+│       ├── 3_health.py          # Portfolio Health Evaluation (6.4) +
+│       │                        #   Forward-Looking Projections (6.11)
 │       ├── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
 │       ├── 5_backtest.py        # Backtesting (Section 6.7)
 │       └── 6_validation.py      # Screener Validation (point-in-time walk-forward)
@@ -57,6 +58,9 @@ investment-platform/
 │   ├── news.py              # News Analyzer: fetch/cache/score/summarize (6.2)
 │   ├── earnings.py          # Earnings Analyzer: beat/miss + 8-K release (6.5)
 │   ├── backtest.py          # Backtesting: vectorized technical strategies (6.7)
+│   ├── projections.py       # Forward-Looking Projections (6.11): lognormal/GBM
+│   │                        #   statistical band + fan chart, news context, and
+│   │                        #   walk-forward calibration — NOT a prediction
 │   └── data_sources/
 │       ├── finnhub_client.py   # quotes, news, fundamentals, profile, earnings
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
@@ -68,7 +72,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 293 tests, all mocked - no API keys needed to run these
+├── tests/                  # 335 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -132,6 +136,25 @@ higher scores actually preceded higher returns — an information coefficient, a
 average-return-by-score-band table, a score-vs-forward-return scatter, and a
 per-observation factor breakdown (so you can see every factor, news sentiment
 included, feeding each score). See the validation section below for how and why.
+
+**Forward-Looking Projections** (bottom of the **Health** page, Section 6.11):
+pick a subject (the whole portfolio or one holding) and a horizon (3M/6M/1Y/2Y)
+to see a **statistical range of outcomes, explicitly not a prediction**. A
+lognormal / geometric-Brownian-motion model — the same math behind options
+pricing — takes the subject's daily volatility over the past year and projects a
+widening **fan chart** of percentile bands **centred on today's value (no assumed
+drift)**, with a 90% and middle-half range and a plain-English explanation. The
+trailing realized return is shown as *context only* — never carried forward as a
+trend. The median then **tilts by the Screener's rating** (on by default,
+toggleable): up for highly-rated stocks, down for poorly-rated ones, flat for
+neutral — a capped ±25%/yr lean set by the fundamental score and shrunk by the
+ticker's validation IC, with no baseline drift (nothing moves without the rating
+to back it). For a single ticker
+it also pairs the band with recent **news sentiment** (context only — it does not
+move the range) and, on demand, a **historical calibration**: replaying the exact
+model over past windows (no look-ahead) to show how often the actual subsequent
+return really landed inside the range it would have drawn. See the projections
+section below.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -438,11 +461,11 @@ signal. Three modules:
   `maximum_bytes_billed` as a backstop — so it can't burn a free-tier month.
 
   With all four groups reconstructed, the historical score now covers **all six
-  factors** (100% of the weight). Two honest asterisks: the sentiment is
-  GDELT's own tone, not FinBERT (we can't get article *text* at scale
-  historically), and the live Screener page's sentiment factor is still stubbed
-  — so this validates the Screener's *intended* six-factor design, and a strong
-  result here is the case for wiring sentiment into the live scorer.
+  factors** (100% of the weight). One honest asterisk: the *historical*
+  sentiment is GDELT's own tone, not FinBERT (we can't get article *text* at
+  scale historically), whereas the **live** Screener now scores sentiment with
+  FinBERT (`news.analyze_ticker`) — so the two paths differ in source but the
+  design is fully wired end to end.
 - **`engine/screener_validation.py`** — walk-forward: score the ticker across
   many past dates and pair each score with the stock's *actual* return over a
   forward horizon. Reports an **information coefficient** (score↔return rank
@@ -460,6 +483,69 @@ comes back empty, handled gracefully. Verified
 live: AAPL over ~2 years scored a positive IC (~+0.26) with the "Buy"-scored
 dates preceding materially higher forward returns than "Hold" — suggestive, not
 proof, which is exactly how the page frames it.
+
+## How forward-looking projections work (Section 6.11) — and why they're a range, not a prediction
+
+Built after Phases 4 and 5 for a reason: shipping a projection with no way to
+check whether it's any good is worse than not shipping one. Everything lives in
+`engine/projections.py`; the Health page is just the picker, the fan chart, and
+the framing. **Nothing here predicts anything** — it describes the range of
+outcomes a standard model produces from the asset's volatility alone, centred on
+today's value. That distinction is baked into every name in the module (band,
+range, percentile — never "predict" or "forecast").
+
+- **The band (step 1).** From the daily *log* returns already cached, take the
+  standard deviation (volatility `sigma`). Over `t` trading days the cumulative
+  log return is modelled as Normal(`0`, `sigma²·t`), so the value at percentile
+  `p` is `S0 · exp(z_p·sigma·√t)` — the textbook lognormal / geometric-Brownian-
+  motion model behind options pricing, with **drift deliberately set to zero**.
+  Using the trailing mean return as drift would extrapolate recent momentum (a
+  stock up 130% last year would be shown drifting toward ~2.3×), which is exactly
+  the prediction this feature must never make — so the fan is a pure volatility
+  cone, and the trailing return is surfaced separately as context. Bands are
+  evaluated **analytically** at a fixed set of percentiles (the handful of
+  z-values are hard-coded — no Monte-Carlo, no scipy), giving an exact,
+  reproducible fan that widens with √time. Because it's lognormal, the band is
+  asymmetric in return terms (e.g. −42%…+73%): downside is capped at −100%,
+  upside isn't. Shown as a 90% (5th–95th) band, a middle-half (25th–75th) band,
+  and a flat median line, over a horizon of your choice. The **portfolio**
+  projection values *today's* holdings held constant across the window (plus the
+  cash balance as a stable sleeve), so — unlike the raw value-over-time series —
+  it can't be distorted by contributions you made partway through.
+- **News context (step 2).** For a single ticker the band is paired with recent
+  sentiment from the Phase 4 FinBERT pipeline (`news.analyze_ticker`), presented
+  *alongside* the range and explicitly labelled context that does **not** move
+  it — the range is driven purely by volatility.
+- **Historical calibration (step 3).** Opt-in, per ticker: replay the exact
+  model over many past anchor dates (estimate from the year before each date,
+  project forward, compare to what *actually* happened next — no look-ahead) and
+  report how often the real return landed inside the band. A well-calibrated 90%
+  band should contain the outcome ~90% of the time; the page gives that coverage
+  number and a hedged verdict. Validated against synthetic GBM data (where the
+  model is correctly specified) as a sanity check that coverage lands near
+  nominal.
+- **Screener outlook tilt** (on by default, toggleable). The median *leans* by
+  the live Screener's fundamental score — a **capped** ±25%/yr, scaling linearly
+  with the score (50 = no lean, so highly-rated stocks trend up and poorly-rated
+  ones down, while a neutral stock stays flat) — and that lean is **shrunk by how
+  much the Screener has actually predicted returns**: the ticker's walk-forward
+  validation IC (`IC_REFERENCE` = the app's own "notable" 0.05 bar; a
+  zero/negative IC → *no* tilt at all; no validation run yet → a 0.75 default,
+  since the fundamental score is itself backing, so running a validation refines
+  it). There is deliberately **no baseline/market drift** — nothing moves without
+  the rating to back it (an earlier idea to center on the equity risk premium was
+  dropped for exactly that reason). The band's *width* never changes — only the
+  centre line moves. The backtester validates *technical trading strategies*
+  rather than a buy-and-hold expected return, so it's deliberately **not** folded
+  into the drift. For the portfolio the tilt is a value-weighted blend of each
+  holding's outlook, with cash contributing zero.
+
+**Honest limits, stated on the page:** the median is flat unless the Screener's
+rating tilts it (and even then it's a capped lean, not a forecast); the band is
+the real uncertainty and the outcome can land outside it; the trailing return is
+shown as context, never extrapolated; and the *whole-portfolio* projection values
+today's holdings held constant (plus cash), so — unlike the Health metrics — it
+isn't distorted by contributions, though it does assume today's mix.
 
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
@@ -509,13 +595,16 @@ sector's curve rather than being distinguished further — the curves are
 wide enough to avoid flattening *normal* extreme cases like AAPL's P/B to
 an indistinguishable zero, not infinitely granular.
 
-**Sentiment (15% of the original weight table) isn't scored yet.** It
-needs the FinBERT pipeline, which is Phase 4. Rather than faking a neutral
-score, that factor returns "not yet available" and its weight is
-automatically spread across the other five factors. Institutional
-ownership trend (Section 4: needs SEC EDGAR 13F parsing) is similarly out
-of scope for now — Analyst & Institutional Confidence uses recommendation
-trends, analyst price targets, and insider sentiment instead.
+**Sentiment (15% of the weight) is scored from recent news via FinBERT**
+(`engine/news.py`'s `analyze_ticker`, the same pipeline behind the News
+page): 50 = neutral, higher = more positive, mapped straight into the
+factor. When a ticker has no recent news, or FinBERT isn't installed, the
+factor abstains (returns "not available") and its weight is automatically
+spread across the other five rather than faking a neutral score. Headlines
+are FinBERT-scored once at fetch time and cached, so a warm cache is a fast
+read. Institutional ownership trend (Section 4: needs SEC EDGAR 13F
+parsing) remains out of scope — Analyst & Institutional Confidence uses
+recommendation trends, analyst price targets, and insider sentiment instead.
 
 ## A units bug worth knowing about
 
@@ -611,7 +700,26 @@ don't-score-an-unfinished-forward-window bound), `test_analyst_history.py`
 and caching), `test_gdelt_client.py` (tone→0-100 mapping/clamping,
 article-count-weighted sentiment, caching, and graceful failure with BigQuery
 mocked), and `test_validation_page.py` (the page's verdict, metrics, and
-empty-result path).
+empty-result path). New in Phase 5.5: `test_projections.py` covers the lognormal
+band math on synthetic returns (a zero-drift/zero-vol flat fan, the regression
+check that a strong trailing return leaves the median flat rather than
+extrapolating momentum, √time-widening ordered percentiles, the today-origin and
+forward-date layout, insufficient-data), the ticker/portfolio wrappers with
+price/value history mocked (including that the portfolio holds current shares
+constant and never touches the jumpy value-over-time series), the news-context
+note (leans + its "does not move the range"
+disclaimer), the walk-forward calibration (full coverage on a flat series, the
+50%-band-nests-inside-90% invariant, near-nominal coverage on GBM data, and the
+insufficient/none paths), the verdict wording, and the **outlook tilt**
+(confidence scaling/clamping by IC, the score→capped-tilt mapping, the
+IC-remember/read round-trip, and that a high/low Screener score tilts the median
+up/down while off keeps it flat); `test_health_page.py` gains projection-section
+tests (the band + framing render, subject-switch calls `project_ticker`, the
+no-data state, the news-context info line, the opt-in calibration toggle running
+coverage, and the outlook toggle wiring `apply_outlook` through + rendering the
+tilt explanation). Sentiment wiring is covered in `test_screener.py`
+(`_score_sentiment` maps `news.analyze_ticker`'s score, and abstains with no
+recent news) with the FinBERT pipeline mocked throughout.
 
 ## Verifying it against your real keys
 
@@ -648,16 +756,15 @@ snippet into them too.
 The blueprint's roadmap was revised after Phase 3, based on real usage
 rather than advance planning — see the `investment_platform_blueprint.md`
 included alongside this code for the full reasoning. Phase 3.5 and **Phase 4**
-(News + Earnings Analyzer, FinBERT) are now done. A natural follow-on: Phase 4
-now produces a real sentiment score (`sentiment.score_text`), so the screener's
-Sentiment factor — currently marked unavailable, its 15% weight redistributed
-across the other five — can be wired into `engine/screener.py`'s
-`_score_sentiment()` (e.g. averaging recent `news.analyze_ticker` sentiment)
-with no changes needed elsewhere. **Phase 5** is the Backtesting Engine.
-**Phase 5.5** (Forward-Looking Projections — a statistical price-range
-projection, explicitly not a prediction) comes after Phase 5's backtester, so
-the projection methodology can be validated against real historical outcomes
-before being trusted.
+(News + Earnings Analyzer, FinBERT) are done, and the screener's Sentiment
+factor is now wired to that pipeline (`_score_sentiment()` →
+`news.analyze_ticker`). **Phase 5** (the Backtesting Engine), the off-blueprint
+**Screener Validation** phase, and **Phase 5.5** (Forward-Looking Projections —
+a statistical price-range, explicitly not a prediction, with its methodology
+validated against real historical outcomes via walk-forward calibration, and an
+optional Screener-driven median tilt shrunk by that validation's IC) are all now
+done. The next blueprint step is **Phase 6** (Paper Trading via Alpaca), then
+**Phase 7** (the AI Chat Assistant).
 
 **Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
 which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target

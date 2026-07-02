@@ -153,9 +153,10 @@ with st.expander("ℹ️ How the overall score is built", expanded=False):
     ]
     st.dataframe(pd.DataFrame(weight_rows), width="stretch", hide_index=True)
     st.caption(
-        "Sentiment is part of the design (Section 6.1) but needs the FinBERT news pipeline, which "
-        "arrives in Phase 4 — until then it's marked unavailable and its 15% weight is spread "
-        "proportionally across the other five factors below, rather than faking a neutral score."
+        "Sentiment (15%) is scored from recent news headlines via the FinBERT pipeline (the same one "
+        "behind the News page) — 50 = neutral, higher = more positive. When a ticker has no recent news "
+        "(or FinBERT isn't installed), that factor is marked unavailable and its weight is spread "
+        "proportionally across the other five, rather than faking a neutral score."
     )
     st.caption(
         "Valuation (P/E, P/B, P/S) and gross margin are scored against thresholds adjusted for the "

@@ -16,7 +16,7 @@ import plotly.express as px
 import streamlit as st
 
 from db.session import init_db
-from engine import portfolio, screener_validation as validation, watchlist
+from engine import portfolio, projections, screener_validation as validation, watchlist
 
 st.set_page_config(page_title="Screener Validation — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()
@@ -90,9 +90,16 @@ if st.button("▶️ Run validation", type="primary"):
         points = validation.walk_forward(
             ticker, start_date, today, step_days=step_days, horizon_days=horizon_days, include_news=include_news
         )
+        summary = validation.summarize(points)
+        # Remember the IC so the Health page's projection can use it as the
+        # confidence behind its optional median tilt (no need to re-run this).
+        if summary.get("information_coefficient") is not None:
+            projections.remember_validation_ic(
+                ticker, summary["information_coefficient"], n=summary.get("n"), horizon_days=horizon_days
+            )
         st.session_state["validation_result"] = {
             "ticker": ticker, "horizon_days": horizon_days, "include_news": include_news,
-            "points": points, "summary": validation.summarize(points),
+            "points": points, "summary": summary,
         }
 
 result = st.session_state.get("validation_result")

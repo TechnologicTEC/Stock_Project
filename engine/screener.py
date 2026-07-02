@@ -36,11 +36,12 @@ others you're actually looking at.
 
 Two other simplifications, flagged here rather than silently faked:
 
-1. Sentiment (15% in the original weight table) needs FinBERT, which isn't
-   built until Phase 4. Rather than faking a neutral placeholder score,
-   that factor returns score=None and its weight is redistributed
-   proportionally across the other five. Once Phase 4 wires in a real
-   score, it slots back in here with no changes needed.
+1. Sentiment (15% of the weight) is scored from the Phase 4 FinBERT news
+   pipeline (engine/news.py) via _score_sentiment below. When there's no
+   recent news, or FinBERT isn't installed, that factor returns score=None
+   and its weight is redistributed proportionally across the others rather
+   than faking a neutral placeholder — so "no signal" never masquerades as
+   "neutral".
 
 2. Institutional ownership trend (Section 4 flags this as needing SEC
    EDGAR 13F parsing) is out of scope for this phase. The Analyst &
@@ -750,17 +751,52 @@ def _score_analyst_confidence(raw_by_ticker: dict[str, TickerRawData]) -> dict[s
 
 
 def _score_sentiment(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorResult]:
-    """Stubbed until Phase 4 builds the FinBERT news pipeline. Deliberately
-    NOT a fake neutral score - that would misrepresent 'we have no signal'
-    as 'this stock is neutral'. score=None here causes screen_tickers() to
-    redistribute this factor's weight across the other five."""
-    return {
-        t: FactorResult(
-            score=None,
-            reasons=["Sentiment scoring arrives in Phase 4 (FinBERT news pipeline) - not yet available"],
+    """Recent-news sentiment via the Phase 4 FinBERT pipeline
+    (engine/news.py). news.analyze_ticker() already rolls per-headline FinBERT
+    scores into a 0-100 number where 50 = neutral, higher = more positive —
+    exactly this factor's scale — so it maps straight through.
+
+    Still deliberately NOT a fake neutral score: if there's no recent news, or
+    FinBERT isn't installed, or the fetch fails, this returns score=None and
+    combine_factor_scores() redistributes the weight across the other factors
+    rather than pretending 'no signal' means 'neutral'. Headlines are scored
+    once at fetch time and cached (see news.py), so a warm cache is a fast
+    read here, not a model reload."""
+    from engine import news  # local import keeps FinBERT/torch off screener import
+
+    results: dict[str, FactorResult] = {}
+    for t in raw_by_ticker:
+        try:
+            analysis = news.analyze_ticker(t)
+        except Exception as exc:
+            results[t] = FactorResult(score=None, reasons=[f"News sentiment unavailable: {exc}"])
+            continue
+
+        if analysis.overall_score is None:
+            if analysis.total_count and not analysis.has_sentiment:
+                reason = ("Recent headlines found, but FinBERT isn't installed to score them "
+                          "(`pip install transformers torch`)")
+            elif analysis.total_count:
+                reason = "Recent headlines found, but none could be scored"
+            else:
+                reason = "No recent news found for this ticker"
+            results[t] = FactorResult(score=None, reasons=[reason])
+            continue
+
+        results[t] = FactorResult(
+            score=float(analysis.overall_score),
+            reasons=[
+                f"News sentiment {analysis.overall_score}/100 (50 = neutral) across "
+                f"{analysis.scored_count} recent headline(s): {analysis.positive} positive, "
+                f"{analysis.neutral} neutral, {analysis.negative} negative"
+            ],
+            raw={
+                "overall_score": analysis.overall_score, "positive": analysis.positive,
+                "neutral": analysis.neutral, "negative": analysis.negative,
+                "scored_count": analysis.scored_count,
+            },
         )
-        for t in raw_by_ticker
-    }
+    return results
 
 
 FACTOR_SCORERS = {
@@ -775,7 +811,8 @@ FACTOR_SCORERS = {
 
 # --------------------------------------------------------------------------
 # Combining factors -> overall score, with weight redistribution for any
-# factor that came back unavailable (always "sentiment", for now)
+# factor that came back unavailable (e.g. sentiment when a ticker has no
+# recent news, or analyst data behind a paywalled endpoint)
 # --------------------------------------------------------------------------
 
 def _recommendation_for(score: float | None) -> str:

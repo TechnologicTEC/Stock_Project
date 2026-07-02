@@ -73,6 +73,23 @@ def test_validation_page_news_toggle_opts_into_gdelt():
     assert mock_wf.call_args.kwargs.get("include_news") is True
 
 
+def test_validation_page_remembers_ic_for_projections():
+    from engine import projections
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+
+    assert projections.cached_validation_ic("AAPL") is None
+    with patch("engine.screener_validation.walk_forward", return_value=_canned_points()):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        next(b for b in at.button if "Run validation" in b.label).click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    # The monotonic canned data yields a strong positive IC, now cached so the
+    # Health page's projection tilt can reuse it.
+    assert projections.cached_validation_ic("AAPL") is not None
+
+
 def test_validation_page_handles_empty_result():
     portfolio.add_holding("XYZ", 1, 10.0, date(2022, 1, 1))
     with patch("engine.screener_validation.walk_forward", return_value=[]):

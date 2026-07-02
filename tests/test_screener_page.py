@@ -7,9 +7,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from engine import cache, screener, watchlist
+
+
+@pytest.fixture(autouse=True)
+def _no_news_by_default():
+    """The screener's sentiment factor now calls news.analyze_ticker (FinBERT);
+    stub it to 'no recent news' so the page tests stay network- and model-free."""
+    from engine import news
+    empty = news.NewsAnalysis(ticker="", headlines=[], overall_score=None, has_sentiment=False, total_count=0)
+    with patch("engine.news.analyze_ticker", return_value=empty):
+        yield
 
 # Absolute, not relative - see test_portfolio_page.py's PAGE_PATH comment
 # for why: AppTest.from_file()'s fallback path resolution is CWD-dependent
