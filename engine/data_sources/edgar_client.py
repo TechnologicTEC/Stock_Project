@@ -62,6 +62,14 @@ def get_cik_for_ticker(ticker: str) -> str | None:
     return None
 
 
+def get_company_facts(cik: str) -> dict:
+    """Every XBRL-tagged financial fact a company has ever filed, from EDGAR's
+    `companyfacts` API (on data.sec.gov). Each fact carries the date it was
+    *filed*, which is what makes point-in-time reconstruction honest — see
+    engine/data_sources/edgar_fundamentals.py. Returns the raw JSON dict."""
+    return _throttled_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json").json()
+
+
 def get_company_filings(cik: str, form_type: str | None = None, limit: int = 20) -> list[dict]:
     """
     Recent filings for a company. form_type e.g. '8-K', '4' (insider),

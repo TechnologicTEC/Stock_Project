@@ -787,6 +787,21 @@ def _recommendation_for(score: float | None) -> str:
     return RECOMMENDATION_FLOOR
 
 
+def combine_factor_scores(factors: dict[str, FactorResult]) -> float | None:
+    """Weight each factor per FACTOR_WEIGHTS, renormalized across only the
+    factors that actually produced a score (so a missing factor — sentiment
+    pre-Phase-4, or analyst/sentiment in a historical reconstruction — has its
+    weight redistributed rather than counted as zero). Shared by the live
+    screener and the point-in-time historical scorer so both combine
+    identically. Returns None if nothing scored."""
+    available = {name: fr for name, fr in factors.items() if fr.score is not None and name in FACTOR_WEIGHTS}
+    if not available:
+        return None
+    total_weight = sum(FACTOR_WEIGHTS[name] for name in available)
+    overall = sum(FACTOR_WEIGHTS[name] * factors[name].score for name in available) / total_weight
+    return round(overall, 1)
+
+
 def screen_tickers(tickers: list[str]) -> list[ScreenerResult]:
     """
     Runs every factor across all of `tickers` together (so percentile
@@ -806,14 +821,7 @@ def screen_tickers(tickers: list[str]) -> list[ScreenerResult]:
     results = []
     for t in clean_tickers:
         factors = {name: factor_results_by_name[name][t] for name in FACTOR_WEIGHTS}
-        available = {name: fr for name, fr in factors.items() if fr.score is not None}
-
-        if available:
-            total_weight = sum(FACTOR_WEIGHTS[name] for name in available)
-            overall = sum(FACTOR_WEIGHTS[name] * factors[name].score for name in available) / total_weight
-            overall = round(overall, 1)
-        else:
-            overall = None
+        overall = combine_factor_scores(factors)
 
         results.append(
             ScreenerResult(

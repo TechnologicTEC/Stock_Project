@@ -32,6 +32,13 @@ beautifulsoup4>=4.12
 transformers>=4.40
 torch>=2.0
 
+# --- Historical news tone for screener validation (Section 6.7 follow-on) ---
+# GDELT's Global Knowledge Graph tone via BigQuery. Needs application-default
+# credentials (`gcloud auth application-default login`) and GOOGLE_CLOUD_PROJECT
+# set in .env. Optional — without it, the screener-validation sentiment factor
+# simply scores None (its weight is redistributed), like any missing factor.
+google-cloud-bigquery>=3.0
+
 # --- Utilities ---
 python-dotenv>=1.0
 requests>=2.31

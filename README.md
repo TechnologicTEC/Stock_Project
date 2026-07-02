@@ -24,7 +24,8 @@ investment-platform/
 │       ├── 2_screener.py        # Investment Screener (Section 6.1)
 │       ├── 3_health.py          # Portfolio Health Evaluation (Section 6.4)
 │       ├── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
-│       └── 5_backtest.py        # Backtesting (Section 6.7)
+│       ├── 5_backtest.py        # Backtesting (Section 6.7)
+│       └── 6_validation.py      # Screener Validation (point-in-time walk-forward)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -47,6 +48,9 @@ investment-platform/
 │   ├── currency.py         # USD/NZD display conversion (FRED DEXUSNZ rate)
 │   ├── watchlist.py         # Watchlist CRUD - the screener's candidate list
 │   ├── screener.py          # The Investment Screener's scoring engine
+│   ├── screener_history.py  # point-in-time historical screener scoring
+│   │                        #   (reuses screener.py's curves on EDGAR data)
+│   ├── screener_validation.py # walk-forward validation of the screener
 │   ├── health.py            # Portfolio Health Evaluation: concentration,
 │   │                        #   beta, Sharpe ratio, max drawdown, flags
 │   ├── sentiment.py         # FinBERT sentiment behind score_text() (Phase 4)
@@ -59,8 +63,12 @@ investment-platform/
 │       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       ├── edgar_client.py     # SEC filings + 8-K EX-99.1 press releases
+│       ├── edgar_fundamentals.py # point-in-time fundamentals from XBRL
+│       │                         #   (screener-validation groundwork)
+│       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
+│       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 257 tests, all mocked - no API keys needed to run these
+├── tests/                  # 293 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -116,6 +124,13 @@ starting capital, then **Run backtest** to see it charted against buy-&-hold
 and SPY, with a return/Sharpe/drawdown/volatility comparison table and a
 **Save this run** button (writes to `backtest_runs`). See the honesty note
 below on what it can and can't validate.
+
+**Screener Validation** page: pick a ticker, a look-back window and a forward
+horizon, then **Run validation** to *reconstruct* what the Screener would have
+scored on past dates (point-in-time, from SEC EDGAR + prices) and check whether
+higher scores actually preceded higher returns — an information coefficient, an
+average-return-by-score-band table, and a score-vs-forward-return scatter. See
+the validation section below for how and why.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -383,6 +398,67 @@ what actually happened next. That's noted in the UI rather than faked here.
 Backtests also assume no trading costs/slippage and are in nominal USD — stated
 plainly on the page, same as the Health page's cash-flow caveat.
 
+## Validating the screener, point-in-time (EDGAR reconstruction)
+
+The Backtest section above explains why the fundamental Screener can't be
+replayed from Finnhub's *current* snapshot. There is, however, a free source of
+**point-in-time** fundamentals: **SEC EDGAR's `companyfacts` XBRL**, where every
+financial fact carries the date it was *filed*. A spike confirmed this works —
+16+ years of quarterly history for the metrics the Screener needs, and a
+snapshot "as of 2023-06-01" correctly returns only what was public by then. So
+this phase reconstructs the Screener historically and checks whether it has
+signal. Three modules:
+
+- **`engine/data_sources/edgar_fundamentals.py`** — extracts point-in-time
+  quarterly fundamentals from `companyfacts`, coalescing tag drift (revenue
+  alone spans three XBRL tags), collapsing restatements to the earliest-filed
+  value, dropping YTD rows so only true quarters survive, and — the crux —
+  `known_as_of(date)` returns only facts filed on/before that date (the
+  look-ahead guard).
+- **`engine/screener_history.py`** — turns those into the Screener's actual
+  inputs at a past date (TTM ratios: P/E, P/B, P/S, margins, ROE, growth,
+  combined with the historical price we cache) and runs them through the
+  **exact same scoring curves** as the live Screener, so it measures the real
+  thing.
+- **`engine/data_sources/analyst_history.py`** — the *analyst* factor,
+  reconstructed. Historical consensus counts are paid, but the dated stream of
+  rating-*change* events is free (yfinance scrapes years of it), so this
+  approximates the consensus as of a past date: latest rating per firm,
+  stale coverage dropped, grades normalized into the five buckets the Screener
+  already uses.
+- **`engine/data_sources/gdelt_client.py`** — the *news-sentiment* factor,
+  reconstructed. GDELT's Global Knowledge Graph (free, on BigQuery) tags every
+  article with a **tone** score, so we get historical sentiment without fetching
+  or scoring article text: query the partitioned GKG table filtered by
+  `_PARTITIONTIME` (partition pruning keeps a scan under ~1 GB/month), average
+  the tone of articles mentioning the company over the prior 30 days, map onto
+  the Screener's 0–100 scale. Two hard quota guards — every query is dry-run
+  first and skipped if it would scan more than 60 GB, and run with
+  `maximum_bytes_billed` as a backstop — so it can't burn a free-tier month.
+
+  With all four groups reconstructed, the historical score now covers **all six
+  factors** (100% of the weight). Two honest asterisks: the sentiment is
+  GDELT's own tone, not FinBERT (we can't get article *text* at scale
+  historically), and the live Screener page's sentiment factor is still stubbed
+  — so this validates the Screener's *intended* six-factor design, and a strong
+  result here is the case for wiring sentiment into the live scorer.
+- **`engine/screener_validation.py`** — walk-forward: score the ticker across
+  many past dates and pair each score with the stock's *actual* return over a
+  forward horizon. Reports an **information coefficient** (score↔return rank
+  correlation, computed as Pearson-on-ranks to avoid a scipy dependency) and
+  average return per score band. Out-of-sample by construction.
+
+**Honest limits, stated on the page:** single-ticker and small-sample (the
+rigorous test is cross-sectional across many names); the analyst factor is an
+*approximation* of consensus from change events (not a true PIT feed) and the
+sentiment factor is GDELT's own tone (not FinBERT); and — a documented
+approximation — it uses the *current* sector for the valuation curves since
+sectors rarely change. It also only works for US filers in EDGAR (foreign
+20-F/IFRS filers like ASML/TSM come back empty, handled gracefully). Verified
+live: AAPL over ~2 years scored a positive IC (~+0.26) with the "Buy"-scored
+dates preceding materially higher forward returns than "Hold" — suggestive, not
+proof, which is exactly how the page frames it.
+
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
 The first version of this screener scored every metric by ranking it against
@@ -481,7 +557,7 @@ provide isn't being picked up, this tells you the real field name to add.
 pytest -v
 ```
 
-257 tests. New in Phase 2: `test_screener.py` covers the scoring math
+293 tests. New in Phase 2: `test_screener.py` covers the scoring math
 directly (curve-based scoring, peer context vs. score independence, weight
 redistribution, each factor's logic), and `test_screener_page.py` runs the
 actual page end-to-end via `AppTest`. New in Phase 3: `test_health.py`
@@ -521,7 +597,19 @@ in cash in a downtrend, RSI mean-reversion), the no-look-ahead pipeline (a
 buy-&-hold *strategy* reproduces buy-&-hold exactly; trend-following stays flat
 through a decline), the empty-history and unknown-strategy paths, and
 save/list persistence — all against synthetic price series; `test_backtest_page.py`
-runs the page, executes a backtest, and saves a run through the real UI.
+runs the page, executes a backtest, and saves a run through the real UI. Screener
+validation adds `test_edgar_fundamentals.py` (tag-coalescing, YTD-row dropping,
+restatement earliest-filed, and the `known_as_of` look-ahead guard, on a
+synthetic companyfacts payload), `test_screener_history.py` (TTM math respecting
+filing dates, reconstructed ratios, and a full historical score both with and
+without a reconstructed analyst consensus), `test_screener_validation.py` (the
+information-coefficient/band summary, the walk-forward loop, and its
+don't-score-an-unfinished-forward-window bound), `test_analyst_history.py`
+(grade-string bucketing, latest-per-firm as-of logic, stale-coverage dropping,
+and caching), `test_gdelt_client.py` (tone→0-100 mapping/clamping,
+article-count-weighted sentiment, caching, and graceful failure with BigQuery
+mocked), and `test_validation_page.py` (the page's verdict, metrics, and
+empty-result path).
 
 ## Verifying it against your real keys
 

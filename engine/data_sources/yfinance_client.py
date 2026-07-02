@@ -48,3 +48,33 @@ def get_historical_ohlcv(ticker: str, start: date, end: date, interval: str = "1
             }
         )
     return bars
+
+
+def get_upgrades_downgrades(ticker: str) -> list[dict]:
+    """Dated analyst rating-change events, oldest first, as
+    [{date: 'YYYY-MM-DD', firm, to_grade, from_grade, action}, ...]. This is
+    the one *historical* analyst signal available for free (Yahoo scrapes years
+    of it); consensus counts/price targets over time are paid, so screener
+    validation reconstructs an approximate consensus from these events instead.
+    Empty list if Yahoo has nothing (thinly-covered or non-US ticker)."""
+    df = yf.Ticker(ticker.upper()).upgrades_downgrades
+    if df is None or len(df) == 0:
+        return []
+
+    events = []
+    for grade_date, row in df.iterrows():
+        try:
+            when = pd.Timestamp(grade_date).date().isoformat()
+        except (ValueError, TypeError):
+            continue
+        events.append(
+            {
+                "date": when,
+                "firm": str(row.get("Firm", "") or ""),
+                "to_grade": str(row.get("ToGrade", "") or ""),
+                "from_grade": str(row.get("FromGrade", "") or ""),
+                "action": str(row.get("Action", "") or ""),
+            }
+        )
+    events.sort(key=lambda e: e["date"])
+    return events

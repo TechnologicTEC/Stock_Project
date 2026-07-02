@@ -24,3 +24,10 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # reload, FinBERT, and every other warning are untouched. (Alternative if you
 # prefer: `pip install torchvision`, but that's a large, otherwise-unused dep.)
 logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
+
+# yfinance logs a noisy "possibly delisted; no price data found" ERROR to stderr
+# whenever a fetch returns nothing — which for us is a normal, *handled* case (a
+# foreign/bad ticker, a weekend-only range, a date past today). We treat an empty
+# result as "no data" everywhere, so silence yfinance's own chatter; genuine
+# problems still surface as empty charts / on-page notices.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
