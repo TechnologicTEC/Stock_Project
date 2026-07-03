@@ -74,7 +74,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 360 tests, all mocked - no API keys needed to run these
+├── tests/                  # 368 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -163,12 +163,20 @@ Alpaca **paper** account — real order simulation on real-time-ish IEX data, no
 real money. It shows your paper account summary (equity, cash, buying power,
 today's and unrealized P&L), open positions, and order history; you can submit
 market/limit day orders (with a quick-pick from your holdings/watchlist/
-positions) and cancel working ones. Alpaca holds the account state server-side,
-so nothing is persisted locally — the page reads live. Two safety facts: the
-client is hard-wired to Alpaca's paper endpoint (`paper=True`), so it *cannot*
-reach a real-money account; and the app never places or cancels an order on its
-own — you click. Needs `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in `.env`; without
-them the page shows a setup prompt instead of erroring.
+positions) and cancel working ones. Once you pick a symbol it also shows the
+**current price, bid/ask, and a recent price chart**, and prefills the limit box
+with the last trade — so you can size a limit order before sending it. (The
+bid/ask use Alpaca's free **delayed-SIP** feed — the 15-min-delayed *consolidated*
+NBBO the platform shows — because the free IEX-only quote is a single venue and
+comes back wildly wide; the last *trade* stays real-time-ish IEX.) Limit
+orders can be routed to **extended / overnight (24/5) hours** via a checkbox
+(Alpaca only allows that on limit day orders; overnight liquidity is thinner, so
+fills aren't guaranteed). Alpaca holds the account state server-side, so nothing
+is persisted locally — the page reads live. Two safety facts: the client is
+hard-wired to Alpaca's paper endpoint (`paper=True`), so it *cannot* reach a
+real-money account; and the app never places or cancels an order on its own —
+you click. Needs `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in `.env`; without them
+the page shows a setup prompt instead of erroring.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -736,14 +744,18 @@ tilt explanation). Sentiment wiring is covered in `test_screener.py`
 recent news) with the FinBERT pipeline mocked throughout. New in Phase 6:
 `test_alpaca_client.py` mocks the Alpaca SDK's `TradingClient` and checks the
 object→dict mapping (numeric-string coercion, percent scaling, ISO dates) and
-request construction (market/limit side + price, symbol upper-casing, cancel);
-`test_paper_trading.py` covers the engine layer — dashboard bundling with
-per-section error capture, the not-configured path, order validation
-(empty/zero/negative qty, bad side, missing limit price), market/limit
-delegation with normalized inputs, API-rejection → friendly error, and the P&L
-helpers; and `test_paper_trading_page.py` drives the page (setup prompt when
-unconfigured, account + positions render, submitting an order, a rejected order
-surfacing its message, and cancelling a working order) with the engine mocked.
+request construction (market/limit side + price, the extended-hours flag,
+symbol upper-casing, latest-trade, the delayed-SIP quote-feed default, cancel); `test_paper_trading.py` covers the
+engine layer — dashboard bundling with per-section error capture, the
+not-configured path, order validation (empty/zero/negative qty, bad side,
+missing limit price, extended-hours-needs-limit), market/limit delegation with
+normalized inputs and the extended-hours pass-through, API-rejection → friendly
+error, the P&L helpers, and the price snapshot (history + quote + trade bundling,
+live-trade-preferred, graceful degradation when the live sources fail); and
+`test_paper_trading_page.py` drives the page (setup prompt when unconfigured,
+account + positions render, the price panel appearing once a symbol is chosen,
+submitting an order, a rejected order surfacing its message, and cancelling a
+working order) with the engine mocked.
 
 ## Verifying it against your real keys
 

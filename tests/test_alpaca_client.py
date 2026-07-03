@@ -112,7 +112,7 @@ def test_submit_market_order_builds_request_and_maps_result():
     assert out["symbol"] == "AAPL"
 
 
-def test_submit_limit_order_sets_side_and_price():
+def test_submit_limit_order_sets_side_price_and_regular_hours_by_default():
     tc = MagicMock()
     tc.submit_order.return_value = _fake_order(side=_e("sell"), order_type=_e("limit"), limit_price="150.0")
     with _patch_trading(tc):
@@ -120,8 +120,42 @@ def test_submit_limit_order_sets_side_and_price():
     req = tc.submit_order.call_args.args[0]
     assert req.side == OrderSide.SELL
     assert req.limit_price == 150.0
+    assert req.extended_hours is False
     assert out["type"] == "limit"
     assert out["limit_price"] == 150.0
+
+
+def test_submit_limit_order_extended_hours_flag():
+    tc = MagicMock()
+    tc.submit_order.return_value = _fake_order(order_type=_e("limit"))
+    with _patch_trading(tc):
+        alpaca_client.submit_limit_order("aapl", 1, "buy", 150.0, extended_hours=True)
+    assert tc.submit_order.call_args.args[0].extended_hours is True
+
+
+def test_get_latest_quote_uses_delayed_sip_feed_by_default():
+    # The free IEX quote is a single venue and often wildly wide/stale; the
+    # delayed-SIP feed is the consolidated NBBO Alpaca's platform shows.
+    dc = MagicMock()
+    dc.get_stock_latest_quote.return_value = {
+        "AAPL": SimpleNamespace(bid_price=308.44, ask_price=308.47, timestamp=datetime(2024, 1, 2, 15, 0, 0))
+    }
+    with patch("engine.data_sources.alpaca_client._data_client", return_value=dc):
+        out = alpaca_client.get_latest_quote("aapl")
+    assert dc.get_stock_latest_quote.call_args.args[0].feed.value == "delayed_sip"
+    assert out["bid_price"] == 308.44 and out["ask_price"] == 308.47
+    assert out["feed"] == "delayed_sip"
+
+
+def test_get_latest_trade_maps_price_and_uses_iex():
+    dc = MagicMock()
+    dc.get_stock_latest_trade.return_value = {"AAPL": SimpleNamespace(price=161.25, timestamp=datetime(2024, 1, 2, 15, 0, 0))}
+    with patch("engine.data_sources.alpaca_client._data_client", return_value=dc):
+        out = alpaca_client.get_latest_trade("aapl")
+    assert dc.get_stock_latest_trade.call_args.args[0].feed.value == "iex"     # real-time-ish
+    assert out["ticker"] == "AAPL"
+    assert out["price"] == 161.25
+    assert out["timestamp"].startswith("2024-01-02T15:00:00")
 
 
 def test_cancel_order_calls_sdk():

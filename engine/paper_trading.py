@@ -12,7 +12,9 @@ click submit/cancel — this module never places an order on its own.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 
+from engine import price_history
 from engine.data_sources import alpaca_client
 
 # Alpaca order statuses that mean "still working" (cancelable), for splitting
@@ -95,10 +97,14 @@ def todays_pl(account: dict | None) -> float | None:
 
 
 def place_order(
-    symbol: str, qty: float, side: str, order_type: str = "market", limit_price: float | None = None
+    symbol: str, qty: float, side: str, order_type: str = "market",
+    limit_price: float | None = None, extended_hours: bool = False,
 ) -> dict:
     """Validate, then submit a paper order. Raises PaperTradingError with a
-    human-readable message on bad input or an Alpaca rejection."""
+    human-readable message on bad input or an Alpaca rejection.
+
+    `extended_hours=True` routes to pre-market / after-hours / the overnight
+    (24/5) session, which Alpaca only permits for **limit** orders."""
     symbol = (symbol or "").strip().upper()
     if not symbol:
         raise PaperTradingError("Enter a ticker symbol.")
@@ -113,16 +119,68 @@ def place_order(
     if order_type not in ("market", "limit"):
         raise PaperTradingError("Order type must be Market or Limit.")
 
+    if extended_hours and order_type != "limit":
+        raise PaperTradingError("Extended / overnight-hours (24/5) trading requires a limit order.")
+
     try:
         if order_type == "limit":
             if not limit_price or limit_price <= 0:
                 raise PaperTradingError("A limit order needs a limit price above 0.")
-            return alpaca_client.submit_limit_order(symbol, qty, side, limit_price)
+            return alpaca_client.submit_limit_order(symbol, qty, side, limit_price, extended_hours=extended_hours)
         return alpaca_client.submit_market_order(symbol, qty, side)
     except PaperTradingError:
         raise
     except Exception as exc:
         raise PaperTradingError(f"Alpaca rejected the order: {exc}") from exc
+
+
+@dataclass
+class PriceSnapshot:
+    ticker: str
+    last: float | None = None            # most recent trade price (real-time-ish), or last close
+    bid: float | None = None
+    ask: float | None = None
+    prev_close: float | None = None      # prior day's close, for a change readout
+    history: list[dict] = field(default_factory=list)   # [{date, close}], for the chart
+    errors: list[str] = field(default_factory=list)
+
+
+def get_price_snapshot(ticker: str, lookback_days: int = 180, as_of: date | None = None) -> PriceSnapshot:
+    """Current price + bid/ask + a recent close history for the chosen ticker,
+    to help size a limit order before submitting. Each source is independent
+    and fault-tolerant — a missing one degrades gracefully rather than raising."""
+    ticker = (ticker or "").strip().upper()
+    errors: list[str] = []
+
+    history: list[dict] = []
+    try:
+        end = as_of or date.today()
+        df = price_history.get_history_df(ticker, end - timedelta(days=lookback_days), end)
+        if not df.empty and "close" in df.columns:
+            history = [{"date": d, "close": float(c)} for d, c in df["close"].items()]
+    except Exception as exc:
+        errors.append(f"price history: {exc}")
+
+    last = history[-1]["close"] if history else None
+    prev_close = history[-2]["close"] if len(history) >= 2 else None
+
+    bid = ask = None
+    try:
+        quote = alpaca_client.get_latest_quote(ticker)
+        bid = quote.get("bid_price") or None
+        ask = quote.get("ask_price") or None
+    except Exception as exc:
+        errors.append(f"quote: {exc}")
+
+    try:
+        trade = alpaca_client.get_latest_trade(ticker)
+        if trade.get("price"):
+            last = trade["price"]      # prefer the live trade over the daily close
+    except Exception as exc:
+        errors.append(f"last trade: {exc}")
+
+    return PriceSnapshot(ticker=ticker, last=last, bid=bid, ask=ask,
+                         prev_close=prev_close, history=history, errors=errors)
 
 
 def cancel_order(order_id: str) -> None:

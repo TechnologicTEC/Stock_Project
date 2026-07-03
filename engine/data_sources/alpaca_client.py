@@ -16,7 +16,7 @@ from datetime import date, datetime
 from functools import lru_cache
 
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -57,18 +57,32 @@ def _trading_client() -> TradingClient:
     return TradingClient(*_require_keys(), paper=True)
 
 
-def get_latest_quote(ticker: str) -> dict:
-    """Backup quote source if Finnhub is unavailable or its 60/min budget
-    is already spent elsewhere on the page."""
+def get_latest_quote(ticker: str, feed: str = "delayed_sip") -> dict:
+    """Latest bid/ask. Defaults to the free **delayed_sip** feed (15-min-delayed
+    *consolidated* NBBO — the same quote Alpaca's own platform shows) rather than
+    the default `iex` feed, whose single-venue quotes are often wildly wide/stale
+    (e.g. AAPL bid 291.60 / ask 321.19 vs. a real 308.44 / 308.47). Drives the
+    bid/ask on the Paper Trading page and the portfolio's backup mid-price."""
     ticker = ticker.upper()
-    req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
+    req = StockLatestQuoteRequest(symbol_or_symbols=ticker, feed=feed)
     quote = _data_client().get_stock_latest_quote(req)[ticker]
     return {
         "ticker": ticker,
         "ask_price": quote.ask_price,
         "bid_price": quote.bid_price,
         "timestamp": quote.timestamp.isoformat(),
+        "feed": feed,
     }
+
+
+def get_latest_trade(ticker: str, feed: str = "iex") -> dict:
+    """The most recent trade price. Defaults to `iex` (real-time-ish) — the
+    'current price' on the Paper Trading page, and already accurate for liquid
+    names, unlike the IEX *quote*."""
+    ticker = ticker.upper()
+    req = StockLatestTradeRequest(symbol_or_symbols=ticker, feed=feed)
+    trade = _data_client().get_stock_latest_trade(req)[ticker]
+    return {"ticker": ticker, "price": trade.price, "timestamp": trade.timestamp.isoformat(), "feed": feed}
 
 
 def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
@@ -186,10 +200,12 @@ def submit_market_order(symbol: str, qty: float, side: str) -> dict:
     return _order_to_dict(_trading_client().submit_order(req))
 
 
-def submit_limit_order(symbol: str, qty: float, side: str, limit_price: float) -> dict:
+def submit_limit_order(symbol: str, qty: float, side: str, limit_price: float, extended_hours: bool = False) -> dict:
+    # extended_hours=True routes to pre-market / after-hours / the overnight
+    # (24/5) session — Alpaca only allows this on limit DAY orders.
     req = LimitOrderRequest(
         symbol=symbol.upper(), qty=qty, side=_order_side(side),
-        time_in_force=TimeInForce.DAY, limit_price=limit_price,
+        time_in_force=TimeInForce.DAY, limit_price=limit_price, extended_hours=extended_hours,
     )
     return _order_to_dict(_trading_client().submit_order(req))
 

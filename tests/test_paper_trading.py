@@ -3,8 +3,10 @@ engine/paper_trading.py — the page-facing layer over the Alpaca client. The
 client functions are mocked, so these check bundling, validation, friendly
 errors, and the small P&L helpers with no network.
 """
+from datetime import date
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from engine import paper_trading
@@ -91,8 +93,52 @@ def test_place_order_market_delegates_normalized_inputs():
 def test_place_order_limit_delegates_with_price():
     with patch("engine.paper_trading.alpaca_client.submit_limit_order", return_value={"id": "2"}) as mock:
         out = paper_trading.place_order("aapl", 2, "sell", order_type="limit", limit_price=150.0)
-    mock.assert_called_once_with("AAPL", 2, "sell", 150.0)
+    mock.assert_called_once_with("AAPL", 2, "sell", 150.0, extended_hours=False)
     assert out == {"id": "2"}
+
+
+def test_place_order_extended_hours_requires_limit():
+    with pytest.raises(paper_trading.PaperTradingError) as exc:
+        paper_trading.place_order("AAPL", 1, "buy", order_type="market", extended_hours=True)
+    assert "requires a limit order" in str(exc.value)
+
+
+def test_place_order_passes_extended_hours_to_limit():
+    with patch("engine.paper_trading.alpaca_client.submit_limit_order", return_value={"id": "3"}) as mock:
+        paper_trading.place_order("aapl", 1, "buy", order_type="limit", limit_price=150.0, extended_hours=True)
+    mock.assert_called_once_with("AAPL", 1, "buy", 150.0, extended_hours=True)
+
+
+# --------------------------------------------------------------------------
+# Price snapshot — current price/bid/ask + history for the order ticket
+# --------------------------------------------------------------------------
+
+def _close_df(closes):
+    idx = pd.Index([date(2024, 1, 2 + i) for i in range(len(closes))], name="date")
+    return pd.DataFrame({"close": closes}, index=idx)
+
+
+def test_get_price_snapshot_bundles_history_quote_and_trade():
+    with patch("engine.paper_trading.price_history.get_history_df", return_value=_close_df([100.0, 101.0, 102.0])), \
+         patch("engine.paper_trading.alpaca_client.get_latest_quote", return_value={"bid_price": 101.5, "ask_price": 102.5}), \
+         patch("engine.paper_trading.alpaca_client.get_latest_trade", return_value={"price": 102.2}):
+        snap = paper_trading.get_price_snapshot("aapl")
+    assert snap.ticker == "AAPL"
+    assert snap.last == 102.2            # live trade preferred over the daily close
+    assert snap.prev_close == 101.0
+    assert snap.bid == 101.5 and snap.ask == 102.5
+    assert len(snap.history) == 3
+    assert snap.errors == []
+
+
+def test_get_price_snapshot_degrades_when_live_sources_fail():
+    with patch("engine.paper_trading.price_history.get_history_df", return_value=_close_df([100.0, 101.0])), \
+         patch("engine.paper_trading.alpaca_client.get_latest_quote", side_effect=RuntimeError("no data")), \
+         patch("engine.paper_trading.alpaca_client.get_latest_trade", side_effect=RuntimeError("no data")):
+        snap = paper_trading.get_price_snapshot("AAPL")
+    assert snap.last == 101.0            # falls back to the last close
+    assert snap.bid is None and snap.ask is None
+    assert len(snap.errors) == 2
 
 
 def test_place_order_wraps_api_rejection_as_friendly_error():

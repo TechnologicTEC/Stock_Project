@@ -12,6 +12,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from db.session import init_db
@@ -86,22 +87,66 @@ known = sorted(
     | {w["ticker"] for w in watchlist.list_watchlist()}
 )
 
-o1, o2, o3 = st.columns([2, 1, 1])
-picked = o1.selectbox("Symbol", ["— type a ticker —"] + known, index=0)
-custom = o2.text_input("…or custom").strip().upper()
+s1, s2 = st.columns([2, 1])
+picked = s1.selectbox("Symbol", ["— type a ticker —"] + known, index=0)
+custom = s2.text_input("…or custom").strip().upper()
 symbol = custom or (picked if picked != "— type a ticker —" else "")
-qty = o3.number_input("Quantity", min_value=0.0, value=1.0, step=1.0)
 
-o4, o5, o6 = st.columns([1, 1, 1])
-side = o4.radio("Side", ["Buy", "Sell"], horizontal=True)
-order_type = o5.radio("Type", ["Market", "Limit"], horizontal=True)
+# Price panel — current price, bid/ask, and a recent chart to help size a
+# limit order. Fetched only once a symbol is chosen. The last trade also
+# prefills the limit-price box below.
+suggested_limit = 0.0
+if symbol:
+    snap = paper_trading.get_price_snapshot(symbol)
+    if snap.last is not None:
+        suggested_limit = round(snap.last, 2)
+
+    pm1, pm2, pm3 = st.columns(3)
+    change_txt = None
+    if snap.last is not None and snap.prev_close:
+        change_txt = f"{(snap.last / snap.prev_close - 1) * 100:+.2f}% vs prior close"
+    pm1.metric(
+        f"{symbol} last price", f"${snap.last:,.2f}" if snap.last is not None else "—", delta=change_txt,
+        help="Most recent trade (Alpaca IEX, real-time-ish).",
+    )
+    quote_help = "15-min-delayed consolidated quote (free SIP feed) — the same NBBO Alpaca's platform shows."
+    pm2.metric("Bid", f"${snap.bid:,.2f}" if snap.bid else "—", help=quote_help)
+    pm3.metric("Ask", f"${snap.ask:,.2f}" if snap.ask else "—", help=quote_help)
+
+    if snap.history:
+        hist_df = pd.DataFrame(snap.history)
+        fig = px.line(hist_df, x="date", y="close", labels={"date": "", "close": "Close (USD)"})
+        fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=240)
+        st.plotly_chart(fig, width="stretch", key="pt_price_chart")
+    st.caption(
+        "Last price is real-time-*ish* (Alpaca IEX). **Bid/ask are the 15-min-delayed consolidated quote** "
+        "(free SIP feed — the same NBBO Alpaca's platform shows); the free IEX-only quote is a single venue and "
+        "is often wildly wide. The chart is daily closes. Use the bid/ask to guide limit prices — buy near the "
+        "ask, sell near the bid."
+    )
+
+o1, o2, o3 = st.columns(3)
+qty = o1.number_input("Quantity", min_value=0.0, value=1.0, step=1.0)
+side = o2.radio("Side", ["Buy", "Sell"], horizontal=True)
+order_type = o3.radio("Type", ["Market", "Limit"], horizontal=True)
+
 limit_price = None
+extended_hours = False
 if order_type == "Limit":
-    limit_price = o6.number_input("Limit price", min_value=0.0, value=0.0, step=0.01)
+    l1, l2 = st.columns([1, 2])
+    limit_price = l1.number_input("Limit price", min_value=0.0, value=suggested_limit, step=0.01)
+    extended_hours = l2.checkbox(
+        "Extended / overnight hours (24/5)",
+        value=False,
+        help="Route to Alpaca's pre-market, after-hours, and overnight (24/5) sessions. Only limit day orders "
+             "are eligible, symbol availability varies, and overnight liquidity is thinner — so a marketable "
+             "limit isn't guaranteed to fill.",
+    )
 
 st.caption(
-    "Market orders fill at the next available price; limit orders only fill at your price or better. Both are "
-    "day orders. Fractional quantities work for market orders; use whole shares for limit orders."
+    "Market orders fill at the next available price during regular hours; limit orders only fill at your price "
+    "or better. Both are day orders. Fractional quantities work for market orders; use whole shares for limit "
+    "and extended-hours orders."
 )
 
 if st.button("▶️ Submit paper order", type="primary"):
@@ -109,11 +154,13 @@ if st.button("▶️ Submit paper order", type="primary"):
         order = paper_trading.place_order(
             symbol, qty, side, order_type=order_type.lower(),
             limit_price=limit_price if order_type == "Limit" else None,
+            extended_hours=extended_hours,
         )
+        session = " (extended/overnight)" if extended_hours else ""
         st.session_state["pt_flash"] = (
             "success",
             f"Submitted: {order['side']} {order['qty'] or qty} {order['symbol']} "
-            f"({order['type']}) — status **{order['status']}**.",
+            f"({order['type']}{session}) — status **{order['status']}**.",
         )
     except paper_trading.PaperTradingError as exc:
         st.session_state["pt_flash"] = ("error", str(exc))
