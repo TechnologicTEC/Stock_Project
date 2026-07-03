@@ -34,6 +34,7 @@ class PaperTradingError(RuntimeError):
 class PaperDashboard:
     configured: bool
     account: dict | None = None
+    clock: dict | None = None
     positions: list[dict] = field(default_factory=list)
     open_orders: list[dict] = field(default_factory=list)
     recent_orders: list[dict] = field(default_factory=list)
@@ -51,6 +52,12 @@ def get_dashboard(recent_limit: int = 25) -> PaperDashboard:
         return PaperDashboard(configured=False)
 
     errors: list[str] = []
+
+    clock = None
+    try:
+        clock = alpaca_client.get_clock()
+    except Exception as exc:
+        errors.append(f"market clock: {exc}")
 
     account = None
     try:
@@ -77,9 +84,38 @@ def get_dashboard(recent_limit: int = 25) -> PaperDashboard:
         errors.append(f"order history: {exc}")
 
     return PaperDashboard(
-        configured=True, account=account, positions=positions,
+        configured=True, account=account, clock=clock, positions=positions,
         open_orders=open_orders, recent_orders=recent_orders, errors=errors,
     )
+
+
+def market_status_text(clock: dict | None) -> tuple[str, str]:
+    """(severity, message) describing whether the regular session is open, for a
+    banner. severity is 'success' when open, else 'info'. Explains that a closed
+    market is why working orders sit unfilled."""
+    if not clock:
+        return "info", "Market status unavailable."
+    if clock.get("is_open"):
+        closes = _fmt_et(clock.get("next_close"))
+        return "success", f"🟢 **Market open** (regular session){f' — closes {closes}' if closes else ''}."
+    opens = _fmt_et(clock.get("next_open"))
+    return "info", (
+        f"🔴 **Market closed**{f' — next regular open {opens}' if opens else ''}. Limit/working orders stay "
+        "**accepted** and only fill once a session they're eligible for is running (regular hours, or "
+        "extended/overnight for extended-hours orders — and paper fills need live data for that session)."
+    )
+
+
+def _fmt_et(iso: str | None) -> str | None:
+    """Format an Alpaca ISO timestamp (already in US/Eastern with offset) as a
+    readable 'Mon Jul 06, 09:30 AM ET'."""
+    if not iso:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(iso).strftime("%a %b %d, %I:%M %p ET")
+    except (TypeError, ValueError):
+        return iso
 
 
 def total_unrealized_pl(positions: list[dict]) -> float:

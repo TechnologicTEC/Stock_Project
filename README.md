@@ -74,7 +74,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 368 tests, all mocked - no API keys needed to run these
+├── tests/                  # 371 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -171,7 +171,13 @@ NBBO the platform shows — because the free IEX-only quote is a single venue an
 comes back wildly wide; the last *trade* stays real-time-ish IEX.) Limit
 orders can be routed to **extended / overnight (24/5) hours** via a checkbox
 (Alpaca only allows that on limit day orders; overnight liquidity is thinner, so
-fills aren't guaranteed). Alpaca holds the account state server-side, so nothing
+fills aren't guaranteed). A **market-status banner** shows whether a session is
+open and when it next opens, and working orders are labelled with their session
+and flagged as "accepted, waiting" when the market is closed — because paper
+orders only fill once a session they're eligible for is actually running (and
+paper fills need live data for that session, which the free feed lacks
+overnight), which is the usual reason a "why hasn't my limit filled?" order is
+just sitting there. Alpaca holds the account state server-side, so nothing
 is persisted locally — the page reads live. Two safety facts: the client is
 hard-wired to Alpaca's paper endpoint (`paper=True`), so it *cannot* reach a
 real-money account; and the app never places or cancels an order on its own —

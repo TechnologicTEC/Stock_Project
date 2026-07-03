@@ -27,6 +27,8 @@ def _dashboard(**overrides):
         configured=True,
         account={"equity": 10000.0, "last_equity": 9900.0, "cash": 5000.0,
                  "buying_power": 15000.0, "status": "ACTIVE"},
+        clock={"is_open": True, "next_open": "2026-07-06T09:30:00-04:00",
+               "next_close": "2026-07-06T16:00:00-04:00"},
         positions=[{
             "symbol": "AAPL", "qty": 10.0, "side": "long", "avg_entry_price": 150.0,
             "current_price": 160.0, "market_value": 1600.0, "cost_basis": 1500.0,
@@ -62,6 +64,23 @@ def test_page_renders_account_and_positions():
     labels = {m.label for m in at.metric}
     assert {"Equity", "Cash", "Buying power", "Today's P&L", "Unrealized P&L"} <= labels
     assert any("Open positions" in str(h.value) for h in at.subheader)
+    assert any("Market open" in el.value for el in at.success)     # clock banner
+
+
+def test_page_explains_closed_market_for_unfilled_orders():
+    dash = _dashboard(
+        clock={"is_open": False, "next_open": "2026-07-06T09:30:00-04:00"},
+        open_orders=[{"id": "o9", "symbol": "AAPL", "side": "buy", "qty": 1.0, "type": "limit",
+                      "limit_price": 308.47, "status": "accepted", "extended_hours": True}],
+    )
+    with patch("engine.paper_trading.is_configured", return_value=True), \
+         patch("engine.paper_trading.get_dashboard", return_value=dash):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+
+    assert not at.exception
+    assert any("Market closed" in el.value for el in at.info)
+    assert any("extended/overnight" in str(w.value) for w in at.markdown)   # ext-hours tag on the order
 
 
 def test_page_shows_price_panel_for_chosen_symbol():

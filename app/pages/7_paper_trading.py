@@ -49,6 +49,11 @@ if dashboard.errors:
         for err in dashboard.errors:
             st.caption(f"- {err}")
 
+# Market status — the first thing you need to know before wondering why an
+# order hasn't filled.
+_severity, _status = paper_trading.market_status_text(dashboard.clock)
+{"success": st.success, "info": st.info}.get(_severity, st.info)(_status)
+
 # --------------------------------------------------------------------------
 # Account summary
 # --------------------------------------------------------------------------
@@ -209,11 +214,18 @@ else:
 
 if dashboard.open_orders:
     st.subheader("Working orders")
+    if not (dashboard.clock or {}).get("is_open"):
+        st.caption(
+            "The market is closed, so these stay **accepted** and won't fill until the next eligible session "
+            "(regular hours — or the extended/overnight session for extended-hours orders, if the paper feed "
+            "has data for it)."
+        )
     for o in dashboard.open_orders:
         c1, c2 = st.columns([5, 1])
         limit_txt = f" @ ${o['limit_price']:,.2f}" if o.get("limit_price") else ""
+        ext_txt = " · extended/overnight" if o.get("extended_hours") else ""
         c1.write(
-            f"**{o['side']} {o['qty']:g} {o['symbol']}** ({o['type']}{limit_txt}) — {o['status']}"
+            f"**{o['side']} {o['qty']:g} {o['symbol']}** ({o['type']}{limit_txt}{ext_txt}) — {o['status']}"
         )
         if c2.button("Cancel", key=f"cancel_{o['id']}"):
             try:
@@ -239,6 +251,7 @@ if dashboard.recent_orders:
                 "Qty": o["qty"],
                 "Type": o["type"],
                 "Limit": o["limit_price"],
+                "Ext": "✓" if o.get("extended_hours") else "",
                 "Status": o["status"],
                 "Filled qty": o["filled_qty"],
                 "Filled avg": o["filled_avg_price"],

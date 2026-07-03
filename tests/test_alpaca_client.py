@@ -39,7 +39,7 @@ def _fake_order(**kw):
     base = dict(
         id="abc-123", symbol="AAPL", qty="5", filled_qty="0", side=_e("buy"),
         order_type=_e("market"), type=None, status=_e("new"), limit_price=None,
-        filled_avg_price=None, time_in_force=_e("day"),
+        filled_avg_price=None, time_in_force=_e("day"), extended_hours=False,
         submitted_at=datetime(2024, 1, 2, 10, 0, 0), filled_at=None,
     )
     base.update(kw)
@@ -95,8 +95,21 @@ def test_get_orders_maps_fields_and_iso_dates():
     assert o["side"] == "buy"
     assert o["type"] == "market"
     assert o["status"] == "new"
+    assert o["extended_hours"] is False
     assert o["submitted_at"].startswith("2024-01-02T10:00:00")
     assert o["filled_at"] is None
+
+
+def test_get_clock_maps_fields():
+    tc = MagicMock()
+    tc.get_clock.return_value = SimpleNamespace(
+        is_open=False, timestamp=datetime(2026, 7, 3, 4, 6, 0),
+        next_open=datetime(2026, 7, 6, 9, 30, 0), next_close=datetime(2026, 7, 6, 16, 0, 0),
+    )
+    with _patch_trading(tc):
+        c = alpaca_client.get_clock()
+    assert c["is_open"] is False
+    assert c["next_open"].startswith("2026-07-06T09:30:00")
 
 
 def test_submit_market_order_builds_request_and_maps_result():

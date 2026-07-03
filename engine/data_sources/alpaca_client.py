@@ -124,6 +124,18 @@ def _num(value) -> float | None:
     return float(value) if value is not None else None
 
 
+def get_clock() -> dict:
+    """Market clock — whether the regular session is open right now and when it
+    next opens/closes. Lets the page explain why a working order isn't filling."""
+    c = _trading_client().get_clock()
+    return {
+        "is_open": c.is_open,
+        "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+        "next_open": c.next_open.isoformat() if c.next_open else None,
+        "next_close": c.next_close.isoformat() if c.next_close else None,
+    }
+
+
 def get_account() -> dict:
     a = _trading_client().get_account()
     return {
@@ -172,6 +184,7 @@ def _order_to_dict(o) -> dict:
         "limit_price": _num(o.limit_price),
         "filled_avg_price": _num(o.filled_avg_price),
         "time_in_force": _enum_value(o.time_in_force),
+        "extended_hours": bool(o.extended_hours),
         "submitted_at": o.submitted_at.isoformat() if o.submitted_at else None,
         "filled_at": o.filled_at.isoformat() if o.filled_at else None,
     }

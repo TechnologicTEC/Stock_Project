@@ -32,12 +32,14 @@ def test_get_dashboard_bundles_all_sections():
         return [{"status": "new"}] if status == "open" else [{"status": "filled"}]
 
     with _cfg(True), \
+         patch("engine.paper_trading.alpaca_client.get_clock", return_value={"is_open": True}), \
          patch("engine.paper_trading.alpaca_client.get_account", return_value={"equity": 100.0, "last_equity": 90.0}), \
          patch("engine.paper_trading.alpaca_client.get_positions", return_value=[{"unrealized_pl": 5.0}]), \
          patch("engine.paper_trading.alpaca_client.get_orders", side_effect=fake_orders):
         d = paper_trading.get_dashboard()
     assert d.configured is True
     assert d.account["equity"] == 100.0
+    assert d.clock == {"is_open": True}
     assert d.open_orders == [{"status": "new"}]
     assert d.recent_orders == [{"status": "filled"}]
     assert d.errors == []
@@ -45,12 +47,24 @@ def test_get_dashboard_bundles_all_sections():
 
 def test_get_dashboard_captures_section_errors_without_crashing():
     with _cfg(True), \
+         patch("engine.paper_trading.alpaca_client.get_clock", return_value={"is_open": False}), \
          patch("engine.paper_trading.alpaca_client.get_account", side_effect=RuntimeError("boom")), \
          patch("engine.paper_trading.alpaca_client.get_positions", return_value=[]), \
          patch("engine.paper_trading.alpaca_client.get_orders", return_value=[]):
         d = paper_trading.get_dashboard()
     assert d.account is None
     assert any("account" in e for e in d.errors)
+
+
+def test_market_status_text_open_closed_and_unknown():
+    sev, msg = paper_trading.market_status_text({"is_open": True, "next_close": "2026-07-06T16:00:00-04:00"})
+    assert sev == "success" and "Market open" in msg
+
+    sev, msg = paper_trading.market_status_text({"is_open": False, "next_open": "2026-07-06T09:30:00-04:00"})
+    assert sev == "info"
+    assert "Market closed" in msg and "Jul 06" in msg      # ET timestamp formatted readably
+
+    assert paper_trading.market_status_text(None)[1] == "Market status unavailable."
 
 
 # --------------------------------------------------------------------------
