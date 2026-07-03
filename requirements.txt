@@ -39,6 +39,12 @@ torch>=2.0
 # simply scores None (its weight is redistributed), like any missing factor.
 google-cloud-bigquery>=3.0
 
+# --- AI Chat Assistant LLM (Section 6.6, optional) ---
+# Powers the free-form chat mode via Google Gemini (free tier), calling the same
+# chat tools. Without a GEMINI_API_KEY the assistant falls back to the
+# deterministic template responder, so this is optional.
+google-genai>=1.0
+
 # --- Utilities ---
 python-dotenv>=1.0
 requests>=2.31

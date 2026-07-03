@@ -27,7 +27,8 @@ investment-platform/
 │       ├── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
 │       ├── 5_backtest.py        # Backtesting (Section 6.7)
 │       ├── 6_validation.py      # Screener Validation (point-in-time walk-forward)
-│       └── 7_paper_trading.py   # Paper Trading via Alpaca (Section 6.8)
+│       ├── 7_paper_trading.py   # Paper Trading via Alpaca (Section 6.8)
+│       └── 8_chat.py            # AI Chat Assistant (Section 6.6)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -63,6 +64,9 @@ investment-platform/
 │   │                        #   statistical band + fan chart, news context, and
 │   │                        #   walk-forward calibration — NOT a prediction
 │   ├── paper_trading.py     # Paper Trading (6.8): account/positions/orders layer
+│   ├── chat_tools.py        # AI Chat Assistant (6.6): tools that read cached data
+│   ├── chat.py              # AI Chat Assistant (6.6): template intent responder
+│   ├── chat_llm.py          # AI Chat Assistant (6.6): optional Gemini tool-calling
 │   └── data_sources/
 │       ├── finnhub_client.py   # quotes, news, fundamentals, profile, earnings
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
@@ -74,7 +78,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 371 tests, all mocked - no API keys needed to run these
+├── tests/                  # 401 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -183,6 +187,25 @@ hard-wired to Alpaca's paper endpoint (`paper=True`), so it *cannot* reach a
 real-money account; and the app never places or cancels an order on its own —
 you click. Needs `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in `.env`; without them
 the page shows a setup prompt instead of erroring.
+
+**AI Chat Assistant** (the **Assistant** page, Section 6.6) answers questions
+about *your own* portfolio from the app's cached data, using Streamlit's built-in
+chat UI. Per the blueprint it's a **tool-calling layer, not a freeform chatbot**:
+`engine/chat_tools.py` exposes small functions (`get_portfolio_value`,
+`get_todays_movers`, `get_holding_weight`, `get_health_summary`, …) that read
+through the existing engine layer, and `engine/chat.py` is a **deterministic,
+template-based intent router** over them — zero cost, no API key, and it never
+invents a number (an unrecognized question gets a list of what it *can* answer).
+It handles things like *"what's my portfolio worth?"*, *"why is my portfolio down
+today?"*, *"how much of my portfolio is in AAPL?"*, and *"how risky is it?"*. The
+blueprint's optional **stage 2 is built** (`engine/chat_llm.py`): when a free
+`GEMINI_API_KEY` is set, free-form questions are routed through **Google Gemini**,
+which calls the *same* `chat_tools` functions as tools (the SDK's automatic
+function calling) — so it still only reports figures it can look up, and a system
+prompt keeps it to data, not advice. It degrades gracefully: no key, the SDK not
+installed, or any API error all fall back to the deterministic template, so the
+Assistant works either way. Gemini's free tier keeps it consistent with the rest
+of the app. Default model is `gemini-2.5-flash` (override with `CHAT_LLM_MODEL`).
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -761,7 +784,22 @@ live-trade-preferred, graceful degradation when the live sources fail); and
 `test_paper_trading_page.py` drives the page (setup prompt when unconfigured,
 account + positions render, the price panel appearing once a symbol is chosen,
 submitting an order, a rejected order surfacing its message, and cancelling a
-working order) with the engine mocked.
+working order) with the engine mocked; the market-clock mapping, the
+open/closed status-text helper, and the closed-market page banner are covered
+too. New in Phase 7: `test_chat_tools.py` checks the tool layer (portfolio-value
+pass-through, weight computation excluding unvalued holdings, biggest-holding,
+holding-weight lookup, today's-movers ranking, cash/watchlist/known-tickers, and
+health-summary extraction) with portfolio/health mocked; `test_chat.py` covers
+the intent router (value, performance, why-down-today via movers, biggest
+holding, ticker-weight extraction, a bare ticker, cash, watchlist, risk, and the
+help fallback for unknown questions) with the tools mocked; `test_chat_page.py`
+drives the chat UI (prompts render, a question routes through `chat.answer` and
+its reply shows, and a tool error is caught rather than crashing); and
+`test_chat_llm.py` covers the optional Gemini path with the SDK mocked (the
+availability gate needing both a key and the SDK, the tool wrappers delegating to
+`chat_tools`, request construction — tools + system prompt + history threaded and
+role-mapped — and an empty response raising so `chat.answer` falls back to the
+template).
 
 ## Verifying it against your real keys
 
@@ -806,9 +844,11 @@ a statistical price-range, explicitly not a prediction, with its methodology
 validated against real historical outcomes via walk-forward calibration, and an
 optional Screener-driven median tilt shrunk by that validation's IC) are all
 done, as is **Phase 6** (Paper Trading via Alpaca — the paper account, positions,
-order ticket, and cancels). The last blueprint step is **Phase 7** (the AI Chat
-Assistant), which benefits most from having every other module's data and
-functions already built.
+order ticket, and cancels) and **Phase 7** (the AI Chat Assistant — the
+tool-calling layer, the template responder, *and* the optional Gemini LLM path
+over the same tools). **That completes the blueprint's build order (Phases 0–7),
+including the chat's LLM stage 2.** The one remaining extension is **deployment**
+(below).
 
 **Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
 which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target
