@@ -26,7 +26,8 @@ investment-platform/
 │       │                        #   Forward-Looking Projections (6.11)
 │       ├── 4_news.py            # News & Earnings Analyzer (Sections 6.2 + 6.5)
 │       ├── 5_backtest.py        # Backtesting (Section 6.7)
-│       └── 6_validation.py      # Screener Validation (point-in-time walk-forward)
+│       ├── 6_validation.py      # Screener Validation (point-in-time walk-forward)
+│       └── 7_paper_trading.py   # Paper Trading via Alpaca (Section 6.8)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -61,10 +62,11 @@ investment-platform/
 │   ├── projections.py       # Forward-Looking Projections (6.11): lognormal/GBM
 │   │                        #   statistical band + fan chart, news context, and
 │   │                        #   walk-forward calibration — NOT a prediction
+│   ├── paper_trading.py     # Paper Trading (6.8): account/positions/orders layer
 │   └── data_sources/
 │       ├── finnhub_client.py   # quotes, news, fundamentals, profile, earnings
 │       ├── yfinance_client.py  # bulk historical OHLCV (unofficial, backup)
-│       ├── alpaca_client.py    # market data (paper trading orders: Phase 6)
+│       ├── alpaca_client.py    # market data + paper trading (orders, positions)
 │       ├── fred_client.py      # macro indicators (GDP, CPI, rates)
 │       ├── edgar_client.py     # SEC filings + 8-K EX-99.1 press releases
 │       ├── edgar_fundamentals.py # point-in-time fundamentals from XBRL
@@ -72,7 +74,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 335 tests, all mocked - no API keys needed to run these
+├── tests/                  # 360 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -155,6 +157,18 @@ move the range) and, on demand, a **historical calibration**: replaying the exac
 model over past windows (no look-ahead) to show how often the actual subsequent
 return really landed inside the range it would have drawn. See the projections
 section below.
+
+**Paper Trading** (the **Paper Trading** page, Section 6.8) connects a free
+Alpaca **paper** account — real order simulation on real-time-ish IEX data, no
+real money. It shows your paper account summary (equity, cash, buying power,
+today's and unrealized P&L), open positions, and order history; you can submit
+market/limit day orders (with a quick-pick from your holdings/watchlist/
+positions) and cancel working ones. Alpaca holds the account state server-side,
+so nothing is persisted locally — the page reads live. Two safety facts: the
+client is hard-wired to Alpaca's paper endpoint (`paper=True`), so it *cannot*
+reach a real-money account; and the app never places or cancels an order on its
+own — you click. Needs `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` in `.env`; without
+them the page shows a setup prompt instead of erroring.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -719,7 +733,17 @@ no-data state, the news-context info line, the opt-in calibration toggle running
 coverage, and the outlook toggle wiring `apply_outlook` through + rendering the
 tilt explanation). Sentiment wiring is covered in `test_screener.py`
 (`_score_sentiment` maps `news.analyze_ticker`'s score, and abstains with no
-recent news) with the FinBERT pipeline mocked throughout.
+recent news) with the FinBERT pipeline mocked throughout. New in Phase 6:
+`test_alpaca_client.py` mocks the Alpaca SDK's `TradingClient` and checks the
+object→dict mapping (numeric-string coercion, percent scaling, ISO dates) and
+request construction (market/limit side + price, symbol upper-casing, cancel);
+`test_paper_trading.py` covers the engine layer — dashboard bundling with
+per-section error capture, the not-configured path, order validation
+(empty/zero/negative qty, bad side, missing limit price), market/limit
+delegation with normalized inputs, API-rejection → friendly error, and the P&L
+helpers; and `test_paper_trading_page.py` drives the page (setup prompt when
+unconfigured, account + positions render, submitting an order, a rejected order
+surfacing its message, and cancelling a working order) with the engine mocked.
 
 ## Verifying it against your real keys
 
@@ -762,9 +786,11 @@ factor is now wired to that pipeline (`_score_sentiment()` →
 **Screener Validation** phase, and **Phase 5.5** (Forward-Looking Projections —
 a statistical price-range, explicitly not a prediction, with its methodology
 validated against real historical outcomes via walk-forward calibration, and an
-optional Screener-driven median tilt shrunk by that validation's IC) are all now
-done. The next blueprint step is **Phase 6** (Paper Trading via Alpaca), then
-**Phase 7** (the AI Chat Assistant).
+optional Screener-driven median tilt shrunk by that validation's IC) are all
+done, as is **Phase 6** (Paper Trading via Alpaca — the paper account, positions,
+order ticket, and cancels). The last blueprint step is **Phase 7** (the AI Chat
+Assistant), which benefits most from having every other module's data and
+functions already built.
 
 **Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
 which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target
