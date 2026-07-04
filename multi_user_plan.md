@@ -7,11 +7,23 @@ paper-trading account), plus a limited **guest** tier. Companion to
 `investment_platform_blueprint.md` — this is the "Section 13 (multiple users)"
 path spelled out.
 
-> Status: **Phase A in progress** (SQLite-testable half). Done so far: the
-> `users` + `user_credentials` schema, a nullable `user_id` on every user-owned
-> table, a `current_user_id()` context with a bootstrap-owner fallback, and
-> **centralized ORM scoping** in `db/session.py`. Pending: provision Postgres,
-> Alembic, RLS, and the `NOT NULL` / composite-unique hardening.
+> Status: **Phase A + Phase B done (SQLite-testable halves).**
+> - **Phase A:** `users` + `user_credentials` schema, nullable `user_id` on every
+>   user-owned table, a `current_user_id()` context with a bootstrap-owner
+>   fallback, and **centralized ORM scoping** in `db/session.py`. Pending: the
+>   Postgres bits — Alembic, RLS, `NOT NULL` / composite-unique hardening.
+> - **Phase B:** `engine/auth.py` (roles from `OWNER_EMAILS`/`FRIEND_EMAILS`
+>   allowlists, page-access policy, user upsert, guest → shared seeded demo) and
+>   `app/_auth.py`'s `gate("<page_key>")`, wired into all 9 pages. Restricted
+>   pages (screener/news/validation/paper_trading) stop guests. Identity comes
+>   from Streamlit OIDC (`st.user`) in prod, or the bootstrap owner locally
+>   (override with `DEV_LOGIN_EMAIL`). Pending: enabling the actual Google OIDC
+>   **login prompt** (needs a Google OAuth client + `.streamlit/secrets.toml`;
+>   an external setup step like Supabase), and role-based nav-hiding with
+>   `st.navigation` (currently gated-but-visible).
+>
+> `DATABASE_URL` for Postgres now needs the `psycopg2-binary` driver
+> (in requirements) — `pip install -r requirements.txt`.
 >
 > **Implementation note — scoping is centralized, not per-query.** Rather than
 > add `WHERE user_id=…` to dozens of queries across `portfolio.py` /

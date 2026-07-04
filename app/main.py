@@ -12,6 +12,7 @@ from db.session import init_db
 
 st.set_page_config(page_title="Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()
+gate("main")  # resolve the signed-in user and scope the DB to them (Phase B)
 
 st.title("📊 Investment Co-Pilot")
 

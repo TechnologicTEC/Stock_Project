@@ -13,11 +13,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 import pandas as pd
 import streamlit as st
 
+from app._auth import gate
 from db.session import init_db
 from engine import earnings, news, portfolio, watchlist
 
 st.set_page_config(page_title="News — Investment Co-Pilot", page_icon="📰", layout="wide")
 init_db()
+gate("news")  # restricted: guests are stopped here (Phase B)
 
 st.title("News & Earnings")
 st.caption(

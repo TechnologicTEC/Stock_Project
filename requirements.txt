@@ -45,6 +45,12 @@ google-cloud-bigquery>=3.0
 # deterministic template responder, so this is optional.
 google-genai>=1.0
 
+# --- Database ---
+# SQLite is built in (default local DB). For a hosted Postgres (multi-user /
+# deploy — see multi_user_plan.md), set DATABASE_URL and install this driver;
+# Supabase's postgresql:// URL works as-is with psycopg2-binary.
+psycopg2-binary>=2.9
+
 # --- Utilities ---
 python-dotenv>=1.0
 requests>=2.31

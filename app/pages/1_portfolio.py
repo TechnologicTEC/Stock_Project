@@ -18,11 +18,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from app._auth import gate
 from db.session import init_db
 from engine import currency, portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()  # safe to call every run - no-op if the schema's already current
+gate("portfolio")  # resolve the signed-in user and scope the DB to them (Phase B)
 portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
 portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
 
