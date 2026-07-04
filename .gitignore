@@ -7,6 +7,7 @@ __pycache__/
 
 # Secrets - never commit your real keys
 .env
+.streamlit/secrets.toml
 
 # Local database and cache files - each collaborator runs their own
 # (see Section 13: SQLite gets awkward with two people editing it)

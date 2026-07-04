@@ -15,12 +15,15 @@ path spelled out.
 > - **Phase B:** `engine/auth.py` (roles from `OWNER_EMAILS`/`FRIEND_EMAILS`
 >   allowlists, page-access policy, user upsert, guest → shared seeded demo) and
 >   `app/_auth.py`'s `gate("<page_key>")`, wired into all 9 pages. Restricted
->   pages (screener/news/validation/paper_trading) stop guests. Identity comes
->   from Streamlit OIDC (`st.user`) in prod, or the bootstrap owner locally
->   (override with `DEV_LOGIN_EMAIL`). Pending: enabling the actual Google OIDC
->   **login prompt** (needs a Google OAuth client + `.streamlit/secrets.toml`;
->   an external setup step like Supabase), and role-based nav-hiding with
->   `st.navigation` (currently gated-but-visible).
+>   pages (screener/news/validation/paper_trading) stop guests.
+> - **Google OIDC login is wired** via Streamlit native auth (`st.login` /
+>   `st.user` / `st.logout`): when `.streamlit/secrets.toml` has an `[auth]`
+>   block (or `REQUIRE_LOGIN` is set), anonymous visitors get a **Sign in with
+>   Google** prompt or **Continue as guest**; a sidebar shows who's signed in
+>   with a sign-out. With no OIDC configured (local/tests) it falls back to the
+>   bootstrap owner (`DEV_LOGIN_EMAIL` to simulate others). Setup template:
+>   `.streamlit/secrets.toml.example`. Pending: role-based nav-hiding with
+>   `st.navigation` (pages are currently gated-but-visible).
 >
 > `DATABASE_URL` for Postgres now needs the `psycopg2-binary` driver
 > (in requirements) — `pip install -r requirements.txt`.

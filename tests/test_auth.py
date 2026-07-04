@@ -99,3 +99,27 @@ def test_gate_allows_guest_on_permitted_page(monkeypatch):
     at.run(timeout=30)
     assert not at.exception
     assert not any("isn't available on your account" in str(e.value) for e in at.error)
+
+
+# --------------------------------------------------------------------------
+# OIDC login prompt (Phase B wiring) — forced on via REQUIRE_LOGIN so no
+# real Google/secrets config is needed for the test.
+# --------------------------------------------------------------------------
+
+def test_gate_shows_sign_in_when_login_required_and_anonymous(monkeypatch):
+    monkeypatch.setenv("REQUIRE_LOGIN", "1")
+    at = AppTest.from_file(str(_PAGES / "1_portfolio.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    assert any("Sign in with Google" in b.label for b in at.button)
+    assert any("Continue as guest" in b.label for b in at.button)
+
+
+def test_gate_continue_as_guest_bypasses_login(monkeypatch):
+    monkeypatch.setenv("REQUIRE_LOGIN", "1")
+    at = AppTest.from_file(str(_PAGES / "5_backtest.py"))  # guest-permitted, no auto network
+    at.run(timeout=30)
+    next(b for b in at.button if "Continue as guest" in b.label).click()
+    at.run(timeout=30)
+    assert not at.exception
+    assert not any("Sign in with Google" in b.label for b in at.button)  # past the prompt now

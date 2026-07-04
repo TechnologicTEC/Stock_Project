@@ -1,12 +1,14 @@
 """
-Streamlit glue for auth (Phase B). Each page calls `gate("<page_key>")` right
-after init_db(): it resolves the logged-in identity, scopes the DB session to
-that user, and stops guests on restricted pages.
+Streamlit auth glue (Phase B). Each page calls `gate("<page_key>")` right after
+init_db(): it resolves the signed-in identity, scopes the DB to that user, shows
+a sidebar identity + sign-out, and stops guests on restricted pages.
 
-The identity comes from Streamlit's native OIDC (`st.user`) in production. With
-no OIDC configured — local dev and tests — it falls back to the bootstrap owner,
-so everything behaves like the old single-user app. Set DEV_LOGIN_EMAIL to
-simulate a friend/guest locally.
+Login is **enforced only when configured** — i.e. when `.streamlit/secrets.toml`
+has an `[auth]` section (Google OIDC) or `REQUIRE_LOGIN` is set. Then anonymous
+visitors get a "Sign in with Google" prompt or can "Continue as guest" (the
+shared demo). With no OIDC configured — local dev and tests — it falls back to
+the bootstrap owner (override with DEV_LOGIN_EMAIL), so the app behaves like the
+old single-user version.
 """
 import os
 import sys
@@ -21,34 +23,100 @@ import streamlit as st
 from db import session as db_session
 from engine import auth
 
+_GUEST_FLAG = "copilot_guest_mode"
 
-def _identity_email() -> str:
-    """The logged-in email from Streamlit OIDC, or a dev/owner fallback."""
+
+def _is_logged_in() -> bool:
     try:
         user = getattr(st, "user", None)
-        if user is not None:
-            logged_in = getattr(user, "is_logged_in", None)
-            if logged_in is None and hasattr(user, "get"):
-                logged_in = user.get("is_logged_in", False)
-            if logged_in:
-                email = getattr(user, "email", None)
-                if email is None and hasattr(user, "get"):
-                    email = user.get("email")
-                if email:
-                    return email
+        if user is None:
+            return False
+        val = getattr(user, "is_logged_in", None)
+        if val is None and hasattr(user, "get"):
+            val = user.get("is_logged_in", False)
+        return bool(val)
     except Exception:
-        pass
+        return False
+
+
+def _logged_in_email() -> str | None:
+    try:
+        user = st.user
+        email = getattr(user, "email", None)
+        if email is None and hasattr(user, "get"):
+            email = user.get("email")
+        return email
+    except Exception:
+        return None
+
+
+def _oidc_configured() -> bool:
+    try:
+        return "auth" in st.secrets
+    except Exception:
+        return False
+
+
+def _login_required() -> bool:
+    return bool(os.environ.get("REQUIRE_LOGIN")) or _oidc_configured()
+
+
+def _guest_mode() -> bool:
+    try:
+        return bool(st.session_state.get(_GUEST_FLAG))
+    except Exception:
+        return False
+
+
+def _current_email() -> str | None:
+    if _is_logged_in():
+        return _logged_in_email()
+    if _guest_mode():
+        return None  # -> resolve_role(None) == guest
+    # Local/dev (no OIDC configured): act as the owner unless overridden.
     return os.environ.get("DEV_LOGIN_EMAIL") or db_session.BOOTSTRAP_EMAIL
+
+
+def _render_login_and_stop() -> None:
+    st.title("📊 Investment Co-Pilot")
+    st.caption("Personal, educational tool — not financial advice.")
+    st.write(
+        "Sign in to see and manage **your own** portfolio and API keys, or continue as a guest to explore a "
+        "read-only demo."
+    )
+    c1, c2 = st.columns(2)
+    if c1.button("🔑 Sign in with Google", type="primary", use_container_width=True):
+        st.login()  # single [auth] provider; use st.login("google") for a named provider
+    if c2.button("👀 Continue as guest", use_container_width=True):
+        st.session_state[_GUEST_FLAG] = True
+        st.rerun()
+    st.stop()
+
+
+def _render_identity_sidebar(identity: auth.Identity) -> None:
+    with st.sidebar:
+        if identity.role == auth.GUEST:
+            st.caption("👤 Guest — demo portfolio")
+            if _login_required() and st.button("Sign in", key="_auth_signin", use_container_width=True):
+                st.session_state[_GUEST_FLAG] = False
+                st.login()
+        else:
+            st.caption(f"👤 {identity.email} · {identity.role}")
+            if _is_logged_in() and st.button("Sign out", key="_auth_signout", use_container_width=True):
+                st.logout()
 
 
 def gate(page_key: str) -> auth.Identity:
     """Resolve identity, scope the DB to that user, and stop guests on restricted
     pages. Returns the Identity so a page can show who's signed in."""
-    identity = auth.apply_login(_identity_email())
+    if _login_required() and not _is_logged_in() and not _guest_mode():
+        _render_login_and_stop()
+
+    identity = auth.apply_login(_current_email())
+    _render_identity_sidebar(identity)
+
     if not auth.can_access(identity.role, page_key):
-        st.error(
-            "This page isn't available on your account — it's limited to the owner and invited friends."
-        )
+        st.error("This page isn't available on your account — it's limited to the owner and invited friends.")
         st.info("As a guest you can use **Portfolio**, **Health**, **Backtest**, and the **Assistant** "
                 "with a demo portfolio.")
         st.stop()
