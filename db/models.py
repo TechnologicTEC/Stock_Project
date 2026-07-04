@@ -21,7 +21,50 @@ class Base(DeclarativeBase):
 
 
 # --------------------------------------------------------------------------
+# Accounts (multi-user — see multi_user_plan.md)
+#
+# In single-user/local mode a single bootstrap "owner" row exists
+# (email local@localhost) and everything is scoped to it, so the app behaves
+# exactly as before. A multi-user deployment adds one row per signed-in email.
+# --------------------------------------------------------------------------
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), default="friend", server_default="friend")
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class UserCredential(Base):
+    """One per-user API credential, encrypted at rest (Phase C). Stored here
+    rather than in .env so each user brings their own keys (Finnhub, Alpaca,
+    Gemini, …). `ciphertext` is Fernet-encrypted; the plaintext never lands
+    in the DB."""
+
+    __tablename__ = "user_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "key_name", name="uq_user_credentials_user_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(index=True)
+    key_name: Mapped[str] = mapped_column(String(64))
+    ciphertext: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
+    last_validated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    valid: Mapped[bool | None] = mapped_column(nullable=True)
+
+
+# --------------------------------------------------------------------------
 # Portfolio tables
+#
+# Each user-owned table carries a nullable `user_id`; db/session.py's ORM
+# scoping events filter every read by the current user and stamp `user_id`
+# on every write, so the engine modules don't repeat the filter. Nullable +
+# a bootstrap backfill keeps existing single-user data working; a later
+# Alembic/Postgres migration makes it NOT NULL with RLS.
 # --------------------------------------------------------------------------
 
 class Holding(Base):
@@ -36,6 +79,7 @@ class Holding(Base):
     __tablename__ = "holdings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     shares: Mapped[float] = mapped_column(Float)
     cost_basis: Mapped[float] = mapped_column(Float)
@@ -49,6 +93,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     type: Mapped[str] = mapped_column(String(4))  # "buy" / "sell"
     shares: Mapped[float] = mapped_column(Float)
@@ -62,6 +107,10 @@ class WatchlistItem(Base):
     __tablename__ = "watchlist"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    # NOTE: `unique=True` on ticker is global for now (fine while there's one
+    # bootstrap user). Phase-A hardening changes this to a composite
+    # UniqueConstraint(user_id, ticker) so two users can watch the same ticker.
     ticker: Mapped[str] = mapped_column(String(10), unique=True, index=True)
     added_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -83,6 +132,7 @@ class Wallet(Base):
     __tablename__ = "wallet"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)  # one wallet row per user now
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -102,6 +152,7 @@ class CashFlow(Base):
     __tablename__ = "cash_flows"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
     type: Mapped[str] = mapped_column(String(8))  # "deposit" / "withdraw"
     amount: Mapped[float] = mapped_column(Float)
     date: Mapped[date_]
@@ -185,6 +236,7 @@ class ScreenerScore(Base):
     __tablename__ = "screener_scores"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     date: Mapped[date_] = mapped_column(index=True)
     overall_score: Mapped[float] = mapped_column(Float)
@@ -198,6 +250,7 @@ class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
     strategy_config_json: Mapped[str] = mapped_column(Text)
     start_date: Mapped[date_]
     end_date: Mapped[date_]
