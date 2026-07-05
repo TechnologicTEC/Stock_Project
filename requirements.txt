@@ -1,5 +1,9 @@
 # --- Core app ---
-streamlit>=1.38
+# Pinned to EXACTLY the Hugging Face Space's `sdk_version` (see README front
+# matter). If they differ, HF serves the page for one Streamlit build while pip
+# installs another, and the frontend assets 404 → blank white app. Bump both
+# together. Locally, 1.58.x is fine (st.login needs >=1.42).
+streamlit==1.58.0
 plotly>=5.24
 pandas>=2.2
 numpy>=2.0                  # used directly by engine/health.py (Phase 3); also pandas/pandas-ta-classic's own dependency
