@@ -1,2 +1,7 @@
-# Dev-only — not needed to run the app itself, only to run the test suite.
+# Dev-only — not needed to run the app itself, only to run it/tests LOCALLY.
 pytest>=8.0
+
+# Streamlit lives here (not requirements.txt) so it isn't installed on Hugging
+# Face Spaces, where the Streamlit SDK provides it (see requirements.txt note).
+# Keep this pinned to the Space's `sdk_version` in README.md so local == deployed.
+streamlit==1.58.0

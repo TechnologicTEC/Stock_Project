@@ -1,9 +1,9 @@
 # --- Core app ---
-# Pinned to EXACTLY the Hugging Face Space's `sdk_version` (see README front
-# matter). If they differ, HF serves the page for one Streamlit build while pip
-# installs another, and the frontend assets 404 → blank white app. Bump both
-# together. Locally, 1.58.x is fine (st.login needs >=1.42).
-streamlit==1.58.0
+# NOTE: `streamlit` is intentionally NOT listed here. On Hugging Face Spaces the
+# Streamlit SDK installs AND serves Streamlit itself (per `sdk_version` in the
+# README front matter); listing it here too installs a second copy whose frontend
+# assets don't match the SDK-served page → /static/*.js 404 → blank white app.
+# For local dev / tests, Streamlit is in requirements-dev.txt (kept == sdk_version).
 plotly>=5.24
 pandas>=2.2
 numpy>=2.0                  # used directly by engine/health.py (Phase 3); also pandas/pandas-ta-classic's own dependency
