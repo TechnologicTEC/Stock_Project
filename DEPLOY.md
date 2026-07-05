@@ -79,18 +79,50 @@ see the **same data as your local app**.
 
 ---
 
-## Stage 2 — go public with Google login (do this before making it public)
+## Stage 2 — public with Google login (REQUIRED to be public)
 
-When you're ready to let friends in, come back and I'll wire this up; it needs:
+A **private** Space can't be used here: HF serves it in an authenticated iframe
+that blocks Streamlit's own `/static/*` assets → blank page. So the app must run
+**public**, which means login must be enforced (or an anonymous visitor lands as
+the owner). Two safe states:
 
-1. **A Google OAuth 2.0 Client** (Google Cloud Console → Credentials → OAuth
-   client ID → Web application) with the authorized redirect URI:
-   `https://<hf-username>-<space-name>.hf.space/oauth2callback`
-2. **Extra secrets** on the Space: `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`,
-   `AUTH_COOKIE_SECRET` (a random string), and `AUTH_REDIRECT_URI` (the URL above).
-3. **A startup shim** (to be added) that writes `.streamlit/secrets.toml`'s
-   `[auth]` block from those env vars before `st.login()` reads it — because
-   Streamlit's OIDC config is file-based, not env-based.
-4. Set `OWNER_EMAILS` / `FRIEND_EMAILS`, then flip the Space to **Public**.
-   Anonymous visitors then get a Google sign-in / "continue as guest" prompt;
-   guests are limited to the demo pages and never touch your keys.
+- **Interim (no OIDC yet):** set secret `REQUIRE_LOGIN = 1`. Public visitors are
+  forced to "Continue as guest" — demo pages only, none of your data/keys. (You
+  can't sign in as *yourself* yet; that's what OIDC below adds.)
+- **Full:** Google OIDC, below. Then owner/friends sign in; everyone else is a guest.
+
+The shim is already in the code (`app/_auth.py:_ensure_auth_secrets`): when the
+`AUTH_*` env vars are set it writes `.streamlit/secrets.toml`'s `[auth]` block at
+startup, so `st.login()` works on HF (whose secrets are env vars, not a file).
+
+### 1. Google OAuth client
+Google Cloud Console → **APIs & Services**:
+- **OAuth consent screen** → External. While it's in **Testing**, only emails you
+  add as **Test users** can sign in — add yourself + each friend. (Or Publish it.)
+- **Credentials → Create credentials → OAuth client ID → Web application.**
+  Under **Authorized redirect URIs** add exactly:
+  `https://delta247-investment-project.hf.space/oauth2callback`
+  Copy the **Client ID** and **Client secret**.
+
+### 2. Space secrets (add these)
+| Secret | Value |
+| --- | --- |
+| `AUTH_CLIENT_ID` | the OAuth Client ID |
+| `AUTH_CLIENT_SECRET` | the OAuth Client secret |
+| `AUTH_REDIRECT_URI` | `https://delta247-investment-project.hf.space/oauth2callback` |
+| `AUTH_COOKIE_SECRET` | a random string — `python -c "import secrets;print(secrets.token_hex(32))"` |
+| `OWNER_EMAILS` | your Google login email |
+| `FRIEND_EMAILS` | friends' emails, comma-separated |
+
+Once OIDC is set you can remove `REQUIRE_LOGIN` (OIDC enforces login on its own),
+though leaving it set is harmless.
+
+### 3. Go public & test
+Set the Space **Public**, wait for the restart, then open the **direct** URL
+(`https://delta247-investment-project.hf.space`, not the embedded App tab — OAuth
+redirects need the top-level window). Sign in with Google → you should come back
+as the **owner** (your data); a non-allowlisted email → **guest**.
+
+> Heads-up: the OAuth **redirect URI must match byte-for-byte** between Google and
+> `AUTH_REDIRECT_URI`, and the app must be reached at that same origin — the most
+> common Stage-2 failure is a redirect_uri mismatch.

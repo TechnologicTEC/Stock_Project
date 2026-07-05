@@ -123,3 +123,31 @@ def test_gate_continue_as_guest_bypasses_login(monkeypatch):
     at.run(timeout=30)
     assert not at.exception
     assert not any("Sign in with Google" in b.label for b in at.button)  # past the prompt now
+
+
+# --------------------------------------------------------------------------
+# OIDC secrets shim — materializing [auth] from AUTH_* env vars (HF Spaces).
+# --------------------------------------------------------------------------
+
+def test_auth_secrets_toml_is_none_without_env(monkeypatch):
+    from app import _auth
+    for k in ("AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET", "AUTH_REDIRECT_URI", "AUTH_COOKIE_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    assert _auth._auth_secrets_toml() is None
+
+
+def test_auth_secrets_toml_from_env_parses_and_escapes(monkeypatch):
+    import tomllib
+
+    from app import _auth
+    monkeypatch.setenv("AUTH_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("AUTH_CLIENT_SECRET", 'has"a"quote')  # exercise escaping
+    monkeypatch.setenv("AUTH_REDIRECT_URI", "https://x.hf.space/oauth2callback")
+    monkeypatch.setenv("AUTH_COOKIE_SECRET", "deadbeef")
+    body = _auth._auth_secrets_toml()
+    assert body is not None
+    parsed = tomllib.loads(body)["auth"]  # valid TOML, round-trips
+    assert parsed["client_id"] == "cid.apps.googleusercontent.com"
+    assert parsed["client_secret"] == 'has"a"quote'
+    assert parsed["redirect_uri"] == "https://x.hf.space/oauth2callback"
+    assert parsed["server_metadata_url"].endswith("/.well-known/openid-configuration")

@@ -26,6 +26,57 @@ from engine import auth
 _GUEST_FLAG = "copilot_guest_mode"
 
 
+# --------------------------------------------------------------------------
+# OIDC secrets shim. Streamlit reads Google-login config from an [auth] block in
+# .streamlit/secrets.toml, but hosts like Hugging Face Spaces only provide
+# secrets as environment variables. So when the AUTH_* vars are present we
+# materialize that file from them, at import time — before gate() ever touches
+# st.secrets. Locally (no AUTH_* vars) this is a no-op, and it never clobbers a
+# real secrets.toml you maintain by hand.
+# --------------------------------------------------------------------------
+
+def _auth_secrets_toml() -> str | None:
+    """The `[auth]` secrets.toml body built from AUTH_* env vars, or None if the
+    required ones aren't all set."""
+    import json
+
+    client_id = os.environ.get("AUTH_CLIENT_ID")
+    client_secret = os.environ.get("AUTH_CLIENT_SECRET")
+    redirect_uri = os.environ.get("AUTH_REDIRECT_URI")
+    cookie_secret = os.environ.get("AUTH_COOKIE_SECRET")
+    if not (client_id and client_secret and redirect_uri and cookie_secret):
+        return None
+    metadata_url = os.environ.get(
+        "AUTH_SERVER_METADATA_URL", "https://accounts.google.com/.well-known/openid-configuration"
+    )
+    j = json.dumps  # produces a correctly-escaped double-quoted string (valid TOML)
+    return (
+        "[auth]\n"
+        f"redirect_uri = {j(redirect_uri)}\n"
+        f"cookie_secret = {j(cookie_secret)}\n"
+        f"client_id = {j(client_id)}\n"
+        f"client_secret = {j(client_secret)}\n"
+        f"server_metadata_url = {j(metadata_url)}\n"
+    )
+
+
+def _ensure_auth_secrets() -> None:
+    body = _auth_secrets_toml()
+    if body is None:
+        return  # no env-provided OIDC config (local/tests) — leave things alone
+    path = _PROJECT_ROOT / ".streamlit" / "secrets.toml"
+    try:
+        if path.exists() and "[auth]" in path.read_text(encoding="utf-8"):
+            return  # a real secrets.toml already configures auth — don't clobber it
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except Exception:
+        pass  # never crash the app over this; login just stays unconfigured
+
+
+_ensure_auth_secrets()
+
+
 def _is_logged_in() -> bool:
     try:
         user = getattr(st, "user", None)

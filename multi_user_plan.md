@@ -273,18 +273,25 @@ Today clients read `os.environ`. Introduce a single indirection:
 ### Phase D — Harden & deploy
 - ✅ Wire `app.user_id` on every connection; RLS blocks cross-user reads
   (verified live via `SET ROLE copilot_app` — see the Phase-A-hardening status).
-- **Deploy (HF Spaces) — Stage 1 prepared (`DEPLOY.md`):** README has the
-  Streamlit-SDK front matter (`app_file: app/main.py`, FinBERT `preload_from_hub`);
-  the app is fully env-var-driven, so HF Space **Secrets** map straight onto it
-  (no `secrets.toml` needed for Stage 1). Runbook covers a **private** Space
-  (owner-only), the secret list, `git push space`, and verification. Boot-smoke
-  of `app/main.py` in the no-login path is a regression test now
-  (`tests/test_main_page.py`) — it caught a missing `gate` import that would have
-  crashed the deployed home page. **Stage 2 (public + Google OIDC)** is outlined
-  in `DEPLOY.md`: needs a Google OAuth client, a redirect URI, extra secrets, and
-  a startup shim to write `.streamlit/secrets.toml`'s `[auth]` from env (Streamlit
-  OIDC config is file-based). Security gate: keep the Space private until OIDC is
-  wired — anonymous → bootstrap owner otherwise.
+- **Deploy (HF Spaces) — live but requires public + OIDC (`DEPLOY.md`):** README
+  has the Streamlit-SDK front matter (`app_file: app/main.py`, FinBERT
+  `preload_from_hub`); the app is env-var-driven, so HF Space **Secrets** map
+  straight onto it. Deploy notes learned the hard way:
+  - `streamlit` must NOT be in `requirements.txt` — HF's Streamlit SDK installs +
+    serves it per `sdk_version`; a second pip copy makes the frontend `/static/*`
+    assets 404 (blank app). It lives in `requirements-dev.txt` for local/tests.
+  - **Private Spaces don't render.** HF serves a private Space in an authenticated
+    iframe that blocks Streamlit's own `/static/*` sub-resources → blank page
+    (confirmed: public renders, private doesn't). So the Space MUST be **public**,
+    which means login must be enforced or an anonymous visitor lands as the owner.
+  - Interim-safe public state: `REQUIRE_LOGIN=1` → visitors forced to guest.
+  - Boot-smoke of `app/main.py` is a regression test (`tests/test_main_page.py`) —
+    it caught a missing `gate` import that would've crashed the deployed home page.
+  - **Google OIDC (implemented):** `app/_auth.py:_ensure_auth_secrets` writes
+    `.streamlit/secrets.toml`'s `[auth]` from `AUTH_*` env vars at import (Streamlit
+    OIDC config is file-based; HF gives env vars). Runbook §Stage 2 has the Google
+    OAuth client + redirect-URI + secret steps. `tests/test_auth.py` covers the
+    env→TOML shim. Pending: end-to-end OIDC verification on the live public Space.
 - Guest rate-limits; audit guest path can't reach keys or real data.
 
 ---
