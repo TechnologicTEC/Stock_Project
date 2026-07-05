@@ -19,6 +19,7 @@ it doesn't backtest the fundamental screener).
 investment-platform/
 ├── app/
 │   ├── main.py                  # Streamlit entry point — run this
+│   ├── _auth.py                 # Streamlit login glue: gate("<page>") on every page
 │   └── pages/
 │       ├── 1_portfolio.py       # Portfolio Dashboard (Section 6.3)
 │       ├── 2_screener.py        # Investment Screener (Section 6.1)
@@ -28,16 +29,20 @@ investment-platform/
 │       ├── 5_backtest.py        # Backtesting (Section 6.7)
 │       ├── 6_validation.py      # Screener Validation (point-in-time walk-forward)
 │       ├── 7_paper_trading.py   # Paper Trading via Alpaca (Section 6.8)
-│       └── 8_chat.py            # AI Chat Assistant (Section 6.6)
+│       ├── 8_chat.py            # AI Chat Assistant (Section 6.6)
+│       └── 9_settings.py        # Per-user API keys (multi-user, Phase C)
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
-│   │                    #   column on Holding, and Wallet + CashFlow
-│   │                    #   (Phase 3.5)
-│   └── session.py        # Engine/session setup + a small built-in
-│                          #   migration for existing DB files
+│   │                    #   column on Holding, Wallet + CashFlow (Phase 3.5),
+│   │                    #   and User + UserCredential + per-row user_id
+│   │                    #   (multi-user, see multi_user_plan.md)
+│   └── session.py        # Engine/session setup + built-in migration, plus
+│                          #   centralized per-user ORM scoping (user_id)
 ├── engine/
 │   ├── config.py          # Loads .env once, on first import
+│   ├── auth.py             # Roles/allowlists, user upsert, guest demo (Phase B)
+│   ├── credentials.py      # Per-user key provider + Fernet vault (Phase C)
 │   ├── time_utils.py       # Shared naive-UTC datetime helpers
 │   ├── cache.py            # THE cache layer (Section 5's rule lives here)
 │   ├── price_history.py    # Shared "ensure cached, give me a DataFrame"
@@ -78,7 +83,7 @@ investment-platform/
 │       ├── analyst_history.py  # PIT analyst consensus from yfinance rating events
 │       ├── gdelt_client.py     # historical news tone via GDELT on BigQuery
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
-├── tests/                  # 401 tests, all mocked - no API keys needed to run these
+├── tests/                  # 419 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
@@ -206,6 +211,43 @@ prompt keeps it to data, not advice. It degrades gracefully: no key, the SDK not
 installed, or any API error all fall back to the deterministic template, so the
 Assistant works either way. Gemini's free tier keeps it consistent with the rest
 of the app. Default model is `gemini-2.5-flash` (override with `CHAT_LLM_MODEL`).
+
+## Accounts, logins & per-user keys (see `multi_user_plan.md`)
+
+The app can run as a **private multi-user site**: the owner and invited friends
+each get their own account, their own portfolio data, and **their own API keys**
+(including their own Alpaca *paper* account), with a limited read-only **guest**
+tier on top. It's off by default — with no login configured it runs exactly as
+the single-user app (a bootstrap owner), so nothing here changes local dev or the
+tests.
+
+- **Login** is Google sign-in via Streamlit's native auth. Add an `[auth]` block
+  to `.streamlit/secrets.toml` (template in `.streamlit/secrets.toml.example`)
+  and list who's who in `OWNER_EMAILS` / `FRIEND_EMAILS` (`.env`); anyone else
+  who signs in is a **guest**, and guests can also "Continue as guest" without an
+  account. Owners/friends see every page; guests are limited to Main, Portfolio,
+  Health, Backtest and the Assistant (a shared, seeded demo portfolio so those
+  pages aren't empty). `DEV_LOGIN_EMAIL` locally impersonates a friend/guest
+  without signing in.
+- **Data is isolated per user** automatically — holdings, transactions,
+  watchlist, cash and saved scores are all scoped by `user_id` centrally in
+  `db/session.py` (no per-query filters to forget), so no one sees anyone else's.
+  On Postgres this is backed by **Row-Level Security** as defense-in-depth:
+  `init_db()` enables RLS with a per-user policy (keyed to an `app.user_id`
+  session variable set per transaction) on every user-owned table, and revokes
+  Supabase's public API roles (`anon`/`authenticated`) so the auto-generated REST
+  API can't reach your data. (The watchlist's uniqueness is per-user too, so two
+  users can each track the same ticker.)
+- **Keys are per-user and encrypted.** Each signed-in user enters their own keys
+  on the **Settings** page; they're **Fernet-encrypted at rest** with
+  `APP_ENCRYPTION_KEY` (keep that in the host secret store, never in the DB or
+  git) and used *only* for that user. Fallback to the host's `.env` is scoped by
+  role: the **owner** falls back for everything; **friends** are confined to keys
+  they've entered themselves; the shared **guest** demo may borrow only the
+  host's *read-only market-data* keys (Finnhub / FRED / EDGAR) so its charts
+  aren't empty — never the host's Alpaca account or Gemini quota. So a friend can
+  never silently spend the host's paper account or LLM credits, and a guest can
+  only ever *read* market data.
 
 ## How portfolio health is computed (Section 6.4)
 

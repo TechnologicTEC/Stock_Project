@@ -16,7 +16,7 @@ from functools import lru_cache
 
 import finnhub
 
-from engine import config  # noqa: F401  (side effect: loads .env)
+from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
 from engine.time_utils import utc_from_timestamp, utcnow
 
 
@@ -26,7 +26,7 @@ class FinnhubConfigError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def _client() -> finnhub.Client:
-    api_key = os.environ.get("FINNHUB_API_KEY")
+    api_key = credentials.get("FINNHUB_API_KEY")
     if not api_key:
         raise FinnhubConfigError(
             "FINNHUB_API_KEY is not set. Copy .env.example to .env and add your "

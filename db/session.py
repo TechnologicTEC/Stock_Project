@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import Engine, create_engine, event, select
+from sqlalchemy import Engine, create_engine, event, select, text
 from sqlalchemy.orm import Session, sessionmaker, with_loader_criteria
 from sqlalchemy.pool import StaticPool
 
@@ -111,12 +111,14 @@ def get_engine() -> Engine:
 
 def init_db() -> None:
     """Create all tables that don't already exist, apply any pending lightweight
-    column migrations, ensure the bootstrap owner user exists, and backfill any
-    pre-existing rows to it. Safe to call on every app startup."""
+    column migrations, ensure the bootstrap owner user exists, backfill any
+    pre-existing rows to it, and (on Postgres) apply Row-Level Security. Safe to
+    call on every app startup."""
     Base.metadata.create_all(get_engine())
     _apply_lightweight_migrations(get_engine())
     _ensure_bootstrap_user()
     _backfill_user_ids(get_engine())
+    _apply_postgres_rls(get_engine())
 
 
 def _ensure_bootstrap_user() -> None:
@@ -142,6 +144,59 @@ def _backfill_user_ids(engine: Engine) -> None:
         for table in _USER_SCOPED_TABLES:
             if _table_exists(engine, table) and _column_exists(engine, table, "user_id"):
                 conn.exec_driver_sql(f"UPDATE {table} SET user_id = {int(_bootstrap_user_id)} WHERE user_id IS NULL")
+
+
+# --------------------------------------------------------------------------
+# Postgres Row-Level Security (the multi_user_plan.md "belt-and-braces backstop").
+#
+# The ORM events below are the *primary* per-user isolation and are what the app
+# relies on today (it connects as `postgres`, which has BYPASSRLS). RLS adds two
+# things on top, both Postgres-only:
+#
+#   1. It closes the Supabase auto-generated REST API surface. Every public
+#      table is otherwise reachable by the `anon`/`authenticated` roles (the
+#      anon key ships to browsers) — enabling RLS with no permissive policy for
+#      them, plus REVOKE, denies that path entirely.
+#   2. A per-user policy keyed to the `app.user_id` GUC (set per transaction by
+#      the after_begin event). Inert while the app connects as a BYPASSRLS role,
+#      but it becomes real enforcement the moment DATABASE_URL points at a
+#      least-privilege role — see multi_user_plan.md for that upgrade step.
+#
+# Idempotent: safe to run on every startup (drops+recreates its own policy).
+# --------------------------------------------------------------------------
+
+# user_credentials has a user_id too, so it gets the same per-user policy.
+_RLS_USER_TABLES = _USER_SCOPED_TABLES + ["user_credentials"]
+_RLS_POLICY = "app_user_isolation"
+# NULLIF(...,'')::int → an unset/blank GUC becomes NULL, so `user_id = NULL`
+# matches nothing (fail-closed) rather than erroring on ''::int.
+_RLS_PREDICATE = "user_id = NULLIF(current_setting('app.user_id', true), '')::int"
+
+
+def _pg_role_exists(conn, role: str) -> bool:
+    return conn.execute(text("select 1 from pg_roles where rolname = :r"), {"r": role}).first() is not None
+
+
+def _apply_postgres_rls(engine: Engine) -> None:
+    if engine.url.get_backend_name() != "postgresql":
+        return
+    with engine.begin() as conn:
+        present_api_roles = [r for r in ("anon", "authenticated") if _pg_role_exists(conn, r)]
+
+        # `users` has no user_id: lock it away from the API roles, no per-user
+        # policy (the app, as a BYPASSRLS role, still reads it for auth).
+        for table in _RLS_USER_TABLES + ["users"]:
+            conn.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
+            conn.execute(text(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY'))
+            for role in present_api_roles:
+                conn.execute(text(f'REVOKE ALL ON TABLE "{table}" FROM "{role}"'))
+
+        for table in _RLS_USER_TABLES:
+            conn.execute(text(f'DROP POLICY IF EXISTS {_RLS_POLICY} ON "{table}"'))
+            conn.execute(text(
+                f'CREATE POLICY {_RLS_POLICY} ON "{table}" '
+                f'USING ({_RLS_PREDICATE}) WITH CHECK ({_RLS_PREDICATE})'
+            ))
 
 
 # --------------------------------------------------------------------------
@@ -251,3 +306,18 @@ def _stamp_user_id(session: Session, flush_context, instances) -> None:
     for obj in session.new:
         if isinstance(obj, _USER_SCOPED_MODELS) and getattr(obj, "user_id", None) is None:
             obj.user_id = uid
+
+
+@event.listens_for(Session, "after_begin")
+def _set_rls_user_guc(session: Session, transaction, connection) -> None:
+    """Publish the effective user id to Postgres as a transaction-local GUC, so
+    the RLS policies (_apply_postgres_rls) can read it via current_setting. No-op
+    on SQLite. is_local=True scopes it to this transaction, so it's correct even
+    when connections are reused across users by a pool/pooler."""
+    if connection.dialect.name != "postgresql":
+        return
+    uid = _effective_user_id()
+    connection.execute(
+        text("SELECT set_config('app.user_id', :uid, true)"),
+        {"uid": str(uid) if uid is not None else ""},
+    )

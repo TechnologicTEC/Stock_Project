@@ -105,13 +105,13 @@ class WatchlistItem(Base):
     """Stocks you're tracking but don't own."""
 
     __tablename__ = "watchlist"
+    # Uniqueness is per-user, not global, so two users can each watch the same
+    # ticker (before_flush stamps user_id, so this constraint sees the right one).
+    __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
-    # NOTE: `unique=True` on ticker is global for now (fine while there's one
-    # bootstrap user). Phase-A hardening changes this to a composite
-    # UniqueConstraint(user_id, ticker) so two users can watch the same ticker.
-    ticker: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    ticker: Mapped[str] = mapped_column(String(10), index=True)
     added_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 

@@ -17,7 +17,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
-from engine import config  # noqa: F401  (side effect: loads .env)
+from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
 
 _BASE = "https://www.sec.gov"
 _MIN_INTERVAL_SECONDS = 0.11  # SEC asks for <=10 req/sec; stay comfortably under that
@@ -29,7 +29,7 @@ class EdgarConfigError(RuntimeError):
 
 
 def _headers() -> dict:
-    user_agent = os.environ.get("EDGAR_USER_AGENT")
+    user_agent = credentials.get("EDGAR_USER_AGENT")
     if not user_agent:
         raise EdgarConfigError(
             "EDGAR_USER_AGENT is not set. SEC requires a real identifying string, "

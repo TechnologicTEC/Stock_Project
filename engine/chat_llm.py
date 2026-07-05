@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 
-from engine import chat_tools
+from engine import chat_tools, credentials
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_HISTORY_MESSAGES = 10
@@ -110,7 +110,7 @@ def _model() -> str:
 
 
 def _api_key() -> str | None:
-    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    return credentials.get("GEMINI_API_KEY") or credentials.get("GOOGLE_API_KEY")
 
 
 def _genai_installed() -> bool:

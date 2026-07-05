@@ -22,7 +22,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 
-from engine import config  # noqa: F401  (side effect: loads .env)
+from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
 
 
 class AlpacaConfigError(RuntimeError):
@@ -32,12 +32,12 @@ class AlpacaConfigError(RuntimeError):
 def is_configured() -> bool:
     """Whether both Alpaca keys are present — lets pages show a friendly setup
     prompt instead of raising when the account isn't wired up yet."""
-    return bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
+    return bool(credentials.get("ALPACA_API_KEY") and credentials.get("ALPACA_SECRET_KEY"))
 
 
 def _require_keys() -> tuple[str, str]:
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+    api_key = credentials.get("ALPACA_API_KEY")
+    secret_key = credentials.get("ALPACA_SECRET_KEY")
     if not api_key or not secret_key:
         raise AlpacaConfigError(
             "ALPACA_API_KEY / ALPACA_SECRET_KEY are not set. Create a free paper "

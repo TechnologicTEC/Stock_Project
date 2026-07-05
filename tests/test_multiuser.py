@@ -70,3 +70,16 @@ def test_watchlist_is_per_user():
         assert [w["ticker"] for w in watchlist.list_watchlist()] == []
     with db_session.using_user(a):
         assert [w["ticker"] for w in watchlist.list_watchlist()] == ["NVDA"]
+
+
+def test_two_users_can_watch_the_same_ticker():
+    # The watchlist unique is composite (user_id, ticker), not global on ticker,
+    # so this must NOT trip the "already on the watchlist" IntegrityError path.
+    a, b = _make_user("a4@example.com"), _make_user("b4@example.com")
+    with db_session.using_user(a):
+        assert watchlist.add_to_watchlist("AAPL") is True
+    with db_session.using_user(b):
+        assert watchlist.add_to_watchlist("AAPL") is True          # same ticker, different user — allowed
+        assert watchlist.add_to_watchlist("AAPL") is False         # true duplicate for THIS user — rejected
+    with db_session.using_user(a):
+        assert [w["ticker"] for w in watchlist.list_watchlist()] == ["AAPL"]

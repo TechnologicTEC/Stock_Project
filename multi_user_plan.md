@@ -7,11 +7,24 @@ paper-trading account), plus a limited **guest** tier. Companion to
 `investment_platform_blueprint.md` — this is the "Section 13 (multiple users)"
 path spelled out.
 
-> Status: **Phase A + Phase B done (SQLite-testable halves).**
+> Status: **Phases A + B + C done; Phase A hardened on live Postgres (RLS).**
 > - **Phase A:** `users` + `user_credentials` schema, nullable `user_id` on every
 >   user-owned table, a `current_user_id()` context with a bootstrap-owner
->   fallback, and **centralized ORM scoping** in `db/session.py`. Pending: the
->   Postgres bits — Alembic, RLS, `NOT NULL` / composite-unique hardening.
+>   fallback, and **centralized ORM scoping** in `db/session.py`.
+> - **Phase A hardening (done, verified on live Supabase Postgres):** the
+>   watchlist unique is now composite `(user_id, ticker)`; and `init_db()` applies
+>   **Row-Level Security** on Postgres (`_apply_postgres_rls`): RLS enabled+forced
+>   on every user-owned table with a per-user policy keyed to the `app.user_id`
+>   GUC (set per transaction by an `after_begin` event via `set_config(...,true)`),
+>   the `users` table locked down with no policy, and the Supabase API roles
+>   (`anon`/`authenticated`) `REVOKE`d off every table. Verified end-to-end
+>   against the real DB (per-user isolation via a temp non-BYPASSRLS role; API
+>   roles denied). **Note:** the app connects as `postgres`, which has
+>   `BYPASSRLS`, so today RLS's active value is closing the Supabase auto-API
+>   surface; the per-user policy becomes real app-level enforcement once
+>   `DATABASE_URL` points at a least-privilege role (see Open questions).
+>   Pending: Alembic (still hand-rolled SQLite migrations + create_all); `NOT NULL`
+>   on `user_id`; cache tables need an allow-all policy before a least-priv switch.
 > - **Phase B:** `engine/auth.py` (roles from `OWNER_EMAILS`/`FRIEND_EMAILS`
 >   allowlists, page-access policy, user upsert, guest → shared seeded demo) and
 >   `app/_auth.py`'s `gate("<page_key>")`, wired into all 9 pages. Restricted
@@ -24,9 +37,23 @@ path spelled out.
 >   bootstrap owner (`DEV_LOGIN_EMAIL` to simulate others). Setup template:
 >   `.streamlit/secrets.toml.example`. Pending: role-based nav-hiding with
 >   `st.navigation` (pages are currently gated-but-visible).
+> - **Phase C — bring-your-own-keys:** `engine/credentials.py` is a request-scoped
+>   provider (`get()` reads the current user's keys first, with **role-aware env
+>   fallback** — the owner falls back to the host's `.env` for everything, the
+>   shared guest demo only for read-only market-data keys (Finnhub/FRED/EDGAR),
+>   and friends not at all) plus a **Fernet-encrypted vault**
+>   (`save_user_key` / `load_user_keys` / `delete_user_key` / `stored_key_names`)
+>   keyed by `APP_ENCRYPTION_KEY`. All data clients (`finnhub`/`fred`/`edgar`/
+>   `alpaca`) and `chat_llm.py` read keys via `credentials.get()`; login
+>   (`engine/auth._activate`) loads the user's keys into the context. A Settings
+>   page (`app/pages/9_settings.py`, owner/friend only) lets each user enter their
+>   own keys (`test_credentials.py`). Pending: per-user namespacing of the
+>   screener's `PRICE_TARGET_UNAVAILABLE_FLAG` capability flag (still global —
+>   deferred, see Open questions); validate-on-save for entered keys.
 >
 > `DATABASE_URL` for Postgres now needs the `psycopg2-binary` driver
-> (in requirements) — `pip install -r requirements.txt`.
+> (in requirements) — `pip install -r requirements.txt`. Set `APP_ENCRYPTION_KEY`
+> (a Fernet key) in the host secret store so stored user keys survive restarts.
 >
 > **Implementation note — scoping is centralized, not per-query.** Rather than
 > add `WHERE user_id=…` to dozens of queries across `portfolio.py` /

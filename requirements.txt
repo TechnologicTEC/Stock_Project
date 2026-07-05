@@ -51,6 +51,10 @@ google-genai>=1.0
 # Supabase's postgresql:// URL works as-is with psycopg2-binary.
 psycopg2-binary>=2.9
 
+# --- Per-user secrets (bring-your-own-keys) ---
+# Fernet encryption for the per-user API-key vault (multi_user_plan.md, Phase C).
+cryptography>=42.0
+
 # --- Utilities ---
 python-dotenv>=1.0
 requests>=2.31

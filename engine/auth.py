@@ -109,6 +109,23 @@ def apply_login(email: str | None) -> Identity:
     return _activate(ensure_user(email, role), (email or "").strip().lower(), role)
 
 
+def credentials_fallback(role: str) -> str:
+    """The `.env` fallback scope for a role (see engine/credentials.py): the owner
+    falls back to the host env for everything, the shared guest demo only for
+    read-only market-data keys, and friends not at all (own keys only)."""
+    from engine import credentials
+    if role == OWNER:
+        return credentials.FALLBACK_ALL
+    if role == GUEST:
+        return credentials.FALLBACK_SHARED
+    return credentials.FALLBACK_NONE
+
+
 def _activate(user_id: int, email: str, role: str) -> Identity:
     db_session.set_current_user(user_id)
+    # Load this user's own API keys into the request-scoped credentials context.
+    # The owner falls back to the host .env; the guest demo may borrow the host's
+    # read-only market-data keys; friends are confined to keys they entered.
+    from engine import credentials
+    credentials.set_current_keys(credentials.load_user_keys(user_id), fallback=credentials_fallback(role))
     return Identity(user_id=user_id, email=email, role=role)

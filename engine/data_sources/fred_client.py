@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from fredapi import Fred
 
-from engine import config  # noqa: F401  (side effect: loads .env)
+from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
 
 
 class FredConfigError(RuntimeError):
@@ -20,7 +20,7 @@ class FredConfigError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def _client() -> Fred:
-    api_key = os.environ.get("FRED_API_KEY")
+    api_key = credentials.get("FRED_API_KEY")
     if not api_key:
         raise FredConfigError(
             "FRED_API_KEY is not set. Get a free key at fred.stlouisfed.org and add it to .env."
