@@ -1,0 +1,30 @@
+Alembic migrations for the Investment Co-Pilot's Postgres database.
+
+WHEN THIS APPLIES
+  SQLite (local dev + tests) uses SQLAlchemy create_all — Alembic is not needed
+  there. Alembic manages the *Postgres* schema (Supabase). The connection URL is
+  read from DATABASE_URL by env.py (same as the app), so no URL lives in
+  alembic.ini.
+
+CHANGING THE SCHEMA
+  1. Edit the models in db/models.py.
+  2. Autogenerate a revision (with DATABASE_URL pointed at Postgres):
+       python -m alembic revision --autogenerate -m "what changed"
+  3. READ the generated file in alembic/versions/ — autogenerate is a draft.
+     It does NOT capture the Row-Level Security policies (those live in
+     db/session.py:_apply_postgres_rls and are (re)applied idempotently on
+     startup); if a change needs new RLS, add it to that function too.
+  4. Apply it:
+       python -m alembic upgrade head
+  5. Sanity check there's no drift left:
+       python -m alembic check          # -> "No new upgrade operations detected."
+
+FRESH POSTGRES DEPLOY
+  Either run `python -m alembic upgrade head` before first app start, OR just
+  start the app: init_db() calls create_all and then auto-stamps the baseline
+  (db/session.py:_ensure_alembic_stamp), so later `alembic upgrade head` applies
+  only NEW revisions.
+
+BASELINE
+  5d7e93f6a306 (initial baseline schema) captures the full table set. The live
+  Supabase DB was created via create_all and `alembic stamp head`-ed to it.

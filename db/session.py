@@ -119,6 +119,7 @@ def init_db() -> None:
     _ensure_bootstrap_user()
     _backfill_user_ids(get_engine())
     _apply_postgres_rls(get_engine())
+    _ensure_alembic_stamp(get_engine())
 
 
 def _ensure_bootstrap_user() -> None:
@@ -199,15 +200,33 @@ def _apply_postgres_rls(engine: Engine) -> None:
             ))
 
 
+def _ensure_alembic_stamp(engine: Engine) -> None:
+    """On a *fresh* Postgres DB whose schema we just built with create_all, record
+    it at the Alembic baseline (create the alembic_version row) so a later
+    `alembic upgrade head` runs only NEW migrations instead of trying to recreate
+    the baseline tables. No-op if the DB is already Alembic-managed, on SQLite, or
+    if Alembic isn't installed — the app runs regardless."""
+    if engine.url.get_backend_name() != "postgresql":
+        return
+    from sqlalchemy import inspect
+    if inspect(engine).has_table("alembic_version"):
+        return  # already migration-managed (stamped or upgraded)
+    try:
+        from alembic import command
+        from alembic.config import Config
+        command.stamp(Config(str(Path(__file__).resolve().parent.parent / "alembic.ini")), "head")
+    except Exception:  # pragma: no cover - alembic optional at runtime
+        pass  # not fatal; a DBA can `alembic stamp head` manually
+
+
 # --------------------------------------------------------------------------
-# Lightweight migrations
+# Lightweight SQLite migrations (superseded by Alembic on Postgres)
 #
-# Hand-rolled on purpose: Section 12's upgrade path is "Postgres only if you
-# add multiple users", and Alembic is overkill before that point. This just
-# means "if a model gained a column since your db file was created, add it
-# instead of erroring" — it never drops or renames anything, so it's safe to
-# run on every startup. If you do move to Postgres, replace this with
-# Alembic rather than extending it further.
+# Hand-rolled, SQLite-only: adds a column if a model gained one since the local
+# db file was created, so old dev/test files don't error. It never drops or
+# renames, so it's safe on every startup. On Postgres, schema changes go through
+# Alembic (see alembic/README) instead — do NOT extend this list further; add an
+# Alembic revision.
 # --------------------------------------------------------------------------
 
 _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [

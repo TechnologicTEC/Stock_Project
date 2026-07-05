@@ -89,6 +89,10 @@ investment-platform/
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
 │                             #   a ticker, to check against screener.py's
 │                             #   metric-key candidate lists (see below)
+├── alembic/                # Postgres schema migrations (SQLite/tests use create_all)
+│   ├── env.py              #   wired to DATABASE_URL + db.models.Base
+│   └── versions/           #   5d7e93f6a306 = baseline schema; see alembic/README
+├── alembic.ini
 ├── .env.example
 ├── .gitignore
 ├── pytest.ini

@@ -50,6 +50,9 @@ google-genai>=1.0
 # deploy — see multi_user_plan.md), set DATABASE_URL and install this driver;
 # Supabase's postgresql:// URL works as-is with psycopg2-binary.
 psycopg2-binary>=2.9
+# Schema migrations (Postgres). Baseline + workflow: alembic/README. On SQLite
+# (local/tests) the app just uses create_all, so this is only needed for Postgres.
+alembic>=1.13
 
 # --- Per-user secrets (bring-your-own-keys) ---
 # Fernet encryption for the per-user API-key vault (multi_user_plan.md, Phase C).

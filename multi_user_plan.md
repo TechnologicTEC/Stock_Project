@@ -23,8 +23,18 @@ path spelled out.
 >   `BYPASSRLS`, so today RLS's active value is closing the Supabase auto-API
 >   surface; the per-user policy becomes real app-level enforcement once
 >   `DATABASE_URL` points at a least-privilege role (see Open questions).
->   Pending: Alembic (still hand-rolled SQLite migrations + create_all); `NOT NULL`
->   on `user_id`; cache tables need an allow-all policy before a least-priv switch.
+> - **Alembic (done):** migrations now manage the Postgres schema. `alembic/env.py`
+>   reads `DATABASE_URL` and targets `db.models.Base`; baseline `5d7e93f6a306`
+>   captures the full table set (incl. the composite watchlist unique). The live
+>   Supabase DB was `stamp`ed to it and `alembic check` reports no drift; a fresh
+>   `alembic upgrade head` builds the schema from scratch. `init_db()` auto-stamps
+>   a freshly create_all'd Postgres DB so migrations and create_all don't collide
+>   (`_ensure_alembic_stamp`). SQLite/tests still just use create_all; the old
+>   hand-rolled column migration stays but is SQLite-only and frozen (new changes
+>   go through Alembic). RLS is NOT in migrations — it stays idempotent in
+>   `_apply_postgres_rls`. See `alembic/README`.
+>   Pending: `NOT NULL` on `user_id` (now unblocked — first real Alembic revision);
+>   cache tables need an allow-all policy before a least-priv-role switch.
 > - **Phase B:** `engine/auth.py` (roles from `OWNER_EMAILS`/`FRIEND_EMAILS`
 >   allowlists, page-access policy, user upsert, guest → shared seeded demo) and
 >   `app/_auth.py`'s `gate("<page_key>")`, wired into all 9 pages. Restricted
