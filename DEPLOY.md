@@ -1,27 +1,34 @@
 # Deploying to Hugging Face Spaces
 
-This deploys the app as a **Streamlit Space**. The whole app is configured by
-environment variables, and HF injects a Space's **Secrets** as env vars — so
-there's no `.streamlit/secrets.toml` to manage for Stage 1.
+This deploys as a **Docker Space** (`Dockerfile` + `entrypoint.sh`), configured
+entirely by environment variables — HF injects a Space's **Secrets** as env vars.
 
-> ⚠️ **Security — keep the Space PRIVATE until Google OIDC is wired (Stage 2).**
-> With no login configured, an anonymous visitor is treated as the **bootstrap
-> owner** — i.e. *your* data and *your* env-fallback API keys. That's fine on a
-> private Space (only you can open it); on a public one it would hand your
-> account to anyone. Do Stage 1 private; only go public once Stage 2 (OIDC) is in.
+**Why Docker, not the Streamlit SDK** (both learned the hard way):
+- The Streamlit SDK served a **blank page** — it installs+serves its own Streamlit,
+  and a second copy from `requirements.txt` made the frontend `/static/*` 404.
+- Streamlit reads its Google-OIDC `[auth]` config at **server startup**; HF gives
+  secrets as env vars, and an in-app shim writes `secrets.toml` too late. The
+  Docker `entrypoint.sh` writes it from `AUTH_*` env vars *before* launching
+  Streamlit, so OIDC actually works.
 
-The Space's config lives in the YAML front matter at the top of `README.md`
-(`sdk: streamlit`, `app_file: app/main.py`, and a `preload_from_hub` for the
-FinBERT model so sentiment doesn't download it at runtime).
+> ⚠️ **This Space must be PUBLIC, which means login must be enforced.** A *private*
+> Space can't render (HF's authed iframe blocks Streamlit's static assets). A
+> *public* Space with **no** login makes every visitor the bootstrap **owner**
+> (your data + keys). So: run it public **with Google OIDC** (below), or as an
+> interim set `REQUIRE_LOGIN=1` so visitors are forced to guest.
+
+The Space config is the YAML front matter in `README.md` (`sdk: docker`,
+`app_port: 8501`).
 
 ---
 
-## Stage 1 — private Space (owner-only)
+## Stage 1 — the Space + secrets
 
-### 1. Create the Space
-huggingface.co → **New Space** → SDK **Streamlit** → Visibility **Private** →
-pick `cpu-basic` (free). Name it, e.g. `investment-co-pilot`. This gives you a git
-repo at `https://huggingface.co/spaces/<hf-username>/<space-name>`.
+### 1. The Space
+Already created at `https://huggingface.co/spaces/Delta247/Investment-Project`.
+Because `README.md`'s front matter says `sdk: docker`, pushing this repo makes HF
+rebuild it as a Docker Space (`cpu-basic`, free). To make a new one from scratch:
+**New Space → Docker → Blank**, then `git push` this repo to it.
 
 ### 2. Set the Secrets
 Space → **Settings** → **Variables and secrets** → **New secret** for each. Mark
@@ -39,43 +46,40 @@ them **secret** (not public "variable"):
 | `OWNER_EMAILS` | your email | Harmless now; needed for Stage 2. |
 | `HF_TOKEN` | a free HF read token | Optional — quieter/faster FinBERT download. |
 
+Also set **`REQUIRE_LOGIN` = `1`** until OIDC (Stage 2) is verified — it forces
+anonymous visitors to guest so no one lands as you on the public Space.
+
 **Do NOT set on HF:** `ADMIN_DATABASE_URL` and `APP_DB_PASSWORD` (laptop-only —
-they're for running migrations / provisioning the role, which HF never does), and
-`DEV_LOGIN_EMAIL` / `REQUIRE_LOGIN`. (The data-source keys above work because the
-deployed app runs as the owner, whose credentials fall back to the process env —
-see `engine/credentials.py`.)
+for migrations / provisioning the role, which HF never does) and `DEV_LOGIN_EMAIL`.
 
 ### 3. Push the code
-From the repo root:
+The `space` remote is already set. From the repo root:
 ```bash
-git remote add space https://huggingface.co/spaces/<hf-username>/<space-name>
 git push space main
 ```
 Git will ask for your HF username + an **access token** (huggingface.co →
-Settings → Access Tokens, `write` scope) as the password. (Or run
-`huggingface-cli login` first to store it.)
+Settings → Access Tokens, `write` scope) as the password.
 
 ### 4. First build & open
-The **Building** logs will install `torch`/`transformers` and preload FinBERT —
-the first build is slow (~10–20 min). When it flips to **Running**, open the App
-tab. Because it runs as the bootstrap owner against the same Supabase DB, you'll
-see the **same data as your local app**.
+The **Building** logs run the `Dockerfile` (install CPU `torch` + deps) — the
+first build is slow (~10–20 min); later builds are cached. When it flips to
+**Running**, open the **direct** URL `https://delta247-investment-project.hf.space`.
 
 ### 5. Verify
-- App loads without an exception; the sidebar shows all pages.
-- Portfolio/Health show your real holdings (proves `DATABASE_URL` works).
-- Screener/News fetch data (proves the data-source keys work).
-- Settings page loads (proves `APP_ENCRYPTION_KEY` is valid).
+- App loads without an exception; the sidebar shows the pages.
+- With `REQUIRE_LOGIN=1` you get the login / "Continue as guest" prompt.
+- After OIDC (Stage 2), signing in as an owner email shows your real holdings
+  (proves `DATABASE_URL`), Screener/News fetch data (data-source keys), and the
+  Settings page loads (proves `APP_ENCRYPTION_KEY`).
 
 ### Troubleshooting
-- **`sdk_version` unsupported** → bump it in `README.md` to the version HF names
-  in the error (or the latest it lists), commit, push.
-- **Build times out / OOM** → raise `startup_duration_timeout` in the front
-  matter (e.g. `1h`) and/or bump hardware to `cpu-upgrade`. You can also drop
-  `preload_from_hub` to shrink the build (FinBERT then downloads on first use).
-- **DB connection error in logs** → re-check the `DATABASE_URL` secret (session
-  pooler, port 5432, no leftover `[ ]` around the password).
+- **Build times out / OOM** → raise `startup_duration_timeout` (e.g. `1h`) in the
+  front matter and/or bump hardware to `cpu-upgrade`.
+- **App errors on boot** → open **Container logs**; a Python traceback points at a
+  bad secret (most often `DATABASE_URL` — session pooler, port 5432, no leftover
+  `[ ]` around the password).
 - **No data on pages** → the data-source key secrets are missing/typo'd.
+- **`[auth]` line in Container logs** tells you the OIDC state (see Stage 2).
 
 ---
 
@@ -91,9 +95,12 @@ the owner). Two safe states:
   can't sign in as *yourself* yet; that's what OIDC below adds.)
 - **Full:** Google OIDC, below. Then owner/friends sign in; everyone else is a guest.
 
-The shim is already in the code (`app/_auth.py:_ensure_auth_secrets`): when the
-`AUTH_*` env vars are set it writes `.streamlit/secrets.toml`'s `[auth]` block at
-startup, so `st.login()` works on HF (whose secrets are env vars, not a file).
+The wiring is already in the code: `entrypoint.sh` calls
+`app/_auth.py:_ensure_auth_secrets`, which writes `.streamlit/secrets.toml`'s
+`[auth]` block from the `AUTH_*` env vars **before Streamlit starts** — so
+`st.login()` sees the OIDC config at server boot (the reason this needs the Docker
+SDK, not the Streamlit SDK). It logs an `[auth]` line to the Container logs telling
+you whether it wrote the config (safe — names/paths only, never values).
 
 ### 1. Google OAuth client
 Google Cloud Console → **APIs & Services**:

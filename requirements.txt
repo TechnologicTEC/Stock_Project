@@ -1,9 +1,8 @@
 # --- Core app ---
-# NOTE: `streamlit` is intentionally NOT listed here. On Hugging Face Spaces the
-# Streamlit SDK installs AND serves Streamlit itself (per `sdk_version` in the
-# README front matter); listing it here too installs a second copy whose frontend
-# assets don't match the SDK-served page → /static/*.js 404 → blank white app.
-# For local dev / tests, Streamlit is in requirements-dev.txt (kept == sdk_version).
+# Pinned so the Docker Space and local dev run the exact same Streamlit. We deploy
+# via the Docker SDK (see Dockerfile / DEPLOY.md), not the Streamlit SDK, so
+# Streamlit is a normal dependency installed from this file.
+streamlit==1.58.0
 plotly>=5.24
 pandas>=2.2
 numpy>=2.0                  # used directly by engine/health.py (Phase 3); also pandas/pandas-ta-classic's own dependency

@@ -1,0 +1,5 @@
+# Shell scripts and the Dockerfile must stay LF, or the Linux container can't
+# execute them (a trailing \r breaks the shebang / commands).
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+Dockerfile text eol=lf

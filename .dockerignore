@@ -1,0 +1,11 @@
+# Keep the build context (and image) small and free of local-only files.
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+.streamlit/secrets.toml
+db/investment.db
+tests

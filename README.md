@@ -3,18 +3,17 @@ title: Investment Co-Pilot
 emoji: 📈
 colorFrom: green
 colorTo: blue
-sdk: streamlit
-sdk_version: 1.58.0
-app_file: app/main.py
+sdk: docker
+app_port: 8501
 pinned: false
 short_description: Personal, browser-based investment co-pilot (free-tier data)
-preload_from_hub:
-  - ProsusAI/finbert
 ---
 
-<!-- The YAML block above configures the Hugging Face Space (Streamlit SDK) and is
-ignored by GitHub. Deployment steps + secrets: DEPLOY.md. KEEP THE SPACE PRIVATE
-until Google OIDC is wired — a public Space without login exposes the owner account. -->
+<!-- The YAML block above configures the Hugging Face Space (Docker SDK — see
+Dockerfile + entrypoint.sh) and is ignored by GitHub. Deployment steps + secrets:
+DEPLOY.md. The Space must be PUBLIC with Google OIDC configured (AUTH_* secrets);
+a private Space can't serve Streamlit's static assets, and a public one without
+login would expose the owner account (use REQUIRE_LOGIN=1 as an interim). -->
 
 # Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4 + Phase 5
 
