@@ -60,18 +60,37 @@ def _auth_secrets_toml() -> str | None:
     )
 
 
+_AUTH_ENV_VARS = ("AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET", "AUTH_REDIRECT_URI", "AUTH_COOKIE_SECRET")
+
+
 def _ensure_auth_secrets() -> None:
     body = _auth_secrets_toml()
     if body is None:
-        return  # no env-provided OIDC config (local/tests) — leave things alone
-    path = _PROJECT_ROOT / ".streamlit" / "secrets.toml"
-    try:
-        if path.exists() and "[auth]" in path.read_text(encoding="utf-8"):
-            return  # a real secrets.toml already configures auth — don't clobber it
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
-    except Exception:
-        pass  # never crash the app over this; login just stays unconfigured
+        # If SOME AUTH_* vars are set but not all, that's a misconfiguration worth
+        # surfacing in the host logs (names only — never values).
+        present = [k for k in _AUTH_ENV_VARS if os.environ.get(k)]
+        if present:
+            missing = [k for k in _AUTH_ENV_VARS if not os.environ.get(k)]
+            print(f"[auth] OIDC NOT enabled — missing env vars: {missing}", file=sys.stderr)
+        return
+    # Write where Streamlit looks for secrets. On hosts like HF Spaces the app dir
+    # may be read-only, but the home dir is writable and Streamlit also reads
+    # ~/.streamlit/secrets.toml — so try both and don't clobber a real hand-written
+    # one. The log line tells us (in the Container logs) whether this actually took.
+    wrote, errs = [], []
+    for base in (Path.home(), _PROJECT_ROOT):
+        path = base / ".streamlit" / "secrets.toml"
+        try:
+            if path.exists() and "[auth]" in path.read_text(encoding="utf-8"):
+                wrote.append(str(path))
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            wrote.append(str(path))
+        except Exception as exc:  # never crash the app over this
+            errs.append(f"{path}: {exc}")
+    print(f"[auth] OIDC enabled — secrets written to {wrote or 'NOWHERE'}"
+          + (f"; errors: {errs}" if errs else ""), file=sys.stderr)
 
 
 _ensure_auth_secrets()
