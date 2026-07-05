@@ -178,10 +178,24 @@ def _pg_role_exists(conn, role: str) -> bool:
     return conn.execute(text("select 1 from pg_roles where rolname = :r"), {"r": role}).first() is not None
 
 
+def _can_manage_rls(conn) -> bool:
+    """Only the table owner (or a superuser) may ALTER / CREATE POLICY. When the
+    app connects as the least-privilege runtime role it is NOT the owner, so RLS
+    setup is skipped here — it's applied by the admin/migration role instead
+    (scripts/setup_app_role.py, or init_db run as the owner)."""
+    return bool(conn.execute(text(
+        "select pg_get_userbyid(relowner) = current_user "
+        "or coalesce((select rolsuper from pg_roles where rolname = current_user), false) "
+        "from pg_class where relname = 'holdings' limit 1"
+    )).scalar())
+
+
 def _apply_postgres_rls(engine: Engine) -> None:
     if engine.url.get_backend_name() != "postgresql":
         return
     with engine.begin() as conn:
+        if not _can_manage_rls(conn):
+            return  # least-privilege runtime role: RLS is managed by the admin role
         present_api_roles = [r for r in ("anon", "authenticated") if _pg_role_exists(conn, r)]
 
         # `users` has no user_id: lock it away from the API roles, no per-user

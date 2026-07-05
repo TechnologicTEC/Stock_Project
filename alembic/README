@@ -25,6 +25,8 @@ FRESH POSTGRES DEPLOY
   (db/session.py:_ensure_alembic_stamp), so later `alembic upgrade head` applies
   only NEW revisions.
 
-BASELINE
-  5d7e93f6a306 (initial baseline schema) captures the full table set. The live
-  Supabase DB was created via create_all and `alembic stamp head`-ed to it.
+REVISION HISTORY
+  5d7e93f6a306  initial baseline schema (full table set). The live Supabase DB
+                was created via create_all and `alembic stamp`-ed to this.
+  f6ce2dbad4ac  user_id NOT NULL on the 7 user-owned tables (backfills legacy
+                NULLs to the bootstrap owner first).

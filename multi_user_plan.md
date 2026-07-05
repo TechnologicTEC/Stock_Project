@@ -33,8 +33,27 @@ path spelled out.
 >   hand-rolled column migration stays but is SQLite-only and frozen (new changes
 >   go through Alembic). RLS is NOT in migrations — it stays idempotent in
 >   `_apply_postgres_rls`. See `alembic/README`.
->   Pending: `NOT NULL` on `user_id` (now unblocked — first real Alembic revision);
->   cache tables need an allow-all policy before a least-priv-role switch.
+ - **`user_id` NOT NULL (done):** revision `f6ce2dbad4ac` (the first real Alembic
+>   change) enforces `NOT NULL` on `user_id` across all 7 user-owned tables, with
+>   a pre-`ALTER` backfill of any legacy `NULL` rows to the bootstrap owner (a
+>   no-op on this always-multi-user DB). Models updated to non-optional; verified
+>   reversible on SQLite and applied to the live DB (`alembic check` clean, live
+>   ORM insert still stamps + satisfies the constraint). `user_credentials.user_id`
+>   was already NOT NULL.
+> - **Least-privilege runtime role (provisioned + verified; flip is manual):**
+>   `scripts/setup_app_role.py` (run as the `postgres` owner) creates a confined
+>   `copilot_app` role — NOLOGIN until `APP_DB_PASSWORD` is set, NOBYPASSRLS,
+>   DML+sequence grants only, no DDL — plus permissive `TO copilot_app` policies
+>   on the shared tables it needs across users (`users` for auth + the 4 caches);
+>   the per-user tables keep `app_user_isolation`. Verified via `SET ROLE
+>   copilot_app` on the live DB: it sees only the current `app.user_id`'s rows
+>   (RLS actually bites), `WITH CHECK` blocks cross-user inserts, and auth/caches
+>   still work. `init_db`'s RLS setup is now owner-gated (`_can_manage_rls`) so it
+>   no-ops under the confined role; `alembic/env.py` prefers `ADMIN_DATABASE_URL`
+>   so migrations keep DDL rights. **To actually flip the app onto it:** set
+>   `APP_DB_PASSWORD` + re-run the script (enables LOGIN), set `ADMIN_DATABASE_URL`
+>   to the postgres URL, and point `DATABASE_URL` at `copilot_app` (owner action —
+>   needs the pooler `copilot_app.<ref>` username form).
 > - **Phase B:** `engine/auth.py` (roles from `OWNER_EMAILS`/`FRIEND_EMAILS`
 >   allowlists, page-access policy, user upsert, guest → shared seeded demo) and
 >   `app/_auth.py`'s `gate("<page_key>")`, wired into all 9 pages. Restricted

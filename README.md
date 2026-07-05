@@ -85,6 +85,7 @@ investment-platform/
 │       └── rss_client.py       # Google News RSS headlines (Phase 4)
 ├── tests/                  # 419 tests, all mocked - no API keys needed to run these
 ├── scripts/
+│   ├── setup_app_role.py    # Provision the least-privilege Postgres runtime role
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
 │                             #   a ticker, to check against screener.py's
@@ -241,7 +242,11 @@ tests.
   session variable set per transaction) on every user-owned table, and revokes
   Supabase's public API roles (`anon`/`authenticated`) so the auto-generated REST
   API can't reach your data. (The watchlist's uniqueness is per-user too, so two
-  users can each track the same ticker.)
+  users can each track the same ticker.) The app connects as `postgres` by
+  default, which *bypasses* RLS — so out of the box RLS is guarding the Supabase
+  API, and the app's own isolation is the ORM scoping. To make RLS enforce on the
+  app itself too, run `scripts/setup_app_role.py` and point `DATABASE_URL` at the
+  confined `copilot_app` role it creates (see the script + `multi_user_plan.md`).
 - **Keys are per-user and encrypted.** Each signed-in user enters their own keys
   on the **Settings** page; they're **Fernet-encrypted at rest** with
   `APP_ENCRYPTION_KEY` (keep that in the host secret store, never in the DB or

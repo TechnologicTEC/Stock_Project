@@ -30,7 +30,14 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_URL") or db_session._default_db_url()
+    # Migrations need DDL/ownership, so prefer the admin connection when the app
+    # itself runs as a least-privilege role (ADMIN_DATABASE_URL = the owner, e.g.
+    # postgres). Falls back to DATABASE_URL, then the local SQLite default.
+    return (
+        os.environ.get("ADMIN_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or db_session._default_db_url()
+    )
 
 
 def run_migrations_offline() -> None:

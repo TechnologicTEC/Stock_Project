@@ -79,7 +79,7 @@ class Holding(Base):
     __tablename__ = "holdings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     shares: Mapped[float] = mapped_column(Float)
     cost_basis: Mapped[float] = mapped_column(Float)
@@ -93,7 +93,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     type: Mapped[str] = mapped_column(String(4))  # "buy" / "sell"
     shares: Mapped[float] = mapped_column(Float)
@@ -110,7 +110,7 @@ class WatchlistItem(Base):
     __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     added_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -132,7 +132,7 @@ class Wallet(Base):
     __tablename__ = "wallet"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)  # one wallet row per user now
+    user_id: Mapped[int] = mapped_column(index=True)  # one wallet row per user now
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
@@ -152,7 +152,7 @@ class CashFlow(Base):
     __tablename__ = "cash_flows"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     type: Mapped[str] = mapped_column(String(8))  # "deposit" / "withdraw"
     amount: Mapped[float] = mapped_column(Float)
     date: Mapped[date_]
@@ -236,7 +236,7 @@ class ScreenerScore(Base):
     __tablename__ = "screener_scores"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     date: Mapped[date_] = mapped_column(index=True)
     overall_score: Mapped[float] = mapped_column(Float)
@@ -250,7 +250,7 @@ class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    user_id: Mapped[int] = mapped_column(index=True)
     strategy_config_json: Mapped[str] = mapped_column(Text)
     start_date: Mapped[date_]
     end_date: Mapped[date_]
