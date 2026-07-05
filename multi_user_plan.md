@@ -271,9 +271,20 @@ Today clients read `os.environ`. Introduce a single indirection:
 - Namespace per-user capability flags in `api_cache`.
 
 ### Phase D — Harden & deploy
-- Wire `app.user_id` on every connection; confirm RLS blocks cross-user reads
-  with a test.
-- Deploy (HF Spaces / Render / Railway) with all secrets in the host store.
+- ✅ Wire `app.user_id` on every connection; RLS blocks cross-user reads
+  (verified live via `SET ROLE copilot_app` — see the Phase-A-hardening status).
+- **Deploy (HF Spaces) — Stage 1 prepared (`DEPLOY.md`):** README has the
+  Streamlit-SDK front matter (`app_file: app/main.py`, FinBERT `preload_from_hub`);
+  the app is fully env-var-driven, so HF Space **Secrets** map straight onto it
+  (no `secrets.toml` needed for Stage 1). Runbook covers a **private** Space
+  (owner-only), the secret list, `git push space`, and verification. Boot-smoke
+  of `app/main.py` in the no-login path is a regression test now
+  (`tests/test_main_page.py`) — it caught a missing `gate` import that would have
+  crashed the deployed home page. **Stage 2 (public + Google OIDC)** is outlined
+  in `DEPLOY.md`: needs a Google OAuth client, a redirect URI, extra secrets, and
+  a startup shim to write `.streamlit/secrets.toml`'s `[auth]` from env (Streamlit
+  OIDC config is file-based). Security gate: keep the Space private until OIDC is
+  wired — anonymous → bootstrap owner otherwise.
 - Guest rate-limits; audit guest path can't reach keys or real data.
 
 ---

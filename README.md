@@ -1,3 +1,21 @@
+---
+title: Investment Co-Pilot
+emoji: 📈
+colorFrom: green
+colorTo: blue
+sdk: streamlit
+sdk_version: 1.58.0
+app_file: app/main.py
+pinned: false
+short_description: Personal, browser-based investment co-pilot (free-tier data)
+preload_from_hub:
+  - ProsusAI/finbert
+---
+
+<!-- The YAML block above configures the Hugging Face Space (Streamlit SDK) and is
+ignored by GitHub. Deployment steps + secrets: DEPLOY.md. KEEP THE SPACE PRIVATE
+until Google OIDC is wired — a public Space without login exposes the owner account. -->
+
 # Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4 + Phase 5
 
 Phase 0 (Section 7): data plumbing. Phase 1: Portfolio Dashboard. Phase 2:
@@ -94,6 +112,7 @@ investment-platform/
 │   ├── env.py              #   wired to DATABASE_URL + db.models.Base
 │   └── versions/           #   5d7e93f6a306 = baseline schema; see alembic/README
 ├── alembic.ini
+├── DEPLOY.md               # Deploying to Hugging Face Spaces (private-first runbook)
 ├── .env.example
 ├── .gitignore
 ├── pytest.ini
