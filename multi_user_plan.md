@@ -273,25 +273,23 @@ Today clients read `os.environ`. Introduce a single indirection:
 ### Phase D — Harden & deploy
 - ✅ Wire `app.user_id` on every connection; RLS blocks cross-user reads
   (verified live via `SET ROLE copilot_app` — see the Phase-A-hardening status).
-- **Deploy (HF Spaces) — live but requires public + OIDC (`DEPLOY.md`):** README
-  has the Streamlit-SDK front matter (`app_file: app/main.py`, FinBERT
-  `preload_from_hub`); the app is env-var-driven, so HF Space **Secrets** map
-  straight onto it. Deploy notes learned the hard way:
-  - `streamlit` must NOT be in `requirements.txt` — HF's Streamlit SDK installs +
-    serves it per `sdk_version`; a second pip copy makes the frontend `/static/*`
-    assets 404 (blank app). It lives in `requirements-dev.txt` for local/tests.
-  - **Private Spaces don't render.** HF serves a private Space in an authenticated
-    iframe that blocks Streamlit's own `/static/*` sub-resources → blank page
-    (confirmed: public renders, private doesn't). So the Space MUST be **public**,
-    which means login must be enforced or an anonymous visitor lands as the owner.
-  - Interim-safe public state: `REQUIRE_LOGIN=1` → visitors forced to guest.
+- **Deploy (HF Spaces) — DONE, live with working Google OIDC (`DEPLOY.md`):**
+  Deployed as a **Docker** Space at `Delta247/Investment-Project` (public, since a
+  private Space can't render — see below). Full details + runbook: `DEPLOY.md` and
+  memory `hf-deploy-docker-oidc`. Hard-won lessons:
+  - **Docker SDK, not Streamlit SDK.** (a) The Streamlit SDK served a blank page —
+    it installs+serves its own Streamlit, so a second copy from `requirements.txt`
+    404'd the frontend `/static/*`. (b) **Private Spaces don't render** — HF's authed
+    iframe blocks Streamlit's static assets (public renders, private doesn't). (c)
+    `st.login` reads `[auth]` at **server startup**, so an in-app shim writes
+    `secrets.toml` too late. Docker fixes all three: `Dockerfile` + `entrypoint.sh`
+    call `app/_auth.py:_ensure_auth_secrets` to write `.streamlit/secrets.toml` from
+    `AUTH_*` env vars **before** launching Streamlit; `streamlit` is a normal dep in
+    `requirements.txt` again.
+  - Public-safe interim before OIDC: `REQUIRE_LOGIN=1` → visitors forced to guest.
   - Boot-smoke of `app/main.py` is a regression test (`tests/test_main_page.py`) —
     it caught a missing `gate` import that would've crashed the deployed home page.
-  - **Google OIDC (implemented):** `app/_auth.py:_ensure_auth_secrets` writes
-    `.streamlit/secrets.toml`'s `[auth]` from `AUTH_*` env vars at import (Streamlit
-    OIDC config is file-based; HF gives env vars). Runbook §Stage 2 has the Google
-    OAuth client + redirect-URI + secret steps. `tests/test_auth.py` covers the
-    env→TOML shim. Pending: end-to-end OIDC verification on the live public Space.
+    `tests/test_auth.py` covers the env→TOML `[auth]` shim.
 - Guest rate-limits; audit guest path can't reach keys or real data.
 
 ---
