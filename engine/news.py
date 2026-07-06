@@ -15,6 +15,7 @@ scores.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from statistics import mean
@@ -86,6 +87,13 @@ def _fetch_all_sources(ticker: str, days: int) -> list[dict]:
     return articles
 
 
+def _title_key(headline: str) -> str:
+    """A normalized headline used to spot the *same story* arriving from different
+    feeds under different URLs (e.g. Finnhub's 'Yahoo' vs Google RSS's 'Yahoo
+    Finance'). Lowercased, punctuation stripped, whitespace collapsed."""
+    return re.sub(r"[^a-z0-9]+", " ", (headline or "").lower()).strip()
+
+
 def _to_datetime(value) -> datetime:
     """news_cache stores published_at as a datetime; the source clients hand us
     ISO strings. Convert, falling back to now() for anything unparseable."""
@@ -121,12 +129,19 @@ def ensure_fresh(ticker: str, days: int = NEWS_DEFAULT_DAYS, force: bool = False
     if not force and not cache.is_news_stale(ticker, NEWS_TTL_SECONDS):
         return 0
 
-    known_urls = {row["url"] for row in cache.get_cached_news(ticker, limit=1000)}
-    fresh: dict[str, dict] = {}  # de-dupe within this fetch by URL
+    cached = cache.get_cached_news(ticker, limit=1000)
+    known_urls = {row["url"] for row in cached}
+    seen_titles = {_title_key(row.get("headline")) for row in cached}
+    fresh: dict[str, dict] = {}  # de-dupe within this fetch by URL *and* title
     for article in _fetch_all_sources(ticker, days):
         url = article.get("url")
-        if url and url not in known_urls and url not in fresh:
-            fresh[url] = article
+        title = _title_key(article.get("headline"))
+        if not url or url in known_urls or url in fresh:
+            continue
+        if title and title in seen_titles:
+            continue  # same story from another feed under a different URL
+        seen_titles.add(title)
+        fresh[url] = article
 
     scored = _score_articles(list(fresh.values()))
     for article in scored:

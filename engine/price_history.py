@@ -19,6 +19,10 @@ DEFAULT_SOURCE = "yfinance"
 # business day -> fetch" otherwise re-hits the network on every page load (and
 # hangs when yfinance is blocked). Re-attempt a given end-date at most this often.
 _FETCH_RETRY_TTL_SECONDS = 6 * 60 * 60
+# If the cache already reaches within this many days of `end`, treat the trailing
+# gap as holidays/weekend/today (never-fills) and DON'T fetch — this is what keeps
+# a warm cache instant instead of chasing an unfetchable gap every render.
+_STALE_TOLERANCE_DAYS = 4
 
 
 def _yf_bars(ticker: str, start: date, end: date) -> list[dict]:
@@ -62,6 +66,9 @@ def ensure_cached(ticker: str, start: date, end: date, source: str = DEFAULT_SOU
     cached_dates = cache.get_cached_price_dates(ticker, source, start, end)
     if not (set(pd.bdate_range(start=start, end=end).date) - cached_dates):
         return
+    newest = max(cached_dates) if cached_dates else None
+    if newest is not None and (end - newest).days <= _STALE_TOLERANCE_DAYS:
+        return  # cache is current within a few days; the gap is holidays/weekend/today
     attempt_key = f"pricefetch:{ticker}:{source}:{end.isoformat()}"
     if cache.get_value(attempt_key, ttl_seconds=_FETCH_RETRY_TTL_SECONDS) is not None:
         return  # tried this range's tail recently; the gap is almost certainly holidays/today

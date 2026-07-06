@@ -30,7 +30,7 @@ def get_historical_ohlcv(ticker: str, start: date, end: date, interval: str = "1
             interval=interval,
             progress=False,
             auto_adjust=False,
-            timeout=20,
+            timeout=8,
         )
     except Exception:
         return []

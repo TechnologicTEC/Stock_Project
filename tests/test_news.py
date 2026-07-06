@@ -69,6 +69,20 @@ def test_analyze_ticker_merges_both_sources_and_dedupes_by_url():
     assert analysis.total_count == 1  # the duplicate URL is collapsed
 
 
+def test_analyze_ticker_dedupes_same_story_across_feeds_by_title():
+    # The same story from two feeds has *different* URLs and source labels
+    # ("Yahoo" vs "Yahoo Finance") — URL dedup misses it, title dedup collapses it
+    # (even across whitespace/punctuation differences).
+    finnhub = [_article("ASML A Top AI Stock to Buy", "http://finnhub/1", source="Yahoo")]
+    rss = [_article("ASML  a Top AI Stock to Buy!", "http://google/rss/2", source="Yahoo Finance")]
+    with patch("engine.news.finnhub_client.get_company_news", return_value=finnhub), \
+         patch("engine.news.rss_client.get_google_news", return_value=rss), \
+         _no_model():
+        analysis = news.analyze_ticker("ASML", force=True)
+
+    assert analysis.total_count == 1
+
+
 def test_analyze_ticker_survives_one_source_failing():
     with patch("engine.news.finnhub_client.get_company_news", side_effect=RuntimeError("rate limited")), \
          patch("engine.news.rss_client.get_google_news", return_value=[_article("From RSS", "http://x/9")]), \
