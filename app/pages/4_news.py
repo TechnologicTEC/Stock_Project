@@ -13,6 +13,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 import pandas as pd
 import streamlit as st
 
+from app import _cache
 from app._auth import gate
 from db.session import init_db
 from engine import earnings, news, portfolio, watchlist
@@ -58,7 +59,11 @@ view = st.radio("View", ["📰 News", "📈 Earnings"], horizontal=True, label_v
 if view == "📰 News":
     force = st.button("🔄 Refresh news", help="Fetch the latest headlines now instead of using the cache.")
     with st.spinner(f"Analyzing news for {ticker}…"):
-        analysis = news.analyze_ticker(ticker, force=force)
+        if force:
+            _cache.clear()  # drop the memoized copy so the refresh re-reads fresh data
+            analysis = news.analyze_ticker(ticker, force=True)
+        else:
+            analysis = _cache.news_analysis(ticker)
 
     st.caption(analysis.summary)
 

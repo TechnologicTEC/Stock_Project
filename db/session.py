@@ -97,6 +97,13 @@ def configure(database_url: str | None = None) -> Engine:
             # Without StaticPool, every new connection to ":memory:" gets its
             # own blank database — fine for SQLite on disk, broken for tests.
             kwargs["poolclass"] = StaticPool
+    else:
+        # Hosted Postgres (Supabase pooler): validate a pooled connection before
+        # use so a connection the pooler has silently dropped surfaces as a quick
+        # reconnect rather than a slow/failed request, and recycle connections
+        # before the pooler times them out.
+        kwargs["pool_pre_ping"] = True
+        kwargs["pool_recycle"] = 300
 
     _engine = create_engine(url, **kwargs)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)

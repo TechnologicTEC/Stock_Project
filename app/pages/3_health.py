@@ -13,8 +13,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from app import _cache
 from app._auth import gate
-from db.session import init_db
+from db.session import current_user_id, init_db
 from engine import health, news, portfolio, projections
 
 st.set_page_config(page_title="Health — Investment Co-Pilot", page_icon="📊", layout="wide")
@@ -37,7 +38,7 @@ lookback_label = st.radio(
 lookback_days = health.LOOKBACK_OPTIONS[lookback_label]
 
 with st.spinner("Computing health metrics..."):
-    report = health.get_health_report(lookback_days=lookback_days)
+    report = _cache.health_report(current_user_id(), lookback_days)
 
 st.caption(
     f"Based on {lookback_label} of history (as of {report.as_of.isoformat()}). Risk-free rate used for "

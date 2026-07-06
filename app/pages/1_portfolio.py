@@ -18,8 +18,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from app import _cache
 from app._auth import gate
-from db.session import init_db
+from db.session import current_user_id, init_db
 from engine import currency, portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
@@ -177,6 +178,7 @@ with st.expander("➕ Add a holding", expanded=False):
             try:
                 portfolio.add_holding(ticker, shares, cost_basis, purchase_date, asset_type)
                 st.success(f"Added {ticker}.")
+                _cache.clear()
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -194,6 +196,7 @@ with st.expander("📄 Import holdings from CSV", expanded=False):
         if result.errors:
             st.warning("Some rows were skipped:\n\n" + "\n".join(f"- {e}" for e in result.errors))
         if result.added:
+            _cache.clear()
             st.rerun()
 
 # --------------------------------------------------------------------------
@@ -213,6 +216,7 @@ with st.expander("👛 Wallet", expanded=False):
                 try:
                     portfolio.deposit_to_wallet(deposit_amount)
                     st.success(f"Deposited ${deposit_amount:,.2f}.")
+                    _cache.clear()
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
@@ -223,6 +227,7 @@ with st.expander("👛 Wallet", expanded=False):
                 try:
                     portfolio.withdraw_from_wallet(withdraw_amount)
                     st.success(f"Withdrew ${withdraw_amount:,.2f}.")
+                    _cache.clear()
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
@@ -263,6 +268,7 @@ if holdings:
                     f"Sold {result['shares_sold']} shares of {result['ticker']} for "
                     f"${result['proceeds']:,.2f} — credited to your wallet."
                 )
+                _cache.clear()
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -344,7 +350,7 @@ start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date(
 
 try:
     with st.spinner("Loading price history..."):
-        history = portfolio.get_value_history(start_date, today)
+        history = _cache.value_history(current_user_id(), start_date, today)
 except Exception as exc:
     history = []
     st.error(f"Couldn't load historical prices right now: {exc}")
@@ -422,6 +428,7 @@ else:
             try:
                 portfolio.delete_activity(*entry_options[entry_choice])
                 st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+                _cache.clear()
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -435,6 +442,7 @@ else:
         if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
             portfolio.reset_portfolio()
             st.success("Portfolio reset to an empty slate.")
+            _cache.clear()
             st.rerun()
 
 if not holdings:
@@ -557,6 +565,7 @@ with st.expander("🗑️ Remove a holding"):
     if st.button("Delete", type="secondary"):
         try:
             portfolio.delete_position(options[choice])
+            _cache.clear()
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))
