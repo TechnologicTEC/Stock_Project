@@ -205,7 +205,10 @@ class NewsCache(Base):
     ticker: Mapped[str] = mapped_column(String(10), index=True)
     headline: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(100))
-    url: Mapped[str] = mapped_column(String(500), unique=True)
+    # Text, not String(500): Google News RSS "articles" URLs are ~600+ chars and
+    # overflowed varchar(500) on Postgres (SQLite ignores the length, so it only
+    # showed up once deployed). Deduped by url in cache.save_news_articles.
+    url: Mapped[str] = mapped_column(Text, unique=True)
     published_at: Mapped[datetime]
     sentiment_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 

@@ -6,6 +6,7 @@ once instead of being copy-pasted.
 """
 from __future__ import annotations
 
+import os
 from datetime import date
 
 import pandas as pd
@@ -14,17 +15,60 @@ from engine import cache
 from engine.data_sources import yfinance_client
 
 DEFAULT_SOURCE = "yfinance"
+# Market holidays and *today* are weekdays that never get a bar, so "any missing
+# business day -> fetch" otherwise re-hits the network on every page load (and
+# hangs when yfinance is blocked). Re-attempt a given end-date at most this often.
+_FETCH_RETRY_TTL_SECONDS = 6 * 60 * 60
+
+
+def _yf_bars(ticker: str, start: date, end: date) -> list[dict]:
+    try:
+        return yfinance_client.get_historical_ohlcv(ticker, start, end)
+    except Exception:
+        return []
+
+
+def _alpaca_bars(ticker: str, start: date, end: date) -> list[dict]:
+    try:
+        from engine.data_sources import alpaca_client
+        if alpaca_client.is_configured():
+            return alpaca_client.get_historical_bars(ticker, start, end)
+    except Exception:
+        pass
+    return []
+
+
+def _fetch_bars(ticker: str, start: date, end: date) -> list[dict]:
+    """Daily OHLCV bars, trying two sources in order and returning the first
+    non-empty result. **yfinance** (no key) is primary by default so tests/local
+    keep their existing behaviour; set `PRICE_HISTORY_PREFER_ALPACA=1` (on a cloud
+    host like Hugging Face, where Yahoo blocks datacenter IPs) to try **Alpaca**'s
+    official API first instead — it works with the user's keys and is fast."""
+    sources = [_yf_bars, _alpaca_bars]
+    if os.environ.get("PRICE_HISTORY_PREFER_ALPACA"):
+        sources.reverse()
+    for fetch in sources:
+        bars = fetch(ticker, start, end)
+        if bars:
+            return bars
+    return []
 
 
 def ensure_cached(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> None:
-    """Fetches and caches any business days in [start, end] we don't already
-    have. Safe to call every time - it's a no-op once the range is covered."""
-    wanted_dates = set(pd.bdate_range(start=start, end=end).date)
+    """Fetches and caches any business days in [start, end] we don't already have.
+    A no-op once the range is covered; otherwise throttled (see above) so a
+    holiday/today gap doesn't trigger a network call on every render."""
+    ticker = ticker.upper()
     cached_dates = cache.get_cached_price_dates(ticker, source, start, end)
-    if wanted_dates - cached_dates:
-        bars = yfinance_client.get_historical_ohlcv(ticker, start, end)
-        if bars:
-            cache.save_price_bars(ticker, source, bars)
+    if not (set(pd.bdate_range(start=start, end=end).date) - cached_dates):
+        return
+    attempt_key = f"pricefetch:{ticker}:{source}:{end.isoformat()}"
+    if cache.get_value(attempt_key, ttl_seconds=_FETCH_RETRY_TTL_SECONDS) is not None:
+        return  # tried this range's tail recently; the gap is almost certainly holidays/today
+    cache.set_value(attempt_key, True)
+    bars = _fetch_bars(ticker, start, end)
+    if bars:
+        cache.save_price_bars(ticker, source, bars)
 
 
 def get_history_df(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> pd.DataFrame:

@@ -19,15 +19,22 @@ def get_historical_ohlcv(ticker: str, start: date, end: date, interval: str = "1
     dicts, oldest first. Empty list if yfinance has nothing for the range
     (bad ticker, weekend-only range, etc.) — callers should treat that as
     'no data', not raise on it."""
-    df = yf.download(
-        ticker.upper(),
-        start=start.isoformat(),
-        end=end.isoformat(),
-        interval=interval,
-        progress=False,
-        auto_adjust=False,
-    )
-    if df.empty:
+    # Yahoo throttles/blocks datacenter IPs (e.g. Hugging Face), where this can
+    # otherwise hang. A timeout makes it fail fast — callers treat an empty result
+    # as "no data" and fall back to whatever's already cached, rather than spinning.
+    try:
+        df = yf.download(
+            ticker.upper(),
+            start=start.isoformat(),
+            end=end.isoformat(),
+            interval=interval,
+            progress=False,
+            auto_adjust=False,
+            timeout=20,
+        )
+    except Exception:
+        return []
+    if df is None or df.empty:
         return []
 
     # yfinance returns MultiIndex columns when given a list of tickers, even

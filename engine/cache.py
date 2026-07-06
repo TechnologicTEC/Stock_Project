@@ -123,43 +123,40 @@ def save_price_bars(ticker: str, source: str, bars: list[dict]) -> int:
 
     bars: list of {"date": date, "open": float, "high": float,
                     "low": float, "close": float, "volume": int}
-    Returns the number of bars written (inserted or updated).
+    Returns the number of bars processed.
+
+    Uses a single atomic INSERT ... ON CONFLICT DO UPDATE so it's safe under
+    concurrency: a read-then-write loop races (two requests both read "not
+    cached", both insert → duplicate-key error on the unique constraint), which
+    surfaced on Postgres when the app and a cache pre-warm ran at once.
     """
     ticker = ticker.upper()
     if not bars:
         return 0
 
+    now = _utcnow()
+    rows = [
+        {"ticker": ticker, "date": b["date"], "open": b["open"], "high": b["high"],
+         "low": b["low"], "close": b["close"], "volume": b["volume"], "source": source,
+         "fetched_at": now}
+        for b in bars
+    ]
     with get_session() as session:
-        existing = {
-            row.date: row
-            for row in session.execute(
-                select(PriceCache).where(PriceCache.ticker == ticker, PriceCache.source == source)
-            ).scalars()
-        }
-        written = 0
-        for bar in bars:
-            row = existing.get(bar["date"])
-            if row is None:
-                session.add(
-                    PriceCache(
-                        ticker=ticker,
-                        date=bar["date"],
-                        open=bar["open"],
-                        high=bar["high"],
-                        low=bar["low"],
-                        close=bar["close"],
-                        volume=bar["volume"],
-                        source=source,
-                        fetched_at=_utcnow(),
-                    )
-                )
-            else:
-                row.open, row.high, row.low = bar["open"], bar["high"], bar["low"]
-                row.close, row.volume = bar["close"], bar["volume"]
-                row.fetched_at = _utcnow()
-            written += 1
-
-    return written
+        if session.bind.dialect.name == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as _insert
+        else:
+            from sqlalchemy.dialects.postgresql import insert as _insert
+        stmt = _insert(PriceCache).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["ticker", "date", "source"],
+            set_={
+                "open": stmt.excluded.open, "high": stmt.excluded.high, "low": stmt.excluded.low,
+                "close": stmt.excluded.close, "volume": stmt.excluded.volume,
+                "fetched_at": stmt.excluded.fetched_at,
+            },
+        )
+        session.execute(stmt)
+    return len(bars)
 
 
 def get_price_history(ticker: str, source: str, start: date, end: date) -> list[dict]:
