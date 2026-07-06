@@ -1,8 +1,9 @@
 # --- Core app ---
 # Pinned so the Docker Space and local dev run the exact same Streamlit. We deploy
 # via the Docker SDK (see Dockerfile / DEPLOY.md), not the Streamlit SDK, so
-# Streamlit is a normal dependency installed from this file.
-streamlit==1.58.0
+# Streamlit is a normal dependency installed from this file. The [auth] extra
+# pulls in Authlib, which st.login() (Google OIDC) requires at runtime.
+streamlit[auth]==1.58.0
 plotly>=5.24
 pandas>=2.2
 numpy>=2.0                  # used directly by engine/health.py (Phase 3); also pandas/pandas-ta-classic's own dependency
