@@ -1,0 +1,33 @@
+name: Warm caches (after US market close)
+
+# Pre-fetches the day's price history + fundamentals into the shared Supabase
+# caches so the first login of the day is fast. See scripts/warm_cache.py.
+
+on:
+  schedule:
+    # 21:30 UTC on weekdays — shortly after the 4pm ET US close (works for both
+    # EST and EDT). GitHub cron is UTC and can run a few minutes late; that's fine.
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch: {}   # adds a manual "Run workflow" button for testing
+
+concurrency: warm-cache   # never overlap runs
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-warm.txt
+      - name: Warm price + fundamentals caches
+        env:
+          DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
+          PRICE_HISTORY_PREFER_ALPACA: "1"
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: python scripts/warm_cache.py

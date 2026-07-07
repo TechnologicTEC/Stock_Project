@@ -1,0 +1,12 @@
+# Minimal deps for the scheduled cache warm-up (scripts/warm_cache.py) in CI.
+# Deliberately NOT the full requirements.txt — the warm job needs no Streamlit,
+# torch, or transformers, so this keeps the GitHub Actions run fast.
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pandas>=2.2
+numpy>=2.0
+python-dotenv>=1.0
+requests>=2.31
+yfinance>=0.2          # price_history imports the yfinance client at module load
+finnhub-python>=2.4    # fundamentals
+alpaca-py>=0.30        # price history (preferred source on the cloud)

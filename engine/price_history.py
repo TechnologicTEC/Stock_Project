@@ -78,6 +78,16 @@ def ensure_cached(ticker: str, start: date, end: date, source: str = DEFAULT_SOU
         cache.save_price_bars(ticker, source, bars)
 
 
+def refresh(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> int:
+    """Fetch [start, end] and cache it **unconditionally**, bypassing the
+    ensure_cached freshness/holiday guard. For the scheduled warm job (which
+    *wants* the day's new bar) and any forced refresh. Returns bars fetched."""
+    bars = _fetch_bars(ticker.upper(), start, end)
+    if bars:
+        cache.save_price_bars(ticker, source, bars)
+    return len(bars)
+
+
 def get_history_df(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> pd.DataFrame:
     """Returns a DataFrame indexed by date with open/high/low/close/volume
     columns, calling ensure_cached() first. Empty DataFrame if nothing's
