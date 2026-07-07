@@ -7,6 +7,7 @@ __pycache__/
 
 # Secrets - never commit your real keys
 .env
+.env.bak
 .streamlit/secrets.toml
 
 # Local database and cache files - each collaborator runs their own
