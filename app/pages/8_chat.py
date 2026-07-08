@@ -40,14 +40,21 @@ else:
 
 with st.expander("💡 Things you can ask"):
     st.markdown(
-        "- *What's my portfolio worth?*\n"
-        "- *How am I doing overall?* / *Why is my portfolio down today?*\n"
-        "- *What's my biggest holding?*\n"
-        "- *How much of my portfolio is in AAPL?*\n"
-        "- *What are today's movers?*\n"
-        "- *How much cash do I have?* · *What's on my watchlist?*\n"
-        "- *How risky is my portfolio?*"
+        "**Your portfolio**\n"
+        "- *What's my portfolio worth?* · *How am I doing overall?*\n"
+        "- *What's my biggest holding?* · *How much of my portfolio is in AAPL?*\n"
+        "- *What are today's movers?* · *How much cash do I have?* · *What's on my watchlist?*\n\n"
+        "**What's moving — and why**\n"
+        "- *Why is my portfolio down today?* — the biggest movers **and the news around them**\n"
+        "- *Any news on ASML?* · *Is the whole market down today?*\n\n"
+        "**Deeper reads**\n"
+        "- *How does the screener rate PLTR?* · *How did NVDA's last earnings go?*\n"
+        "- *Am I beating the S&P this month?* · *What's my 1-year projected range?*\n"
+        "- *How risky is my portfolio?* · *What's my biggest concentration risk?*"
     )
+    if not chat_llm.is_available():
+        st.caption("The richer reads (news, screener, earnings, projections) need a `GEMINI_API_KEY`; "
+                   "without one I answer the top group only.")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
