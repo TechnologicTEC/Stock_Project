@@ -1,7 +1,9 @@
 name: Warm caches (after US market close)
 
-# Pre-fetches the day's price history + fundamentals into the shared Supabase
-# caches so the first login of the day is fast. See scripts/warm_cache.py.
+# Pre-fetches the day's price history, fundamentals + news (headlines + FinBERT
+# sentiment) into the shared Supabase caches so the first login of the day — and
+# the chat assistant's "why is my portfolio moving" answers — are fast.
+# See scripts/warm_cache.py. Set WARM_NEWS=0 below to skip news (and FinBERT).
 
 on:
   schedule:
@@ -15,18 +17,28 @@ concurrency: warm-cache   # never overlap runs
 jobs:
   warm:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25    # news scoring loads FinBERT (~first run downloads the model)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
+      # FinBERT weights (~400 MB) — cache so only the first run downloads them.
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-finbert-prosusai
+      # CPU-only torch: avoids pulling the ~2 GB CUDA build. Must precede the
+      # requirements install so its torch>=2.0 line is already satisfied.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r requirements-warm.txt
-      - name: Warm price + fundamentals caches
+      - name: Warm price + fundamentals + news caches
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
           PRICE_HISTORY_PREFER_ALPACA: "1"
+          WARM_NEWS: "1"
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}

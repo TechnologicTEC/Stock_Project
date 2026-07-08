@@ -34,6 +34,10 @@ SYSTEM_PROMPT = (
     "If a tool returns no data, say so plainly.\n"
     "- This is a personal, educational tool — NOT financial advice. Don't give buy/sell recommendations or "
     "price predictions; if asked, say you can summarise the data but not advise.\n"
+    "- When you explain a move using news, present the headlines as what's *around* the move, NOT a proven "
+    "cause — say e.g. 'in the news around this' rather than 'X fell because of Y'. The Screener rating is an "
+    "explainable score, not a recommendation; projections are a statistical range, not a forecast. Pass on "
+    "each tool's disclaimer when you use it.\n"
     "- Be concise and direct: a sentence or two with the key numbers. Money is in USD.\n"
     "- If a question isn't about the user's own portfolio/watchlist/cash/risk, briefly say what you can help "
     "with instead."
@@ -95,9 +99,81 @@ def get_health_summary() -> dict:
     return chat_tools.get_health_summary()
 
 
+def get_ticker_news(ticker: str) -> dict:
+    """Recent news headlines and sentiment for one ticker (the app's cached news). Use to
+    explain what's in the news around a stock.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. ASML.
+    """
+    return chat_tools.get_ticker_news(ticker)
+
+
+def whats_moving_and_why() -> dict:
+    """The portfolio's biggest movers today, each paired with its recent headlines — the
+    news AROUND each move (context, not a proven cause). Use to answer 'why is my
+    portfolio up/down today'."""
+    return chat_tools.whats_moving_and_why()
+
+
+def get_market_context() -> dict:
+    """Today's move in the S&P 500 (SPY) — tells you whether a portfolio move is
+    market-wide or stock-specific."""
+    return chat_tools.get_market_context()
+
+
+def get_screener_rating(ticker: str) -> dict:
+    """The Investment Screener's 0-100 score and Strong Buy..Strong Sell rating for one
+    ticker, with the per-factor breakdown. Educational only, not advice.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. PLTR.
+    """
+    return chat_tools.get_screener_rating(ticker)
+
+
+def get_recent_earnings(ticker: str) -> dict:
+    """The most recent earnings for a ticker: beat/miss versus estimates and the latest
+    release summary.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. NVDA.
+    """
+    return chat_tools.get_recent_earnings(ticker)
+
+
+def get_projection(subject: str = "portfolio", horizon: str = "1Y") -> dict:
+    """A statistical RANGE of outcomes (NOT a prediction) for the whole portfolio or a
+    single ticker, over a horizon.
+
+    Args:
+        subject: "portfolio" for the whole portfolio, or a ticker symbol.
+        horizon: one of "3M", "6M", "1Y", "2Y".
+    """
+    return chat_tools.get_projection(subject, horizon)
+
+
+def get_period_performance(period: str = "1M") -> dict:
+    """The portfolio's return over a period and the S&P 500's over the same window, so you
+    can see if it's beating the benchmark.
+
+    Args:
+        period: one of "1W", "1M", "3M", "6M", "1Y", "YTD".
+    """
+    return chat_tools.get_period_performance(period)
+
+
+def get_concentration_risk() -> dict:
+    """The portfolio's biggest concentrations (single stock, sector, asset type, country,
+    market cap) and which ones cross their risk thresholds."""
+    return chat_tools.get_concentration_risk()
+
+
 _TOOLS = [
     get_portfolio_value, get_portfolio_performance, get_holdings, get_biggest_holding,
     get_holding_weight, get_todays_movers, get_cash_balance, get_watchlist, get_health_summary,
+    get_ticker_news, whats_moving_and_why, get_market_context, get_screener_rating,
+    get_recent_earnings, get_projection, get_period_performance, get_concentration_risk,
 ]
 
 

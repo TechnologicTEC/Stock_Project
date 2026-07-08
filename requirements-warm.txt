@@ -1,6 +1,8 @@
-# Minimal deps for the scheduled cache warm-up (scripts/warm_cache.py) in CI.
-# Deliberately NOT the full requirements.txt — the warm job needs no Streamlit,
-# torch, or transformers, so this keeps the GitHub Actions run fast.
+# Deps for the scheduled cache warm-up (scripts/warm_cache.py) in CI.
+# Deliberately NOT the full requirements.txt — no Streamlit and no app UI stack.
+# It DOES include transformers+torch because the warm job now scores news with
+# FinBERT (set WARM_NEWS=0 to skip news; then torch/transformers go unused). The
+# workflow installs the CPU-only torch wheel so the run stays lean.
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
 pandas>=2.2
@@ -8,5 +10,8 @@ numpy>=2.0
 python-dotenv>=1.0
 requests>=2.31
 yfinance>=0.2          # price_history imports the yfinance client at module load
-finnhub-python>=2.4    # fundamentals
+finnhub-python>=2.4    # fundamentals + company news
 alpaca-py>=0.30        # price history (preferred source on the cloud)
+beautifulsoup4>=4.12   # Google News RSS parsing (engine/data_sources/rss_client.py)
+transformers>=4.40     # FinBERT news sentiment
+torch>=2.0             # FinBERT backend (CPU wheel installed by the workflow)
