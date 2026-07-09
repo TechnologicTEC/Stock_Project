@@ -1,0 +1,146 @@
+# Creator Signals — design & build plan
+
+**Status:** Phase 0 (spike) ✅ done — building not yet started.
+**Feature:** Automatically screen the stocks mentioned in a creator's new YouTube
+videos. When a new video lands, fetch its transcript, extract the tickers
+discussed (with stance), run them through the existing screener, and surface the
+results on a page.
+
+---
+
+## Decisions (confirmed)
+
+| # | Decision | Choice |
+|---|----------|--------|
+| 1 | Creator | **ZipTrader** — `https://www.youtube.com/@ZipTrader`, channel_id `UC0BGhWsIbV7Dm-lsvhdlMbA` |
+| 2 | Extraction | **LLM-primary (Gemini) + deterministic dictionary fallback** |
+| 3 | Watchlist | **Display-only, with a one-click "add to watchlist"** (no auto-add) |
+| 4 | Cadence | **Every 6 hours** |
+| 5 | Transcript blocking | **Direct fetch + retry** to start; add a proxy only if the runner is blocked |
+
+Design keys on `channel_id`, so adding more creators later is data, not code.
+
+---
+
+## Phase 0 spike — results (verified locally, 2026-07-09)
+
+Run from the local (residential) IP:
+
+- `@ZipTrader` → `UC0BGhWsIbV7Dm-lsvhdlMbA` (from the channel page's `<link rel="canonical">`).
+- Channel RSS `https://www.youtube.com/feeds/videos.xml?channel_id=UC0BGhWsIbV7Dm-lsvhdlMbA`
+  returns the latest ~15 videos. **It intermittently 404/500'd, then 200'd on retry** — the poll MUST retry.
+- `youtube-transcript-api` (v1.x) `YouTubeTranscriptApi().fetch(video_id)` returned a
+  full transcript (~25.6k chars) for a real ZipTrader video. Titles like "5 Stocks
+  To BUY HEAVY For July 2026" confirm the content is stock-dense.
+
+**Open risk:** all of the above worked from a residential IP. The **GitHub Actions
+runner uses a datacenter IP**, where YouTube may block the transcript endpoint.
+This is only provable by running the real workflow (Phase 4) — if blocked, add a
+proxy (`YT_PROXY_URL`) or the YouTube Data API captions path.
+
+---
+
+## Architecture
+
+Same producer/consumer shape as the warm-cache job:
+
+- **Producer** — a scheduled GitHub Actions script (`scripts/scan_creators.py`)
+  does the slow work: poll → transcript → extract → screen → write to DB.
+- **Consumer** — a Streamlit page reads the stored rows; users never wait on it.
+- Data is **global/shared** (everyone sees the same screens), so the new tables
+  behave like `price_cache` / `news_cache`: no per-user RLS. Only "add to
+  watchlist" is per-user.
+
+### New components
+
+| File | Responsibility |
+|------|----------------|
+| `engine/data_sources/youtube_client.py` | `latest_videos(channel_id)` (RSS + retry); `get_transcript(video_id)` (captions). Raw calls, no caching. |
+| `engine/data_sources/sec_tickers.py` | Fetch + cache SEC `company_tickers.json`; build `{normalized_name → ticker}` + `{ticker}` maps. |
+| `engine/ticker_extraction.py` | `extract_mentions(text) -> list[Mention]`. Gemini structured-output primary; dictionary + `$cashtag` fallback; then **validate** each candidate against a real quote. |
+| `engine/creator_signals.py` | Orchestrator `scan_creators()`: new videos → transcript → extract → `screener.screen_tickers` → persist. Idempotent. |
+| `db/models.py` (+ Alembic migration) | New tables (below). |
+| `scripts/scan_creators.py` | Cron entry-point (mirrors `scripts/warm_cache.py`). |
+| `.github/workflows/creator-signals.yml` | `cron: 0 */6 * * *` + `workflow_dispatch`, `concurrency: creator-signals`. |
+| `app/pages/9_creator_signals.py` | The display page. |
+| `app/_cache.py` | Cached reader for the page. |
+| `requirements-signals.txt` | Minimal deps for the cron (see below). |
+
+### Data model
+```
+creators          id, channel_id (unique), handle, display_name, active, added_at
+creator_videos    id, creator_id FK, video_id (unique), title, url, published_at,
+                  transcript_status (ok|no_captions|blocked|error), processed_at
+video_mentions    id, video_id FK, ticker, company_name,
+                  stance (bullish|bearish|neutral|unknown), confidence,
+                  screener_score, recommendation, screened_at
+```
+`video_id` unique = dedup key (never reprocess). `transcript_status=blocked` rows retry next run.
+
+### Pipeline (per cron run)
+1. For each active creator: GET the channel RSS (with retry) → recent `{video_id, title, published}`.
+2. Skip any `video_id` already stored. For each new one:
+3. `get_transcript(video_id)` → text, or record `no_captions`/`blocked` and continue.
+4. `extract_mentions(text)` → candidates `{ticker, company, stance, confidence}`.
+5. Validate each ticker resolves to a live quote (drops "IT/CEO/DD/A" etc.).
+6. `screener.screen_tickers([validated])` → score + recommendation.
+7. Persist `creator_videos` + `video_mentions` in one transaction.
+
+### Extraction (the hard part)
+- **LLM primary (Gemini):** transcript → structured JSON
+  `[{ticker, company, stance, confidence}]`. Quota-safe: runs **once per new
+  video** (~0–2/day), 1 call each — the 20/day limit that hurt interactive chat
+  is irrelevant here.
+- **Deterministic fallback (free):** SEC name↔ticker map + `$cashtags` + a
+  stop-list. Used when there's no key/quota. Mirrors the chat assistant's
+  LLM-with-fallback pattern.
+- **Validation gate (both):** confirm a real quote before storing — the biggest
+  false-positive killer.
+
+---
+
+## Guardrails (honesty)
+- Page reads *"stocks **mentioned** in ZipTrader's video"* — **mention ≠
+  endorsement** (he may be bearish; that's why we capture `stance`).
+- Screener scores keep the *"explainable score, not advice"* framing, same spirit
+  as the news "context, not cause" line.
+
+## Risks & mitigations
+
+| Risk | Likelihood | Mitigation |
+|------|-----------|-----------|
+| YouTube blocks transcript fetch from Actions IPs | **Med–High** | Retry next run; mark `blocked`; add proxy secret. Prove in Phase 4. |
+| RSS transient 404/500 | **Observed** | Retry loop in `latest_videos` |
+| Captions disabled on a video | Low–Med | Mark `no_captions`, skip (later: yt-dlp + faster-whisper) |
+| Ticker false positives | Medium | Dictionary + stop-list + quote-validation gate |
+| YouTube ToS (unofficial caption endpoint) | Low (personal use) | Noted; compliant path is Data API + OAuth |
+| Gemini quota | Low here | Once-per-video; deterministic fallback |
+
+## Testing
+All offline: mock RSS XML + `youtube-transcript-api`; feed the deterministic
+extractor fixed text + a tiny name map; mock the LLM path; mock screener + use the
+in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
+`blocked` retries.
+
+---
+
+## Phased rollout
+
+| Phase | Deliverable | Status |
+|------|-------------|--------|
+| 0 — Spike | Prove RSS + transcript work | ✅ done (locally) |
+| 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ☐ |
+| 2 | Extraction (dict + LLM) + validation + screening + store mentions | ☐ |
+| 3 | Creator Signals page (read-only) | ☐ |
+| 4 | GitHub Actions workflow — **confirms the cloud-IP transcript risk** | ☐ |
+| 5 — Polish | Stance display, multi-creator, add-to-watchlist, optional email digest | ☐ |
+
+## New dependencies (for the cron)
+`requirements-signals.txt`: `youtube-transcript-api>=1.0`, `feedparser` (or reuse
+`requests`+`beautifulsoup4`), plus the shared DB/screener deps already in
+`requirements-warm.txt`. (`youtube-transcript-api` was pip-installed locally
+during the Phase 0 spike.)
+
+## Cron secrets/vars
+`WARM_DATABASE_URL` (reuse — postgres/bypass), `GEMINI_API_KEY`,
+`FINNHUB_API_KEY`, optional `YT_PROXY_URL`.
