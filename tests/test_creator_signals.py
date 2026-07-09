@@ -4,13 +4,24 @@ videos, store them, dedupe, and leave transient failures unstored for retry.
 youtube_client is mocked; the DB is the in-memory SQLite from conftest.
 """
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import select
 
-from db.models import Creator, CreatorVideo
+from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
 from engine import creator_signals
+from engine.ticker_extraction import Mention
+
+
+@pytest.fixture(autouse=True)
+def _no_extraction_by_default():
+    """Most tests focus on video detection/storage — stub extraction out so they
+    don't hit the SEC list / LLM. The extraction tests below opt back in."""
+    with patch("engine.ticker_extraction.extract_mentions", return_value=[]):
+        yield
 
 
 def _video(vid, title="A video"):
@@ -78,3 +89,33 @@ def test_feed_failure_for_one_creator_does_not_crash():
         summary = creator_signals.scan_creators()
     assert summary["new_videos"] == 0
     gt.assert_not_called()
+
+
+def test_scan_extracts_and_screens_mentions():
+    mentions = [Mention("NVDA", "NVIDIA", "bullish", 0.9), Mention("AAPL", "Apple", "bearish", 0.9)]
+    results = [SimpleNamespace(ticker="NVDA", overall_score=80.0, recommendation="Buy"),
+               SimpleNamespace(ticker="AAPL", overall_score=55.0, recommendation="Hold")]
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
+         patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "transcript text")), \
+         patch("engine.ticker_extraction.extract_mentions", return_value=mentions), \
+         patch("engine.screener.screen_tickers", return_value=results):
+        summary = creator_signals.scan_creators()
+
+    with get_session() as s:
+        rows = {r.ticker: r for r in s.execute(select(VideoMention)).scalars()}
+    assert set(rows) == {"NVDA", "AAPL"} and summary["mentions"] == 2
+    assert rows["NVDA"].screener_score == 80.0 and rows["NVDA"].recommendation == "Buy"
+    assert rows["NVDA"].stance == "bullish" and rows["NVDA"].video_id == "AAA"
+
+
+def test_screen_failure_keeps_mentions_with_blank_scores():
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
+         patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "t")), \
+         patch("engine.ticker_extraction.extract_mentions",
+               return_value=[Mention("NVDA", "NVIDIA", "neutral", 0.9)]), \
+         patch("engine.screener.screen_tickers", side_effect=RuntimeError("api down")):
+        creator_signals.scan_creators()
+
+    with get_session() as s:
+        row = s.execute(select(VideoMention).where(VideoMention.ticker == "NVDA")).scalar_one()
+    assert row.screener_score is None and row.recommendation is None and row.stance == "neutral"

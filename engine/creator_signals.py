@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from db.models import Creator, CreatorVideo
+from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
+from engine import ticker_extraction
 from engine.data_sources import youtube_client
 from engine.time_utils import utcnow
 
@@ -48,6 +49,35 @@ def _already_stored(video_id: str) -> bool:
         ).scalar_one_or_none() is not None
 
 
+def _extract_and_screen(video_id: str, transcript: str, summary: dict) -> None:
+    """Pull the tickers discussed, snapshot each one's screener score, and store
+    `video_mentions` rows. Best-effort: a failure here never loses the video."""
+    from engine import screener  # local: heavy import kept off module load
+
+    mentions = ticker_extraction.extract_mentions(transcript)
+    if not mentions:
+        print("      mentions: none", flush=True)
+        return
+
+    scored = {}
+    try:
+        for r in screener.screen_tickers([m.ticker for m in mentions]):
+            scored[r.ticker] = r
+    except Exception as exc:
+        print(f"      screen FAILED (mentions kept, scores blank): {type(exc).__name__}: {exc}", flush=True)
+
+    with get_session() as s:
+        for m in mentions:
+            r = scored.get(m.ticker)
+            s.add(VideoMention(
+                video_id=video_id, ticker=m.ticker, company_name=m.company_name, stance=m.stance,
+                confidence=m.confidence, screener_score=(r.overall_score if r else None),
+                recommendation=(r.recommendation if r else None), screened_at=utcnow(),
+            ))
+    summary["mentions"] = summary.get("mentions", 0) + len(mentions)
+    print(f"      mentions: {', '.join(f'{m.ticker}[{m.stance}]' for m in mentions)}", flush=True)
+
+
 def _process_video(creator: Creator, video: dict, summary: dict) -> None:
     if _already_stored(video["video_id"]):
         return
@@ -67,6 +97,12 @@ def _process_video(creator: Creator, video: dict, summary: dict) -> None:
         ))
     chars = len(transcript) if transcript else 0
     print(f"    {video['video_id']} {status} ({chars} chars): {video['title'][:60]}", flush=True)
+
+    if status == "ok" and transcript:
+        try:
+            _extract_and_screen(video["video_id"], transcript, summary)
+        except Exception as exc:
+            print(f"      extract FAILED (video kept): {type(exc).__name__}: {exc}", flush=True)
 
 
 def scan_creators(video_limit: int = 15) -> dict:

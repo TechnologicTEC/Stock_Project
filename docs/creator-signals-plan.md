@@ -94,8 +94,19 @@ video_mentions    id, video_id FK, ticker, company_name,
 - **Deterministic fallback (free):** SEC name↔ticker map + `$cashtags` + a
   stop-list. Used when there's no key/quota. Mirrors the chat assistant's
   LLM-with-fallback pattern.
-- **Validation gate (both):** confirm a real quote before storing — the biggest
-  false-positive killer.
+- **Validation gate (both):** every candidate must be in the SEC ticker list —
+  the biggest false-positive killer.
+
+**Phase 2 finding (real ZipTrader transcript):** the deterministic fallback was
+badly noisy with single-word company-name matching — words the speaker uses
+constantly ("bullish", "honest", "people", "pattern") are also real company
+names, so a 25k-char transcript yielded ~16 tickers, most bogus. Fix: the
+deterministic path now matches **only** $cashtags, explicit uppercase symbols,
+and **multi-word** names — that cut the same transcript to a clean `[MBLY, META]`
+(0 false positives) but with **much lower recall** (misses Tesla/Alphabet/… said
+as lone lowercase words). So the LLM is not just "better" — it's **required for
+good recall**; the deterministic path is a precise-but-sparse safety net for when
+the Gemini key/quota is unavailable. Another reason to enable Gemini billing.
 
 ---
 
@@ -130,8 +141,8 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 |------|-------------|--------|
 | 0 — Spike | Prove RSS + transcript work | ✅ done (locally) |
 | 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ✅ done |
-| 2 | Extraction (dict + LLM) + validation + screening + store mentions | ☐ next |
-| 3 | Creator Signals page (read-only) | ☐ |
+| 2 | Extraction (dict + LLM) + validation + screening + store mentions | ✅ done |
+| 3 | Creator Signals page (read-only) | ☐ next |
 | 4 | GitHub Actions workflow — **confirms the cloud-IP transcript risk** | ☐ |
 | 5 — Polish | Stance display, multi-creator, add-to-watchlist, optional email digest | ☐ |
 
