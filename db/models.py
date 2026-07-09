@@ -259,3 +259,59 @@ class BacktestRun(Base):
     end_date: Mapped[date_]
     results_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+# --------------------------------------------------------------------------
+# Creator Signals (docs/creator-signals-plan.md) — auto-screen the stocks a
+# creator mentions in new YouTube videos. These tables are GLOBAL/shared (like
+# the caches above): no user_id, so they're deliberately kept OUT of
+# db.session._USER_SCOPED_MODELS and every user sees the same rows.
+# --------------------------------------------------------------------------
+
+class Creator(Base):
+    """A YouTube channel we watch for new stock-related videos."""
+
+    __tablename__ = "creators"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), unique=True)
+    handle: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    added_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class CreatorVideo(Base):
+    """One row per processed video. `video_id` (the YouTube id) is the dedup key
+    so a video is never reprocessed. `transcript` holds the fetched captions for
+    Phase 2 extraction; `transcript_status` is ok|no_captions|blocked|error."""
+
+    __tablename__ = "creator_videos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    creator_id: Mapped[int] = mapped_column(index=True)
+    video_id: Mapped[str] = mapped_column(String(20), unique=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    transcript_status: Mapped[str] = mapped_column(String(20))
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class VideoMention(Base):
+    """A ticker discussed in a video (Phase 2 populates this). One row per
+    (video, ticker). `stance` is bullish|bearish|neutral|unknown; screener_score
+    /recommendation snapshot the screener at extraction time."""
+
+    __tablename__ = "video_mentions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[str] = mapped_column(String(20), index=True)
+    ticker: Mapped[str] = mapped_column(String(10), index=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stance: Mapped[str] = mapped_column(String(12), default="unknown")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    screener_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    screened_at: Mapped[datetime | None] = mapped_column(nullable=True)

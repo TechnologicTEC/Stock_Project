@@ -129,8 +129,8 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 | Phase | Deliverable | Status |
 |------|-------------|--------|
 | 0 — Spike | Prove RSS + transcript work | ✅ done (locally) |
-| 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ☐ |
-| 2 | Extraction (dict + LLM) + validation + screening + store mentions | ☐ |
+| 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ✅ done |
+| 2 | Extraction (dict + LLM) + validation + screening + store mentions | ☐ next |
 | 3 | Creator Signals page (read-only) | ☐ |
 | 4 | GitHub Actions workflow — **confirms the cloud-IP transcript risk** | ☐ |
 | 5 — Polish | Stance display, multi-creator, add-to-watchlist, optional email digest | ☐ |
