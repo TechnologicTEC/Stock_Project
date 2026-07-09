@@ -52,19 +52,30 @@ def _find_ticker(question: str, known: set[str]) -> str | None:
 
 HELP_TEXT = (
     "I can answer questions about **your own portfolio** from the app's cached data. Try:\n"
-    "- *What's my portfolio worth?*\n"
-    "- *How am I doing overall?* / *Why is my portfolio down today?*\n"
-    "- *What's my biggest holding?*\n"
-    "- *How much of my portfolio is in AAPL?*\n"
-    "- *What are today's movers?*\n"
-    "- *How much cash do I have?* · *What's on my watchlist?*\n"
-    "- *How risky is my portfolio?*\n\n"
-    "I'm a deterministic assistant (not an LLM), so I stick to these and never make up numbers."
+    "- *What's my portfolio worth?* · *How am I doing overall?*\n"
+    "- *What's my biggest holding?* · *How much of my portfolio is in AAPL?*\n"
+    "- *Why is my portfolio down today?* · *Any news on ASML?*\n"
+    "- *Is the whole market down today?* · *How does the screener rate PLTR?*\n"
+    "- *How did NVDA's last earnings go?*\n"
+    "- *How much cash do I have?* · *What's on my watchlist?* · *How risky is my portfolio?*\n\n"
+    "I answer these from the app's own data (no AI key needed) and never make up numbers."
 )
 
 
 def _help(intent: str = "help") -> ChatResponse:
     return ChatResponse(HELP_TEXT, intent)
+
+
+def _llm_unavailable_note(exc: Exception) -> str | None:
+    """A user-facing heads-up when the LLM path failed for a *known transient*
+    reason — so a quota/rate-limit problem isn't silently disguised as a
+    (wrong-looking) deterministic answer. Returns None for unknown errors, which
+    still degrade quietly to the template."""
+    msg = str(exc).lower()
+    if any(k in msg for k in ("429", "resource_exhausted", "quota", "rate limit", "rate-limit")):
+        return ("⏳ *The AI assistant has hit its Gemini free-tier limit for now (it resets daily) — "
+                "here's a quick answer from the built-in responder:*")
+    return None
 
 
 def _no_holdings() -> ChatResponse:
@@ -167,6 +178,61 @@ def _answer_risk() -> ChatResponse:
     return ChatResponse(lead, "risk", h)
 
 
+def _answer_news(ticker: str) -> ChatResponse:
+    n = chat_tools.get_ticker_news(ticker)
+    heads = n.get("headlines") or []
+    if not heads:
+        return ChatResponse(f"I don't have any recent news cached for **{ticker}** right now.", "news", n)
+    score = n.get("overall_sentiment_0_100")
+    lead = f"Recent news for **{ticker}**" + (f" (overall sentiment {score}/100)" if score is not None else "") + ":"
+    lines = [lead]
+    for h in heads[:5]:
+        label = h.get("sentiment")
+        lines.append(f"- {h['headline']}" + (f" · _{label}_" if label else ""))
+    lines.append("\n*Headlines are what's in the news **around** this stock — context, not a proven cause of any move.*")
+    return ChatResponse("\n".join(lines), "news", n)
+
+
+def _answer_why() -> ChatResponse:
+    data = chat_tools.whats_moving_and_why(limit=3)
+    movers = data.get("movers") or []
+    if not movers:
+        return ChatResponse(data.get("note") or "I don't have today's price changes for your holdings right now.", "why")
+    lines = ["Here's what's moving your portfolio today, with the news around each move:"]
+    for m in movers:
+        heads = m.get("recent_headlines") or []
+        lines.append(f"- **{m['ticker']}** {_pct(m['day_change_pct'])}" + (f" — _{heads[0]}_" if heads else ""))
+    if data.get("disclaimer"):
+        lines.append(f"\n*{data['disclaimer']}*")
+    return ChatResponse("\n".join(lines), "why", data)
+
+
+def _answer_screener(ticker: str) -> ChatResponse:
+    r = chat_tools.get_screener_rating(ticker)
+    score = r.get("overall_score_0_100")
+    if score is None:
+        return ChatResponse(f"I couldn't get a screener rating for **{ticker}** right now.", "screener", r)
+    return ChatResponse(
+        f"The screener scores **{ticker}** at **{score}/100** — **{r.get('recommendation', 'n/a')}**. "
+        "*It's an explainable score from public data, not advice.*",
+        "screener", r)
+
+
+def _answer_earnings(ticker: str) -> ChatResponse:
+    e = chat_tools.get_recent_earnings(ticker)
+    if not e.get("has_release"):
+        return ChatResponse(f"I don't have a recent earnings release cached for **{ticker}**.", "earnings", e)
+    return ChatResponse(f"**{ticker}** — {e.get('summary') or 'no summary available.'}", "earnings", e)
+
+
+def _answer_market() -> ChatResponse:
+    m = chat_tools.get_market_context()
+    pct = m.get("today_pct")
+    if pct is None:
+        return ChatResponse("I can't read the S&P 500's move right now.", "market", m)
+    return ChatResponse(f"The broad market (**S&P 500**) is **{_updown(pct)}** today ({_pct(pct)}).", "market", m)
+
+
 # --------------------------------------------------------------------------
 # Router — most specific intents first
 # --------------------------------------------------------------------------
@@ -186,8 +252,12 @@ def answer(question: str, history: list[dict] | None = None) -> ChatResponse:
             text = chat_llm.answer(q, history=history)
             if text:
                 return ChatResponse(text, "llm")
-        except Exception:
-            pass  # network/rate-limit/refusal/old-SDK → deterministic fallback below
+        except Exception as exc:  # network/quota/refusal/old-SDK → deterministic fallback below
+            base = _template_answer(q)
+            note = _llm_unavailable_note(exc)  # tell the user when it's a known transient (e.g. quota)
+            if note:
+                return ChatResponse(f"{note}\n\n{base.text}", base.intent)
+            return base
 
     return _template_answer(q)
 
@@ -201,11 +271,36 @@ def _template_answer(question: str) -> ChatResponse:
     known = chat_tools.known_tickers()
     ticker = _find_ticker(q, known)
 
+    news_kw = "news" in ql or "headline" in ql
+    earnings_kw = any(k in ql for k in ("earnings", "eps", "beat estimate", "beat expectation"))
+    screener_kw = any(k in ql for k in ("screener", "rating", "screen")) or bool(re.search(r"\brate\b", ql))
+
     # A ticker + a "how much / weight / position" phrasing -> weight of that ticker.
     if ticker and any(k in ql for k in ("weight", "percent", "% ", "how much of", "position", "allocation")):
         return _answer_weight(ticker)
 
-    if any(k in ql for k in ("today", "mover", "moving", "why", "gainer", "loser", "drag", "lift")):
+    # Ticker-specific reads: "any news on X" / "why is X down" -> X's news;
+    # "X earnings" -> X's earnings; "rate X" -> X's screener score.
+    if ticker and (news_kw or "why" in ql):
+        return _answer_news(ticker)
+    if ticker and earnings_kw:
+        return _answer_earnings(ticker)
+    if ticker and screener_kw:
+        return _answer_screener(ticker)
+
+    # Portfolio-wide "why is it moving" / "any news" -> the movers + their headlines.
+    if "why" in ql or news_kw:
+        return _answer_why()
+
+    # Is the broad market up/down? (guarded so "beating the S&P"/"projected" — the
+    # LLM-only reads — don't get answered here with today's index move instead.)
+    if any(k in ql for k in ("s&p", "sp500", "sp 500", "the market", "whole market", "overall market",
+                             "broad market", "market down", "market up", "market doing")) \
+            and not any(k in ql for k in ("beating", "benchmark", "outperform", "underperform",
+                                          "projected", "projection", "forecast")):
+        return _answer_market()
+
+    if any(k in ql for k in ("today", "mover", "moving", "gainer", "loser", "drag", "lift")):
         return _answer_today()
 
     if any(k in ql for k in ("biggest", "largest", "top holding", "top position", "concentrated most")):

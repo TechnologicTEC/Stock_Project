@@ -53,8 +53,8 @@ with st.expander("💡 Things you can ask"):
         "- *How risky is my portfolio?* · *What's my biggest concentration risk?*"
     )
     if not chat_llm.is_available():
-        st.caption("The richer reads (news, screener, earnings, projections) need a `GEMINI_API_KEY`; "
-                   "without one I answer the top group only.")
+        st.caption("No `GEMINI_API_KEY` set — I answer everything above from the built-in responder except "
+                   "*projections* and *beating-the-benchmark*; those two (and free-form wording) use Gemini.")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
