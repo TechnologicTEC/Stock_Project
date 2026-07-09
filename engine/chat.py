@@ -50,6 +50,32 @@ def _find_ticker(question: str, known: set[str]) -> str | None:
     return None
 
 
+def _horizon_from_text(ql: str) -> str:
+    """A projection horizon (3M/6M/1Y/2Y) parsed from the question; 1Y default."""
+    if any(k in ql for k in ("2 year", "two year", "2y", "2-year")):
+        return "2Y"
+    if any(k in ql for k in ("6 month", "six month", "6-month", "half year")):
+        return "6M"
+    if any(k in ql for k in ("3 month", "three month", "3-month", "quarter")):
+        return "3M"
+    return "1Y"
+
+
+def _period_from_text(ql: str) -> str:
+    """A look-back period (1W/1M/3M/6M/1Y/YTD) parsed from the question; 1M default."""
+    if any(k in ql for k in ("ytd", "year to date", "this year")):
+        return "YTD"
+    if "week" in ql:
+        return "1W"
+    if any(k in ql for k in ("6 month", "six month", "6-month", "half year")):
+        return "6M"
+    if any(k in ql for k in ("3 month", "three month", "3-month", "quarter")):
+        return "3M"
+    if any(k in ql for k in ("1 year", "one year", "past year", "12 month", "1-year")):
+        return "1Y"
+    return "1M"
+
+
 HELP_TEXT = (
     "I can answer questions about **your own portfolio** from the app's cached data. Try:\n"
     "- *What's my portfolio worth?* · *How am I doing overall?*\n"
@@ -57,6 +83,7 @@ HELP_TEXT = (
     "- *Why is my portfolio down today?* · *Any news on ASML?*\n"
     "- *Is the whole market down today?* · *How does the screener rate PLTR?*\n"
     "- *How did NVDA's last earnings go?*\n"
+    "- *Am I beating the S&P this month?* · *What's my 1-year projected range?*\n"
     "- *How much cash do I have?* · *What's on my watchlist?* · *How risky is my portfolio?*\n\n"
     "I answer these from the app's own data (no AI key needed) and never make up numbers."
 )
@@ -233,6 +260,33 @@ def _answer_market() -> ChatResponse:
     return ChatResponse(f"The broad market (**S&P 500**) is **{_updown(pct)}** today ({_pct(pct)}).", "market", m)
 
 
+def _answer_projection(subject: str, horizon: str) -> ChatResponse:
+    p = chat_tools.get_projection(subject, horizon)
+    if p.get("median") is None:
+        return ChatResponse(p.get("note") or f"I don't have enough history to project {subject}.", "projection", p)
+    text = (
+        f"Over ~{p.get('horizon', horizon)}, {p.get('subject', subject)} has a modelled range of "
+        f"**{_money(p['range_low'])} to {_money(p['range_high'])}** (median {_money(p['median'])}). "
+        f"*{p.get('disclaimer', '')}*"
+    )
+    return ChatResponse(text, "projection", p)
+
+
+def _answer_period(period: str) -> ChatResponse:
+    d = chat_tools.get_period_performance(period)
+    if d.get("portfolio_return_pct") is None:
+        return ChatResponse(d.get("note") or "I don't have enough history for that window.", "period_performance", d)
+    lead = f"Over **{period}**, your portfolio is **{_pct(d['portfolio_return_pct'])}**"
+    spy = d.get("sp500_return_pct")
+    if spy is not None:
+        beat = d.get("beating_benchmark")
+        verdict = "ahead of" if beat else "behind" if beat is False else "level with"
+        lead += f" versus the S&P 500's {_pct(spy)} — you're **{verdict}** the benchmark."
+    else:
+        lead += " (no S&P comparison available for this window)."
+    return ChatResponse(lead, "period_performance", d)
+
+
 # --------------------------------------------------------------------------
 # Router — most specific intents first
 # --------------------------------------------------------------------------
@@ -274,6 +328,11 @@ def _template_answer(question: str) -> ChatResponse:
     news_kw = "news" in ql or "headline" in ql
     earnings_kw = any(k in ql for k in ("earnings", "eps", "beat estimate", "beat expectation"))
     screener_kw = any(k in ql for k in ("screener", "rating", "screen")) or bool(re.search(r"\brate\b", ql))
+    projection_kw = any(k in ql for k in ("projection", "projected", "project my", "range of outcome",
+                                          "expected range", "forecast", "monte carlo"))
+    benchmark_kw = any(k in ql for k in ("beating", "benchmark", "outperform", "underperform", "keeping up",
+                                         "vs the market", "versus the market", "vs the s&p", "versus the s&p",
+                                         "beat the market", "beat the s&p"))
 
     # A ticker + a "how much / weight / position" phrasing -> weight of that ticker.
     if ticker and any(k in ql for k in ("weight", "percent", "% ", "how much of", "position", "allocation")):
@@ -292,12 +351,19 @@ def _template_answer(question: str) -> ChatResponse:
     if "why" in ql or news_kw:
         return _answer_why()
 
-    # Is the broad market up/down? (guarded so "beating the S&P"/"projected" — the
-    # LLM-only reads — don't get answered here with today's index move instead.)
+    # Projected range (Monte-Carlo band) for a ticker or the whole portfolio.
+    if projection_kw:
+        return _answer_projection(ticker or "portfolio", _horizon_from_text(ql))
+
+    # "Am I beating the S&P over <period>?" -> portfolio return vs the benchmark.
+    if benchmark_kw:
+        return _answer_period(_period_from_text(ql))
+
+    # Is the broad market up/down? (guarded so "beating the S&P"/"projected" — handled
+    # just above — don't get answered here with today's index move instead.)
     if any(k in ql for k in ("s&p", "sp500", "sp 500", "the market", "whole market", "overall market",
                              "broad market", "market down", "market up", "market doing")) \
-            and not any(k in ql for k in ("beating", "benchmark", "outperform", "underperform",
-                                          "projected", "projection", "forecast")):
+            and not (benchmark_kw or projection_kw):
         return _answer_market()
 
     if any(k in ql for k in ("today", "mover", "moving", "gainer", "loser", "drag", "lift")):

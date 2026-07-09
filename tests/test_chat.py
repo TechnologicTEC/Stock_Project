@@ -117,6 +117,35 @@ def test_market_context_question():
     assert r.intent == "market" and "down" in r.text.lower()
 
 
+def test_projection_question_portfolio():
+    proj = {"subject": "your portfolio", "horizon": "1Y", "median": 1100.0, "range_low": 900.0,
+            "range_high": 1300.0, "disclaimer": "A statistical range — NOT a forecast."}
+    with _no_tickers(), patch("engine.chat.chat_tools.get_projection", return_value=proj) as mock_proj:
+        r = chat.answer("what's my 1-year projected range?")
+    assert r.intent == "projection"
+    assert "$900.00" in r.text and "$1,300.00" in r.text and "NOT a forecast" in r.text
+    assert mock_proj.call_args.args[0] == "portfolio" and mock_proj.call_args.args[1] == "1Y"
+
+
+def test_projection_question_for_ticker():
+    proj = {"subject": "ASML", "horizon": "6M", "median": 210.0, "range_low": 180.0, "range_high": 250.0,
+            "disclaimer": "..."}
+    with patch("engine.chat.chat_tools.known_tickers", return_value={"ASML"}), \
+         patch("engine.chat.chat_tools.get_projection", return_value=proj) as mock_proj:
+        r = chat.answer("what's the projected range for ASML over 6 months?")
+    assert r.intent == "projection"
+    assert mock_proj.call_args.args[0] == "ASML" and mock_proj.call_args.args[1] == "6M"
+
+
+def test_benchmark_comparison_question():
+    perf = {"period": "1M", "portfolio_return_pct": 10.0, "sp500_return_pct": 5.0, "beating_benchmark": True}
+    with _no_tickers(), patch("engine.chat.chat_tools.get_period_performance", return_value=perf) as mock_perf:
+        r = chat.answer("am I beating the S&P this month?")
+    assert r.intent == "period_performance"
+    assert "ahead of" in r.text and "+10.00%" in r.text
+    assert mock_perf.call_args.args[0] == "1M"
+
+
 def test_biggest_holding_question():
     with _no_tickers(), \
          patch("engine.chat.chat_tools.get_biggest_holding",
