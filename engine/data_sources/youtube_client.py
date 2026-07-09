@@ -63,16 +63,17 @@ def _parse_feed(content: bytes, limit: int) -> list[dict]:
     return out
 
 
-def latest_videos(channel_id: str, limit: int = 15, retries: int = 3) -> list[dict]:
-    """Recent uploads for a channel, newest first. Retries the flaky feed a few
-    times; raises if it never returns 200."""
+def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[dict]:
+    """Recent uploads for a channel, newest first. The feed is flaky (intermittent
+    404/500), so retry with a growing backoff; raises if it never returns 200. A
+    whole-run failure is self-healing — the videos are still 'new' next run."""
     last_status = None
     for attempt in range(retries):
         resp = requests.get(_FEED_URL, params={"channel_id": channel_id}, headers=_HEADERS, timeout=15)
         if resp.status_code == 200:
             return _parse_feed(resp.content, limit)
         last_status = resp.status_code
-        time.sleep(1.0 * (attempt + 1))
+        time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"YouTube feed for {channel_id} failed after {retries} tries (last HTTP {last_status})")
 
 

@@ -1,0 +1,18 @@
+# Deps for the scheduled Creator Signals scan (scripts/scan_creators.py) in CI.
+# Not the full requirements.txt — no Streamlit UI stack, and no torch/transformers
+# (this job doesn't score news with FinBERT). It DOES need the screener's stack
+# and the YouTube/extraction bits.
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pandas>=2.2
+numpy>=2.0
+pandas-ta-classic>=0.6   # screener technicals (engine/screener.py)
+python-dotenv>=1.0
+requests>=2.31
+beautifulsoup4>=4.12     # parses the YouTube RSS feed + SEC/news
+lxml>=5.0                # the parser BeautifulSoup(..., "xml") requires
+youtube-transcript-api>=1.0   # video captions
+finnhub-python>=2.4      # screener fundamentals / analyst data
+yfinance>=0.2            # screener price history
+alpaca-py>=0.30          # price history fallback on the cloud
+google-genai>=1.0        # LLM ticker extraction (falls back to the dictionary without a key)

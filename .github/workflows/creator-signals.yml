@@ -1,0 +1,37 @@
+name: Creator Signals (scan creators)
+
+# Every 6 hours: poll each creator's YouTube feed, transcribe new videos, extract
+# the stocks discussed, screen them, and store the results for the Creator
+# Signals page. See scripts/scan_creators.py.
+#
+# NOTE: this is the run that proves whether transcript fetching survives a
+# GitHub Actions (datacenter) IP — watch the logs for transcript_status=blocked.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours, on the hour (UTC)
+  workflow_dispatch: {}      # manual "Run workflow" button
+
+concurrency: creator-signals   # never overlap runs
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-signals.txt
+      - name: Scan creators + screen mentions
+        env:
+          DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
+          PRICE_HISTORY_PREFER_ALPACA: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}       # LLM extraction (dictionary fallback without it)
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC ticker list fetch (has a default UA otherwise)
+        run: python scripts/scan_creators.py

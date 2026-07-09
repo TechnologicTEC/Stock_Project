@@ -143,8 +143,24 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 | 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ✅ done |
 | 2 | Extraction (dict + LLM) + validation + screening + store mentions | ✅ done |
 | 3 | Creator Signals page (read-only) | ✅ done |
-| 4 | GitHub Actions workflow — **confirms the cloud-IP transcript risk** | ☐ next |
-| 5 — Polish | Stance display, multi-creator, add-to-watchlist, optional email digest | ☐ |
+| 4 | GitHub Actions workflow (`scripts/scan_creators.py` + `creator-signals.yml`) | ✅ built — **awaiting first real run to confirm the cloud-IP transcript risk** |
+| 5 — Polish | Multi-creator UI, email digest, extraction-retry flag, quote-based validation | ☐ optional |
+
+### To activate Phase 4
+1. `git push origin main` (workflow + script + reqs) and `git push space main` (deploys the page + tables).
+2. Add GitHub **repo secrets** — reuse the warm-cache ones (`WARM_DATABASE_URL`,
+   `FINNHUB_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`) and add two new:
+   `GEMINI_API_KEY` (LLM extraction — dictionary fallback without it) and
+   `EDGAR_USER_AGENT` (SEC list fetch — has a default UA otherwise).
+3. Manually trigger the workflow (Actions → Creator Signals → Run workflow) and
+   **watch the log for `transcript_status=blocked`** — that's the datacenter-IP
+   risk. If blocked, add a `YT_PROXY_URL` path; if `ok`, the feature is live.
+
+### Phase 4 local validation
+A bounded run proved the full chain: transcript (25.6k chars) → **LLM extraction
+found the video's 5 bullish picks** (RELY/DV/NOW/META/MBLY, correct stances) →
+live screener scores (RELY 68/Buy … MBLY 53/Hold) → stored. The LLM path (quota
+permitting) is dramatically better than the deterministic fallback.
 
 ## New dependencies (for the cron)
 `requirements-signals.txt`: `youtube-transcript-api>=1.0`, `feedparser` (or reuse
