@@ -125,3 +125,33 @@ def scan_creators(video_limit: int = 15) -> dict:
 
     print(f"\ndone: {summary}", flush=True)
     return summary
+
+
+def recent_signals(limit_videos: int = 12) -> list[dict]:
+    """Recent captioned videos and their screened mentions, newest first — the
+    read model for the Creator Signals page. Global/shared data (no user scope)."""
+    with get_session() as s:
+        creators = {c.id: (c.display_name or c.handle or c.channel_id)
+                    for c in s.execute(select(Creator)).scalars()}
+        rows = s.execute(
+            select(CreatorVideo).where(CreatorVideo.transcript_status == "ok")
+            .order_by(CreatorVideo.processed_at.desc()).limit(limit_videos * 3)
+        ).scalars().all()
+        rows.sort(key=lambda v: (v.published_at or v.processed_at), reverse=True)
+
+        out = []
+        for v in rows[:limit_videos]:
+            mentions = s.execute(
+                select(VideoMention).where(VideoMention.video_id == v.video_id)
+            ).scalars().all()
+            mentions.sort(key=lambda m: (m.screener_score is None, -(m.screener_score or 0.0), m.ticker))
+            out.append({
+                "video_id": v.video_id, "title": v.title, "url": v.url,
+                "published_at": v.published_at, "creator": creators.get(v.creator_id, "Unknown"),
+                "mentions": [{
+                    "ticker": m.ticker, "company_name": m.company_name, "stance": m.stance,
+                    "screener_score": m.screener_score, "recommendation": m.recommendation,
+                    "confidence": m.confidence,
+                } for m in mentions],
+            })
+    return out

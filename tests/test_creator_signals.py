@@ -119,3 +119,23 @@ def test_screen_failure_keeps_mentions_with_blank_scores():
     with get_session() as s:
         row = s.execute(select(VideoMention).where(VideoMention.ticker == "NVDA")).scalar_one()
     assert row.screener_score is None and row.recommendation is None and row.stance == "neutral"
+
+
+def test_recent_signals_orders_and_shapes_the_read_model():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+        s.add(CreatorVideo(creator_id=cid, video_id="AAA", title="Newer", url="http://y/AAA",
+                           transcript_status="ok", transcript="t", published_at=datetime(2026, 7, 8)))
+        s.add(CreatorVideo(creator_id=cid, video_id="BBB", title="Older", url="http://y/BBB",
+                           transcript_status="ok", transcript="t", published_at=datetime(2026, 7, 1)))
+        s.add(CreatorVideo(creator_id=cid, video_id="CCC", title="No caps", url="u",
+                           transcript_status="no_captions", published_at=datetime(2026, 7, 9)))
+        s.add(VideoMention(video_id="AAA", ticker="NVDA", stance="bullish", screener_score=80.0, recommendation="Buy"))
+        s.add(VideoMention(video_id="AAA", ticker="AAPL", stance="bearish", screener_score=90.0, recommendation="Hold"))
+
+    sigs = creator_signals.recent_signals()
+    assert [x["video_id"] for x in sigs] == ["AAA", "BBB"]           # newest first; no_captions excluded
+    assert sigs[0]["creator"] == "ZipTrader"
+    assert [m["ticker"] for m in sigs[0]["mentions"]] == ["AAPL", "NVDA"]   # higher screener score first
+    assert sigs[1]["mentions"] == []
