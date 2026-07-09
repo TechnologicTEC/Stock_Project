@@ -139,3 +139,61 @@ def test_recent_signals_orders_and_shapes_the_read_model():
     assert sigs[0]["creator"] == "ZipTrader"
     assert [m["ticker"] for m in sigs[0]["mentions"]] == ["AAPL", "NVDA"]   # higher screener score first
     assert sigs[1]["mentions"] == []
+
+
+# --------------------------------------------------------------------------
+# Phase 5: extraction retry flag + multi-creator management
+# --------------------------------------------------------------------------
+
+def test_extraction_retries_previously_unextracted_video():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+        s.add(CreatorVideo(creator_id=cid, video_id="AAA", title="t", url="u",
+                           transcript_status="ok", transcript="body"))  # mentions_extracted_at is NULL
+
+    # No NEW videos this run, but the pending one should still get extracted.
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[]), \
+         patch("engine.ticker_extraction.extract_mentions",
+               return_value=[Mention("NVDA", "NVIDIA", "bullish", 0.9)]), \
+         patch("engine.screener.screen_tickers",
+               return_value=[SimpleNamespace(ticker="NVDA", overall_score=70.0, recommendation="Buy")]):
+        creator_signals.scan_creators()
+
+    with get_session() as s:
+        assert s.execute(select(VideoMention).where(VideoMention.ticker == "NVDA")).scalar_one()
+        v = s.execute(select(CreatorVideo).where(CreatorVideo.video_id == "AAA")).scalar_one()
+        assert v.mentions_extracted_at is not None
+
+
+def test_transient_extraction_failure_leaves_flag_unset_for_retry():
+    from engine.ticker_extraction import TransientExtractionError
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
+         patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "body")), \
+         patch("engine.ticker_extraction.extract_mentions", side_effect=TransientExtractionError("quota")):
+        summary = creator_signals.scan_creators()
+
+    with get_session() as s:
+        v = s.execute(select(CreatorVideo).where(CreatorVideo.video_id == "AAA")).scalar_one()
+        assert v.mentions_extracted_at is None                       # not marked -> retried next run
+        assert s.execute(select(VideoMention)).first() is None
+    assert summary.get("extract_deferred") == 1
+
+
+def test_add_creator_resolves_and_inserts_then_reactivates():
+    resolved = {"channel_id": "UCnew1234567890abcdef22", "display_name": "New Guy", "handle": "@newguy"}
+    with patch("engine.data_sources.youtube_client.resolve_channel", return_value=resolved):
+        info = creator_signals.add_creator("@newguy")
+    assert info["channel_id"] == "UCnew1234567890abcdef22" and info["reactivated"] is False
+    row = {c["channel_id"]: c for c in creator_signals.list_creators()}[resolved["channel_id"]]
+    assert row["display_name"] == "New Guy" and row["active"]
+
+    creator_signals.set_creator_active(resolved["channel_id"], False)
+    with patch("engine.data_sources.youtube_client.resolve_channel", return_value=resolved):
+        again = creator_signals.add_creator("@newguy")
+    assert again["reactivated"] is True
+    assert {c["channel_id"]: c["active"] for c in creator_signals.list_creators()}[resolved["channel_id"]]
+
+
+def test_set_creator_active_unknown_returns_false():
+    assert creator_signals.set_creator_active("UCdoesnotexist000000000", True) is False

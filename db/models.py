@@ -297,6 +297,9 @@ class CreatorVideo(Base):
     transcript_status: Mapped[str] = mapped_column(String(20))
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     processed_at: Mapped[datetime] = mapped_column(default=utcnow)
+    # NULL until extraction+screening has run for this video. Left NULL on a
+    # transient failure (e.g. LLM quota) so the next scan retries it.
+    mentions_extracted_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
 class VideoMention(Base):

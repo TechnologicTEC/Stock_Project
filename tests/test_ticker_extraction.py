@@ -49,6 +49,15 @@ def test_llm_failure_falls_back_to_dictionary():
     assert got == {"AAPL", "TSLA"}
 
 
+def test_transient_llm_error_reraises_for_retry():
+    # A quota / rate-limit failure must propagate so the caller retries later
+    # instead of silently accepting the sparse dictionary result.
+    with patch("engine.ticker_extraction._llm_available", return_value=True), \
+         patch("engine.ticker_extraction._extract_llm", side_effect=RuntimeError("429 RESOURCE_EXHAUSTED quota")):
+        with pytest.raises(ticker_extraction.TransientExtractionError):
+            ticker_extraction.extract_mentions("some transcript text")
+
+
 def test_dictionary_path_ignores_single_word_common_names():
     # "apple"/"tesla" as lone lowercase words are NOT matched (too noisy); only
     # multi-word names, $cashtags and explicit uppercase symbols are.

@@ -144,7 +144,20 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 | 2 | Extraction (dict + LLM) + validation + screening + store mentions | ✅ done |
 | 3 | Creator Signals page (read-only) | ✅ done |
 | 4 | GitHub Actions workflow (`scripts/scan_creators.py` + `creator-signals.yml`) | ✅ built — **awaiting first real run to confirm the cloud-IP transcript risk** |
-| 5 — Polish | Multi-creator UI, email digest, extraction-retry flag, quote-based validation | ☐ optional |
+| 5 — Polish | Extraction-retry flag ✅ · multi-creator management (resolve/add/enable-disable + UI) ✅ · email digest & quote-validation ☐ deferred | ✅ mostly done |
+
+### Phase 5 delivered
+- **Extraction retry:** new `creator_videos.mentions_extracted_at` flag. Extraction is
+  now a separate `_extract_pending` pass over videos with that flag unset, so
+  new *and* previously-failed videos are (re)tried each run. A **transient** LLM
+  failure (quota / rate-limit) now raises `TransientExtractionError` → the flag
+  stays unset → retried next run, instead of silently storing the sparse
+  dictionary result as final. (Directly addresses the quota deaths we saw.)
+- **Multi-creator management:** `youtube_client.resolve_channel()` (URL/@handle/UC
+  id → channel), `creator_signals.add_creator / set_creator_active / list_creators`,
+  and a "⚙️ Manage creators" section on the page (add by URL/handle, enable/disable).
+- **Deferred:** email digest (needs a mail-provider decision + secret) and
+  quote-based validation (SEC-list validation already covers it well).
 
 ### To activate Phase 4
 1. `git push origin main` (workflow + script + reqs) and `git push space main` (deploys the page + tables).

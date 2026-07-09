@@ -22,7 +22,7 @@ def _signals(ticker="NVDA"):
 
 
 def _add_buttons(at):
-    return [b for b in at.button if "Add" in (b.label or "")]
+    return [b for b in at.button if "➕" in (b.label or "")]   # the per-mention "➕ Add", not "Add creator"
 
 
 def test_page_shows_empty_state():
@@ -61,3 +61,15 @@ def test_owned_ticker_shows_no_add_button():
         at.run(timeout=30)
     assert not at.exception
     assert _add_buttons(at) == []
+
+
+def test_manage_creators_add_button_calls_add_creator():
+    at = AppTest.from_file(PAGE)
+    added = {"channel_id": "UCx", "display_name": "X", "reactivated": False}
+    with patch("engine.creator_signals.recent_signals", return_value=[]), \
+         patch("engine.creator_signals.list_creators", return_value=[]), \
+         patch("engine.creator_signals.add_creator", return_value=added) as add:
+        at.run(timeout=30)
+        at.text_input[0].set_value("@ZipTrader").run()
+        [b for b in at.button if b.label == "Add creator"][0].click().run()
+    add.assert_called_once_with("@ZipTrader")

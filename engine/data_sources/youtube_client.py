@@ -19,6 +19,7 @@ retry on the next run.
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timezone
 
@@ -26,6 +27,7 @@ import requests
 from bs4 import BeautifulSoup
 
 _FEED_URL = "https://www.youtube.com/feeds/videos.xml"
+_CHANNEL_ID_RE = re.compile(r"UC[0-9A-Za-z_-]{22}")
 _WATCH_URL = "https://www.youtube.com/watch?v="
 # A browser-ish UA avoids the occasional bot-block on the feed endpoint.
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -75,6 +77,35 @@ def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[di
         last_status = resp.status_code
         time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"YouTube feed for {channel_id} failed after {retries} tries (last HTTP {last_status})")
+
+
+def resolve_channel(url_or_handle: str) -> dict:
+    """Resolve a channel URL / @handle / bare UC id to
+    {"channel_id", "display_name", "handle"}. Raises ValueError if not found."""
+    s = (url_or_handle or "").strip()
+    if _CHANNEL_ID_RE.fullmatch(s):
+        url = f"https://www.youtube.com/channel/{s}"
+    elif s.startswith("http"):
+        url = s
+    else:
+        url = "https://www.youtube.com/" + (s if s.startswith("@") else "@" + s)
+
+    resp = requests.get(url, headers=_HEADERS, timeout=15)
+    resp.raise_for_status()
+    html = resp.text
+
+    m = re.search(r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[0-9A-Za-z_-]{22})"', html) \
+        or re.search(r'"(?:channelId|externalId)":"(UC[0-9A-Za-z_-]{22})"', html)
+    if not m:
+        raise ValueError(f"Couldn't find a channel id for {url_or_handle!r} — check the URL/handle.")
+
+    name = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+    handle = re.search(r'"canonicalBaseUrl":"/(@[\w.-]+)"', html)
+    return {
+        "channel_id": m.group(1),
+        "display_name": name.group(1) if name else None,
+        "handle": handle.group(1) if handle else (s if s.startswith("@") else None),
+    }
 
 
 def _fetch_transcript_text(video_id: str) -> str:

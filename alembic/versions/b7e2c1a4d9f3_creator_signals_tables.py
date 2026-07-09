@@ -50,6 +50,7 @@ def upgrade() -> None:
             sa.Column("transcript_status", sa.String(length=20), nullable=False),
             sa.Column("transcript", sa.Text(), nullable=True),
             sa.Column("processed_at", sa.DateTime(), nullable=False),
+            sa.Column("mentions_extracted_at", sa.DateTime(), nullable=True),
             sa.UniqueConstraint("video_id", name="uq_creator_videos_video_id"),
         )
         op.create_index("ix_creator_videos_creator_id", "creator_videos", ["creator_id"])

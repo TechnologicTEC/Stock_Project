@@ -78,3 +78,26 @@ def test_get_transcript_classifies_errors():
         assert yt.get_transcript("v") == ("blocked", None)             # message hints a block
     with patch("engine.data_sources.youtube_client._fetch_transcript_text", side_effect=ValueError("weird")):
         assert yt.get_transcript("v") == ("error", None)               # anything else → error
+
+
+_CHANNEL_HTML = (
+    '<html><head>'
+    '<link rel="canonical" href="https://www.youtube.com/channel/UC0BGhWsIbV7Dm-lsvhdlMbA">'
+    '<meta property="og:title" content="ZipTrader">'
+    '</head><body>"canonicalBaseUrl":"/@ZipTrader"</body></html>'
+)
+
+
+def test_resolve_channel_from_handle():
+    with patch("engine.data_sources.youtube_client.requests.get",
+               return_value=Mock(status_code=200, text=_CHANNEL_HTML)):
+        info = yt.resolve_channel("@ZipTrader")
+    assert info["channel_id"] == "UC0BGhWsIbV7Dm-lsvhdlMbA"
+    assert info["display_name"] == "ZipTrader" and info["handle"] == "@ZipTrader"
+
+
+def test_resolve_channel_raises_when_not_found():
+    with patch("engine.data_sources.youtube_client.requests.get",
+               return_value=Mock(status_code=200, text="<html>nothing here</html>")):
+        with pytest.raises(ValueError):
+            yt.resolve_channel("@nobody")

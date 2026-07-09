@@ -30,6 +30,25 @@ st.caption(
     "**not advice**. Updated automatically after new uploads."
 )
 
+with st.expander("⚙️ Manage creators"):
+    new_channel = st.text_input("Add a YouTube channel (URL or @handle)", key="add_creator_input",
+                                placeholder="https://www.youtube.com/@ZipTrader")
+    if st.button("Add creator") and new_channel.strip():
+        try:
+            info = creator_signals.add_creator(new_channel.strip())
+            st.success(f"Added **{info['display_name'] or info['channel_id']}** — it'll be scanned on the next run.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Couldn't add that channel: {exc}")
+
+    for c in creator_signals.list_creators():
+        row = st.columns([5, 1])
+        row[0].write(f"{'🟢' if c['active'] else '⚪'} **{c['display_name']}**"
+                     + (f" · {c['handle']}" if c['handle'] else ""))
+        if row[1].button("Disable" if c["active"] else "Enable", key=f"toggle_{c['channel_id']}"):
+            creator_signals.set_creator_active(c["channel_id"], not c["active"])
+            st.rerun()
+
 signals = creator_signals.recent_signals()
 if not signals:
     st.info(

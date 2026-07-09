@@ -40,6 +40,21 @@ class Mention:
     confidence: float | None = None
 
 
+class TransientExtractionError(RuntimeError):
+    """The LLM was configured but failed for a *transient* reason (quota / rate
+    limit). Callers should retry later rather than accept the sparse dictionary
+    result as final — see engine/creator_signals.py's retry flag."""
+
+
+# Substrings that mark a retryable LLM failure (same set as the chat responder).
+_TRANSIENT = ("429", "resource_exhausted", "quota", "rate limit", "rate-limit")
+
+
+def _is_transient(exc: Exception) -> bool:
+    blob = f"{type(exc).__name__} {exc}".lower()
+    return any(k in blob for k in _TRANSIENT)
+
+
 # --------------------------------------------------------------------------
 # LLM path
 # --------------------------------------------------------------------------
@@ -134,15 +149,20 @@ def _validate(mentions: list[Mention]) -> list[Mention]:
 
 def extract_mentions(text: str, *, use_llm: bool = True) -> list[Mention]:
     """Tickers discussed in `text`, validated against the SEC list. LLM primary
-    (if configured), deterministic dictionary otherwise or on LLM failure."""
+    (if configured), deterministic dictionary otherwise. Raises
+    TransientExtractionError if the LLM failed for a retryable reason (quota),
+    so the caller can defer rather than store the sparse fallback as final."""
     if not text or not text.strip():
         return []
-    mentions: list[Mention] = []
     if use_llm and _llm_available():
         try:
             mentions = _extract_llm(text)
-        except Exception:
-            mentions = []
-    if not mentions:
-        mentions = _extract_dictionary(text)
-    return _validate(mentions)
+            if mentions:
+                return _validate(mentions)
+            # LLM ran and found nothing — accept it, but still let the dictionary
+            # catch an obvious $cashtag it might have skipped.
+        except Exception as exc:
+            if _is_transient(exc):
+                raise TransientExtractionError(str(exc)) from exc
+            # non-transient (e.g. bad SDK) → fall through to the dictionary
+    return _validate(_extract_dictionary(text))
