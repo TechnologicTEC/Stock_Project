@@ -25,6 +25,7 @@ gate("creator_signals")
 creator_signals.seed_default_creators()
 
 _STANCE = {"bullish": "🟢 Bullish", "bearish": "🔴 Bearish", "neutral": "⚪ Neutral", "unknown": "· —"}
+_STANCE_ICON = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪", "unknown": "·"}
 
 st.title("Creator Signals")
 st.caption(
@@ -52,6 +53,49 @@ with st.expander("⚙️ Manage creators"):
             creator_signals.set_creator_active(c["channel_id"], not c["active"])
             st.rerun()
 
+owned = {w["ticker"] for w in watchlist.list_watchlist()}
+
+
+def _add_button(column, ticker: str, key: str) -> None:
+    if ticker in owned:
+        column.caption("✓ watchlist")
+    elif column.button("➕ Add", key=key):
+        watchlist.add_to_watchlist(ticker)
+        st.rerun()
+
+
+# --- Repeat mentions: the "he keeps talking about this" signal ----------------
+st.subheader("🔁 Mentioned more than once — last 3 months")
+st.caption(
+    "How often a creator comes back to a stock. Repetition is **attention, not conviction** — "
+    "he may be bearish, or just chasing views. Stocks mentioned only once are hidden."
+)
+
+board = creator_signals.mention_leaderboard()
+if not board:
+    st.caption("Nothing has been mentioned twice yet — tickers appear here as new videos are scanned.")
+else:
+    head = st.columns([1.2, 2.6, 1.1, 1.8, 1.5, 1.5, 1.3])
+    for col, label in zip(head, ["Ticker", "Company", "Mentions", "Creator's takes",
+                                 "Last seen", "Screener", ""]):
+        col.markdown(f"**{label}**")
+
+    for entry in board:
+        c = st.columns([1.2, 2.6, 1.1, 1.8, 1.5, 1.5, 1.3])
+        c[0].markdown(f"**{entry['ticker']}**")
+        c[1].write(entry["company_name"] or "—")
+        c[2].write(f"**{entry['mentions']}**× videos")
+        stances = entry["stances"]
+        takes = " ".join(f"{_STANCE_ICON[k]}{stances[k]}" for k in ("bullish", "bearish", "neutral")
+                         if stances[k])
+        c[3].write(takes or "—")
+        c[4].write(entry["last_seen"].strftime("%b %d") if entry["last_seen"] else "—")
+        c[5].write(f"{entry['screener_score']:.0f}/100" if entry["screener_score"] is not None else "—")
+        _add_button(c[6], entry["ticker"], key=f"lb_add_{entry['ticker']}")
+
+st.divider()
+st.subheader("Recent videos")
+
 signals = creator_signals.recent_signals()
 if not signals:
     st.info(
@@ -59,8 +103,6 @@ if not signals:
         "the stocks they discuss — check back after the next upload."
     )
     st.stop()
-
-owned = {w["ticker"] for w in watchlist.list_watchlist()}
 
 for sig in signals:
     st.divider()
@@ -84,8 +126,4 @@ for sig in signals:
         c[2].write(_STANCE.get(m["stance"], "· —"))
         c[3].write(f"{m['screener_score']:.0f}/100" if m["screener_score"] is not None else "—")
         c[4].write(m["recommendation"] or "—")
-        if m["ticker"] in owned:
-            c[5].caption("✓ watchlist")
-        elif c[5].button("➕ Add", key=f"add_{sig['video_id']}_{m['ticker']}"):
-            watchlist.add_to_watchlist(m["ticker"])
-            st.rerun()
+        _add_button(c[5], m["ticker"], key=f"add_{sig['video_id']}_{m['ticker']}")

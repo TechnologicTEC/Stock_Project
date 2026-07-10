@@ -3,7 +3,7 @@ engine/creator_signals.py — Phase 1 orchestrator: seed creators, detect new
 videos, store them, dedupe, and leave transient failures unstored for retry.
 youtube_client is mocked; the DB is the in-memory SQLite from conftest.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,6 +14,7 @@ from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
 from engine import creator_signals
 from engine.ticker_extraction import Mention
+from engine.time_utils import utcnow
 
 
 @pytest.fixture(autouse=True)
@@ -197,6 +198,73 @@ def test_add_creator_resolves_and_inserts_then_reactivates():
 
 def test_set_creator_active_unknown_returns_false():
     assert creator_signals.set_creator_active("UCdoesnotexist000000000", True) is False
+
+
+def _seed_video(cid, video_id, published_at, title="t"):
+    with get_session() as s:
+        s.add(CreatorVideo(creator_id=cid, video_id=video_id, title=title, url=f"u/{video_id}",
+                           transcript_status="ok", transcript="x", published_at=published_at))
+
+
+def _seed_mention(video_id, ticker, stance="bullish", score=None, reco=None, screened_at=None, company=None):
+    with get_session() as s:
+        s.add(VideoMention(video_id=video_id, ticker=ticker, stance=stance, company_name=company,
+                           screener_score=score, recommendation=reco, screened_at=screened_at))
+
+
+def test_leaderboard_hides_single_mentions_and_counts_videos():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    now = utcnow()
+    _seed_video(cid, "V1", now - timedelta(days=1))
+    _seed_video(cid, "V2", now - timedelta(days=5))
+    _seed_mention("V1", "NVDA", "bullish", company="NVIDIA")
+    _seed_mention("V2", "NVDA", "bearish")
+    _seed_mention("V1", "AAPL", "bullish")        # only once -> hidden
+
+    board = creator_signals.mention_leaderboard()
+    assert [e["ticker"] for e in board] == ["NVDA"]
+    entry = board[0]
+    assert entry["mentions"] == 2 and entry["company_name"] == "NVIDIA"
+    assert entry["stances"]["bullish"] == 1 and entry["stances"]["bearish"] == 1
+    assert entry["last_seen"] == max(v["published_at"] for v in entry["videos"])
+
+
+def test_leaderboard_excludes_videos_outside_the_window():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    now = utcnow()
+    _seed_video(cid, "OLD1", now - timedelta(days=120))   # older than 3 months
+    _seed_video(cid, "OLD2", now - timedelta(days=100))
+    _seed_video(cid, "NEW1", now - timedelta(days=2))
+    for vid in ("OLD1", "OLD2", "NEW1"):
+        _seed_mention(vid, "TSLA")
+
+    assert creator_signals.mention_leaderboard() == []             # only 1 in-window mention
+    board = creator_signals.mention_leaderboard(days=365)
+    assert board[0]["ticker"] == "TSLA" and board[0]["mentions"] == 3
+
+
+def test_leaderboard_keeps_latest_screener_snapshot_and_orders_by_count():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    now = utcnow()
+    for i, vid in enumerate(["A", "B", "C"]):
+        _seed_video(cid, vid, now - timedelta(days=i + 1))
+    # NVDA: 3 mentions, newest score 90. AAPL: 2 mentions.
+    _seed_mention("A", "NVDA", score=90.0, reco="Buy", screened_at=now)
+    _seed_mention("B", "NVDA", score=50.0, reco="Hold", screened_at=now - timedelta(days=3))
+    _seed_mention("C", "NVDA", score=60.0, reco="Hold", screened_at=now - timedelta(days=5))
+    _seed_mention("A", "AAPL")
+    _seed_mention("B", "AAPL")
+
+    board = creator_signals.mention_leaderboard()
+    assert [e["ticker"] for e in board] == ["NVDA", "AAPL"]        # most-mentioned first
+    assert board[0]["screener_score"] == 90.0 and board[0]["recommendation"] == "Buy"
+    assert board[1]["screener_score"] is None
 
 
 def test_seed_default_creators_is_idempotent():

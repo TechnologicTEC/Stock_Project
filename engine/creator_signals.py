@@ -12,6 +12,8 @@ are deliberately NOT persisted so the next run retries them.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -236,6 +238,70 @@ def recent_signals(limit_videos: int = 12) -> list[dict]:
         ).scalars().all()
         rows.sort(key=lambda v: (v.published_at or v.processed_at), reverse=True)
         return [_shape(s, v, creators) for v in rows[:limit_videos]]
+
+
+LEADERBOARD_DAYS = 90        # "the past 3 months"
+LEADERBOARD_MIN_MENTIONS = 2  # a single mention is noise; twice is a pattern
+
+_STANCES = ("bullish", "bearish", "neutral", "unknown")
+
+
+def _naive(value: datetime | None) -> datetime | None:
+    """Guard the naive-UTC convention (engine/time_utils.py) at the comparison."""
+    if value is None or value.tzinfo is None:
+        return value
+    return value.replace(tzinfo=None)
+
+
+def mention_leaderboard(days: int = LEADERBOARD_DAYS,
+                        min_mentions: int = LEADERBOARD_MIN_MENTIONS) -> list[dict]:
+    """Tickers a creator keeps coming back to. `video_mentions` holds one row per
+    (video, ticker), so the count *is* the number of distinct videos that
+    discussed it, within `days` of the video's publish date.
+
+    Repetition is attention, not conviction — the page says so. Nothing is
+    backfilled: the window simply covers whatever has been scanned.
+    """
+    cutoff = utcnow() - timedelta(days=days)
+    with get_session() as s:
+        rows = s.execute(
+            select(VideoMention, CreatorVideo.published_at, CreatorVideo.processed_at,
+                   CreatorVideo.title, CreatorVideo.url)
+            .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
+        ).all()
+
+    tally: dict[str, dict] = {}
+    for mention, published_at, processed_at, title, url in rows:
+        when = _naive(published_at) or _naive(processed_at)
+        if when is None or when < cutoff:
+            continue
+
+        entry = tally.setdefault(mention.ticker, {
+            "ticker": mention.ticker, "company_name": None, "mentions": 0,
+            "stances": dict.fromkeys(_STANCES, 0), "last_seen": None,
+            "screener_score": None, "recommendation": None, "videos": [],
+            "_scored_at": None,
+        })
+        entry["mentions"] += 1
+        entry["stances"][mention.stance if mention.stance in _STANCES else "unknown"] += 1
+        if not entry["company_name"] and mention.company_name:
+            entry["company_name"] = mention.company_name
+        if entry["last_seen"] is None or when > entry["last_seen"]:
+            entry["last_seen"] = when
+        # keep the most recent screener snapshot for the ticker
+        scored_at = _naive(mention.screened_at)
+        if scored_at and (entry["_scored_at"] is None or scored_at > entry["_scored_at"]):
+            entry["_scored_at"] = scored_at
+            entry["screener_score"] = mention.screener_score
+            entry["recommendation"] = mention.recommendation
+        entry["videos"].append({"title": title, "url": url, "published_at": when, "stance": mention.stance})
+
+    board = [e for e in tally.values() if e["mentions"] >= min_mentions]
+    for entry in board:
+        entry.pop("_scored_at", None)
+        entry["videos"].sort(key=lambda v: v["published_at"], reverse=True)
+    board.sort(key=lambda e: (-e["mentions"], -(e["last_seen"].timestamp() if e["last_seen"] else 0), e["ticker"]))
+    return board
 
 
 def signals_for_videos(video_ids: list[str]) -> list[dict]:

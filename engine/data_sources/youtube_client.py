@@ -40,11 +40,12 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 
 def _parse_published(text: str | None) -> datetime | None:
-    """Atom `<published>` is ISO-8601 (…Z). Return a tz-aware UTC datetime."""
+    """Atom `<published>` is ISO-8601 (…Z). Return **naive UTC**, matching the
+    repo-wide convention in engine/time_utils.py (the DB columns are naive)."""
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
     except (TypeError, ValueError):
         return None
 

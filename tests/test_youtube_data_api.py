@@ -41,7 +41,7 @@ def test_list_uploads_resolves_playlist_then_lists_items():
 
     assert [v["video_id"] for v in videos] == ["AAA", "BBB"]
     assert videos[0]["title"] == "5 Stocks" and videos[0]["url"].endswith("v=AAA")
-    assert videos[0]["published_at"].year == 2026 and videos[0]["published_at"].tzinfo is not None
+    assert videos[0]["published_at"].year == 2026 and videos[0]["published_at"].tzinfo is None  # naive UTC
     assert get.call_args_list[1].kwargs["params"]["playlistId"] == "UUxyz"
     assert get.call_args_list[1].kwargs["params"]["key"] == "yt_test"
 

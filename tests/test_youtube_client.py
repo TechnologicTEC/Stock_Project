@@ -37,7 +37,7 @@ def test_latest_videos_parses_feed():
     assert [v["video_id"] for v in vids] == ["ABC123", "DEF456"]
     assert vids[0]["title"] == "5 Stocks To Buy Heavy"
     assert vids[0]["url"].endswith("v=ABC123")
-    assert vids[0]["published_at"].year == 2026 and vids[0]["published_at"].tzinfo is not None
+    assert vids[0]["published_at"].year == 2026 and vids[0]["published_at"].tzinfo is None  # naive UTC
 
 
 def test_latest_videos_retries_then_succeeds():

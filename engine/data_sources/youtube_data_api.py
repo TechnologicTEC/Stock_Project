@@ -60,10 +60,12 @@ def _get(resource: str, **params) -> dict:
 
 
 def _parse_published(text: str | None) -> datetime | None:
+    """ISO-8601 (…Z) -> **naive UTC**, matching the repo-wide convention in
+    engine/time_utils.py (the DB columns are timezone-naive)."""
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
     except (TypeError, ValueError):
         return None
 

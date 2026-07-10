@@ -63,6 +63,36 @@ def test_owned_ticker_shows_no_add_button():
     assert _add_buttons(at) == []
 
 
+def _board(mentions=3):
+    return [{"ticker": "NVDA", "company_name": "NVIDIA", "mentions": mentions,
+             "stances": {"bullish": 2, "bearish": 1, "neutral": 0, "unknown": 0},
+             "last_seen": datetime(2026, 7, 8), "screener_score": 80.0,
+             "recommendation": "Buy", "videos": []}]
+
+
+def test_leaderboard_renders_repeat_mentions():
+    at = AppTest.from_file(PAGE)
+    with patch("engine.creator_signals.recent_signals", return_value=[]), \
+         patch("engine.creator_signals.mention_leaderboard", return_value=_board()), \
+         patch("engine.watchlist.list_watchlist", return_value=[]):
+        at.run(timeout=30)
+    assert not at.exception
+    assert any("Mentioned more than once" in s.value for s in at.subheader)
+    text = " ".join(m.value for m in at.markdown)
+    assert "NVDA" in text and "3" in text and "videos" in text
+    assert "🟢2" in text and "🔴1" in text     # stance split, not just a total
+    assert len(_add_buttons(at)) == 1          # leaderboard row gets its own add button
+
+
+def test_leaderboard_empty_state_when_nothing_mentioned_twice():
+    at = AppTest.from_file(PAGE)
+    with patch("engine.creator_signals.recent_signals", return_value=[]), \
+         patch("engine.creator_signals.mention_leaderboard", return_value=[]):
+        at.run(timeout=30)
+    assert not at.exception
+    assert any("mentioned twice yet" in c.value for c in at.caption)
+
+
 def test_manage_creators_add_button_calls_add_creator():
     at = AppTest.from_file(PAGE)
     added = {"channel_id": "UCx", "display_name": "X", "reactivated": False}
