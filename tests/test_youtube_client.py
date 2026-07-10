@@ -122,15 +122,43 @@ def test_get_transcript_uses_direct_path_when_supadata_unconfigured():
     direct.assert_called_once()
 
 
-# Cleared so the direct-path tests can't be perturbed by a real key/proxy in .env.
+# Cleared so the fallback-path tests can't be perturbed by a real key/proxy in .env.
 _TRANSCRIPT_ENV = ("WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD", "YT_PROXY_URL",
-                   "SUPADATA_API_KEY", "SUPADATA_MODE")
+                   "SUPADATA_API_KEY", "SUPADATA_MODE", "YOUTUBE_API_KEY")
 
 
 @pytest.fixture(autouse=True)
 def _clean_transcript_env(monkeypatch):
     for key in _TRANSCRIPT_ENV:
         monkeypatch.delenv(key, raising=False)
+
+
+def test_latest_videos_prefers_the_official_data_api():
+    videos = [{"video_id": "AAA", "title": "t", "url": "u", "published_at": None}]
+    with patch("engine.data_sources.youtube_data_api.is_configured", return_value=True), \
+         patch("engine.data_sources.youtube_data_api.list_uploads", return_value=videos) as api, \
+         patch("engine.data_sources.youtube_client._fetch_feed") as feed:
+        assert yt.latest_videos("UCxxxx") == videos
+    api.assert_called_once()
+    feed.assert_not_called()          # the flaky RSS feed is never touched
+
+
+def test_latest_videos_falls_back_to_rss_when_data_api_fails():
+    with patch("engine.data_sources.youtube_data_api.is_configured", return_value=True), \
+         patch("engine.data_sources.youtube_data_api.list_uploads", side_effect=RuntimeError("quota")), \
+         patch("engine.data_sources.youtube_client._fetch_feed", return_value=_FEED.encode()) as feed:
+        videos = yt.latest_videos("UCxxxx")
+    assert [v["video_id"] for v in videos] == ["ABC123", "DEF456"]
+    feed.assert_called_once()
+
+
+def test_resolve_channel_prefers_the_data_api_and_skips_scraping():
+    info = {"channel_id": "UC0BGhWsIbV7Dm-lsvhdlMbA", "display_name": "ZipTrader", "handle": "@ziptrader"}
+    with patch("engine.data_sources.youtube_data_api.is_configured", return_value=True), \
+         patch("engine.data_sources.youtube_data_api.resolve_channel", return_value=info), \
+         patch("engine.data_sources.youtube_client.requests.get") as get:
+        assert yt.resolve_channel("@ZipTrader") == info
+    get.assert_not_called()
 
 
 def test_proxy_config_is_none_when_unset():

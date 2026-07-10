@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
-from engine.data_sources import supadata_client
+from engine.data_sources import supadata_client, youtube_data_api
 
 _FEED_URL = "https://www.youtube.com/feeds/videos.xml"
 _CHANNEL_ID_RE = re.compile(r"UC[0-9A-Za-z_-]{22}")
@@ -83,8 +83,18 @@ def _fetch_feed(channel_id: str, retries: int = 5) -> bytes:
 
 
 def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[dict]:
-    """Recent uploads for a channel, newest first. A whole-run failure is
-    self-healing — the videos are still 'new' on the next run."""
+    """Recent uploads for a channel, newest first.
+
+    Prefers the official Data API (free, 1 quota unit, reliable). Falls back to
+    the unofficial RSS feed, which throttles hard (measured ~1-in-6 success,
+    404s and 500s) — that's why the API key is worth setting. A whole-run failure
+    is self-healing: the videos are still 'new' on the next run.
+    """
+    if youtube_data_api.is_configured():
+        try:
+            return youtube_data_api.list_uploads(channel_id, limit)
+        except Exception:
+            pass  # quota/outage -> try the RSS feed below
     return _parse_feed(_fetch_feed(channel_id, retries), limit)
 
 
@@ -146,6 +156,16 @@ def resolve_channel(url_or_handle: str) -> dict:
     text = (url_or_handle or "").strip()
     if not text:
         raise ValueError("Enter a channel URL or @handle.")
+
+    # Official API first: resolves @handles without scraping the channel page
+    # (which YouTube blocks from datacenter IPs).
+    if youtube_data_api.is_configured():
+        try:
+            return youtube_data_api.resolve_channel(text)
+        except ValueError:
+            raise                 # genuinely no such channel — don't mask it
+        except Exception:
+            pass                  # quota/outage -> fall through
 
     channel_id = _channel_id_from_input(text)
     handle = text if text.startswith("@") else None

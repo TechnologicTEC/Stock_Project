@@ -40,6 +40,10 @@ jobs:
           # at 2 credits PER MINUTE — don't set it unless you mean to.
           SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
           SUPADATA_MODE: ${{ vars.SUPADATA_MODE }}
+          # Official Data API for the video list + channel lookup (free: 10,000
+          # quota units/day, we use ~8). Without it we fall back to the unofficial
+          # RSS feed, which throttles hard (404/500) and fails whole runs.
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           # Alternative to Supadata: a residential proxy for the direct fetch.
           WEBSHARE_PROXY_USERNAME: ${{ secrets.WEBSHARE_PROXY_USERNAME }}
           WEBSHARE_PROXY_PASSWORD: ${{ secrets.WEBSHARE_PROXY_PASSWORD }}

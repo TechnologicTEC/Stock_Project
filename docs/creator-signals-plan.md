@@ -55,7 +55,9 @@ Same producer/consumer shape as the warm-cache job:
 
 | File | Responsibility |
 |------|----------------|
-| `engine/data_sources/youtube_client.py` | `latest_videos(channel_id)` (RSS + retry); `get_transcript(video_id)` (captions). Raw calls, no caching. |
+| `engine/data_sources/youtube_client.py` | Provider layer: `latest_videos()` (Data API → RSS fallback), `resolve_channel()`, `get_transcript()` (Supadata → proxy → direct). Raw calls, no caching. |
+| `engine/data_sources/youtube_data_api.py` | **Official Data API v3** (`YOUTUBE_API_KEY`): `list_uploads()` + `resolve_channel()`. Free — 1 quota unit/call, 10,000/day. ⚠️ Replaced the RSS feed, which throttles hard: **measured 1-in-6 success** (mixed 404/500), which failed whole scans. `channels.list?forHandle=` also resolves @handles without scraping the IP-blocked channel page. |
+| `engine/data_sources/supadata_client.py` | Hosted transcript API (`SUPADATA_API_KEY`) — fetches server-side, so it works from the datacenter IPs YouTube blocks. |
 | `engine/data_sources/sec_tickers.py` | Fetch + cache SEC `company_tickers.json`; build `{normalized_name → ticker}` + `{ticker}` maps. |
 | `engine/ticker_extraction.py` | `extract_mentions(text) -> list[Mention]`. Gemini structured-output primary; dictionary + `$cashtag` fallback; then **validate** each candidate against a real quote. |
 | `engine/creator_signals.py` | Orchestrator `scan_creators()`: new videos → transcript → extract → `screener.screen_tickers` → persist. Idempotent. |
