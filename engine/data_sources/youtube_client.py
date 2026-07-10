@@ -65,47 +65,94 @@ def _parse_feed(content: bytes, limit: int) -> list[dict]:
     return out
 
 
-def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[dict]:
-    """Recent uploads for a channel, newest first. The feed is flaky (intermittent
-    404/500), so retry with a growing backoff; raises if it never returns 200. A
-    whole-run failure is self-healing — the videos are still 'new' next run."""
+def _fetch_feed(channel_id: str, retries: int = 5) -> bytes:
+    """The channel's Atom feed. It's flaky (intermittent 404/500), so retry with a
+    growing backoff. Unlike the channel's HTML page this endpoint is not
+    bot-protected, so it works from datacenter IPs."""
     last_status = None
     for attempt in range(retries):
         resp = requests.get(_FEED_URL, params={"channel_id": channel_id}, headers=_HEADERS, timeout=15)
         if resp.status_code == 200:
-            return _parse_feed(resp.content, limit)
+            return resp.content
         last_status = resp.status_code
         time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"YouTube feed for {channel_id} failed after {retries} tries (last HTTP {last_status})")
 
 
-def resolve_channel(url_or_handle: str) -> dict:
-    """Resolve a channel URL / @handle / bare UC id to
-    {"channel_id", "display_name", "handle"}. Raises ValueError if not found."""
-    s = (url_or_handle or "").strip()
-    if _CHANNEL_ID_RE.fullmatch(s):
-        url = f"https://www.youtube.com/channel/{s}"
-    elif s.startswith("http"):
-        url = s
-    else:
-        url = "https://www.youtube.com/" + (s if s.startswith("@") else "@" + s)
+def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[dict]:
+    """Recent uploads for a channel, newest first. A whole-run failure is
+    self-healing — the videos are still 'new' on the next run."""
+    return _parse_feed(_fetch_feed(channel_id, retries), limit)
 
-    resp = requests.get(url, headers=_HEADERS, timeout=15)
-    resp.raise_for_status()
-    html = resp.text
 
-    m = re.search(r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[0-9A-Za-z_-]{22})"', html) \
+def channel_info(channel_id: str) -> dict:
+    """Verify a channel and read its display name from the *feed* — deliberately
+    not the channel's HTML page, which YouTube blocks from datacenter IPs."""
+    soup = BeautifulSoup(_fetch_feed(channel_id), "xml")
+    name = None
+    author = soup.find("author")
+    if author is not None and author.find("name") is not None:
+        name = author.find("name").text.strip()
+    if not name:
+        title = soup.find("title")
+        name = title.text.strip() if title is not None else None
+    return {"channel_id": channel_id, "display_name": name}
+
+
+def _channel_id_from_input(text: str) -> str | None:
+    """A UC id straight out of the input — a bare id, or a /channel/UC… URL."""
+    if _CHANNEL_ID_RE.fullmatch(text):
+        return text
+    m = re.search(r"/channel/(UC[0-9A-Za-z_-]{22})", text)
+    return m.group(1) if m else None
+
+
+def _resolve_via_html(text: str) -> tuple[str, str | None]:
+    """Map an @handle / custom URL to a channel id by reading the channel page.
+    This is the ONE bot-protected call here — YouTube commonly blocks it from
+    datacenter IPs, so the error tells the user how to avoid needing it."""
+    url = text if text.startswith("http") else \
+        "https://www.youtube.com/" + (text if text.startswith("@") else "@" + text)
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=15)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as exc:
+        raise ValueError(
+            f"YouTube blocked the handle lookup from this server ({type(exc).__name__}). "
+            "Paste the channel's '/channel/UC…' URL instead — on the channel page use "
+            "Share channel → Copy channel ID."
+        ) from exc
+
+    m = re.search(r"/channel/(UC[0-9A-Za-z_-]{22})", html) \
         or re.search(r'"(?:channelId|externalId)":"(UC[0-9A-Za-z_-]{22})"', html)
     if not m:
-        raise ValueError(f"Couldn't find a channel id for {url_or_handle!r} — check the URL/handle.")
-
-    name = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+        raise ValueError(f"Couldn't find a channel id for {text!r} — check the URL/handle.")
     handle = re.search(r'"canonicalBaseUrl":"/(@[\w.-]+)"', html)
-    return {
-        "channel_id": m.group(1),
-        "display_name": name.group(1) if name else None,
-        "handle": handle.group(1) if handle else (s if s.startswith("@") else None),
-    }
+    return m.group(1), (handle.group(1) if handle else None)
+
+
+def resolve_channel(url_or_handle: str) -> dict:
+    """Resolve a channel URL / @handle / bare UC id to
+    {"channel_id", "display_name", "handle"}.
+
+    A bare UC id or a /channel/UC… URL needs **no HTML scrape** — the channel is
+    verified and named from the feed. Only an @handle / custom URL needs the
+    channel page, which can be blocked from datacenter IPs.
+    """
+    text = (url_or_handle or "").strip()
+    if not text:
+        raise ValueError("Enter a channel URL or @handle.")
+
+    channel_id = _channel_id_from_input(text)
+    handle = text if text.startswith("@") else None
+    if channel_id is None:
+        channel_id, resolved_handle = _resolve_via_html(text)
+        handle = resolved_handle or handle
+
+    info = channel_info(channel_id)   # verifies it exists + gets the name, via the feed
+    info["handle"] = handle
+    return info
 
 
 def _fetch_transcript_text(video_id: str) -> str:

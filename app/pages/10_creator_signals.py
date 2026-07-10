@@ -20,6 +20,9 @@ from engine import creator_signals, watchlist
 st.set_page_config(page_title="Creator Signals — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()
 gate("creator_signals")
+# Idempotent: makes the built-in creator(s) visible here before the first scan
+# has run, so nobody has to add them by hand.
+creator_signals.seed_default_creators()
 
 _STANCE = {"bullish": "🟢 Bullish", "bearish": "🔴 Bearish", "neutral": "⚪ Neutral", "unknown": "· —"}
 

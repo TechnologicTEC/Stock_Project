@@ -88,16 +88,56 @@ _CHANNEL_HTML = (
 )
 
 
-def test_resolve_channel_from_handle():
+_CHANNEL_FEED = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<feed xmlns="http://www.w3.org/2005/Atom">'
+    '<title>ZipTrader</title>'
+    '<author><name>ZipTrader</name>'
+    '<uri>https://www.youtube.com/channel/UC0BGhWsIbV7Dm-lsvhdlMbA</uri></author>'
+    "</feed>"
+).encode()
+
+
+def test_channel_info_reads_name_from_the_feed():
+    with patch("engine.data_sources.youtube_client._fetch_feed", return_value=_CHANNEL_FEED):
+        info = yt.channel_info("UC0BGhWsIbV7Dm-lsvhdlMbA")
+    assert info == {"channel_id": "UC0BGhWsIbV7Dm-lsvhdlMbA", "display_name": "ZipTrader"}
+
+
+def test_resolve_from_bare_channel_id_never_scrapes_the_html_page():
+    with patch("engine.data_sources.youtube_client._fetch_feed", return_value=_CHANNEL_FEED), \
+         patch("engine.data_sources.youtube_client.requests.get") as get:
+        info = yt.resolve_channel("UC0BGhWsIbV7Dm-lsvhdlMbA")
+    assert info["channel_id"] == "UC0BGhWsIbV7Dm-lsvhdlMbA" and info["display_name"] == "ZipTrader"
+    get.assert_not_called()          # the bot-protected page is never touched
+
+
+def test_resolve_from_channel_url_never_scrapes_the_html_page():
+    with patch("engine.data_sources.youtube_client._fetch_feed", return_value=_CHANNEL_FEED), \
+         patch("engine.data_sources.youtube_client.requests.get") as get:
+        info = yt.resolve_channel("https://www.youtube.com/channel/UC0BGhWsIbV7Dm-lsvhdlMbA")
+    assert info["channel_id"] == "UC0BGhWsIbV7Dm-lsvhdlMbA"
+    get.assert_not_called()
+
+
+def test_resolve_from_handle_reads_the_page_then_names_it_from_the_feed():
     with patch("engine.data_sources.youtube_client.requests.get",
-               return_value=Mock(status_code=200, text=_CHANNEL_HTML)):
+               return_value=Mock(status_code=200, text=_CHANNEL_HTML)), \
+         patch("engine.data_sources.youtube_client._fetch_feed", return_value=_CHANNEL_FEED):
         info = yt.resolve_channel("@ZipTrader")
     assert info["channel_id"] == "UC0BGhWsIbV7Dm-lsvhdlMbA"
     assert info["display_name"] == "ZipTrader" and info["handle"] == "@ZipTrader"
 
 
-def test_resolve_channel_raises_when_not_found():
+def test_resolve_from_handle_when_page_is_blocked_gives_actionable_error():
+    # e.g. the SSLEOFError YouTube returns to datacenter IPs.
+    with patch("engine.data_sources.youtube_client.requests.get", side_effect=OSError("SSLEOFError")):
+        with pytest.raises(ValueError, match="blocked the handle lookup"):
+            yt.resolve_channel("@ZipTrader")
+
+
+def test_resolve_raises_when_page_has_no_channel_id():
     with patch("engine.data_sources.youtube_client.requests.get",
                return_value=Mock(status_code=200, text="<html>nothing here</html>")):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Couldn't find a channel id"):
             yt.resolve_channel("@nobody")
