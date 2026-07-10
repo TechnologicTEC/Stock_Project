@@ -88,6 +88,76 @@ _CHANNEL_HTML = (
 )
 
 
+def test_get_transcript_prefers_supadata_when_configured():
+    with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \
+         patch("engine.data_sources.supadata_client.get_transcript_text", return_value="body"), \
+         patch("engine.data_sources.youtube_client._direct_transcript") as direct:
+        assert yt.get_transcript("v") == ("ok", "body")
+    direct.assert_not_called()
+
+
+def test_supadata_transcript_unavailable_is_authoritative_no_captions():
+    from engine.data_sources.supadata_client import TranscriptUnavailable
+    with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \
+         patch("engine.data_sources.supadata_client.get_transcript_text",
+               side_effect=TranscriptUnavailable("none")), \
+         patch("engine.data_sources.youtube_client._direct_transcript") as direct:
+        assert yt.get_transcript("v") == ("no_captions", None)
+    direct.assert_not_called()          # don't burn a retry on a video with no captions
+
+
+def test_supadata_quota_failure_falls_back_to_the_direct_path():
+    from engine.data_sources.supadata_client import QuotaExceeded
+    with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \
+         patch("engine.data_sources.supadata_client.get_transcript_text", side_effect=QuotaExceeded("429")), \
+         patch("engine.data_sources.youtube_client._direct_transcript", return_value=("blocked", None)) as direct:
+        assert yt.get_transcript("v") == ("blocked", None)   # -> the scan retries next run
+    direct.assert_called_once()
+
+
+def test_get_transcript_uses_direct_path_when_supadata_unconfigured():
+    with patch("engine.data_sources.supadata_client.is_configured", return_value=False), \
+         patch("engine.data_sources.youtube_client._direct_transcript", return_value=("ok", "t")) as direct:
+        assert yt.get_transcript("v") == ("ok", "t")
+    direct.assert_called_once()
+
+
+# Cleared so the direct-path tests can't be perturbed by a real key/proxy in .env.
+_TRANSCRIPT_ENV = ("WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD", "YT_PROXY_URL",
+                   "SUPADATA_API_KEY", "SUPADATA_MODE")
+
+
+@pytest.fixture(autouse=True)
+def _clean_transcript_env(monkeypatch):
+    for key in _TRANSCRIPT_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_proxy_config_is_none_when_unset():
+    assert yt._proxy_config() is None
+
+
+def test_proxy_config_prefers_webshare(monkeypatch):
+    from youtube_transcript_api.proxies import WebshareProxyConfig
+    monkeypatch.setenv("WEBSHARE_PROXY_USERNAME", "u")
+    monkeypatch.setenv("WEBSHARE_PROXY_PASSWORD", "p")
+    monkeypatch.setenv("YT_PROXY_URL", "http://ignored:1")
+    assert isinstance(yt._proxy_config(), WebshareProxyConfig)
+
+
+def test_proxy_config_falls_back_to_generic_url(monkeypatch):
+    from youtube_transcript_api.proxies import GenericProxyConfig
+    monkeypatch.setenv("YT_PROXY_URL", "http://user:pw@host:8080")
+    assert isinstance(yt._proxy_config(), GenericProxyConfig)
+
+
+def test_transcript_fetch_passes_proxy_config_through():
+    with patch("youtube_transcript_api.YouTubeTranscriptApi") as api_cls:
+        api_cls.return_value.fetch.return_value = [Mock(text="hello"), Mock(text="world")]
+        assert yt._fetch_transcript_text("vid") == "hello world"
+    assert api_cls.call_args.kwargs["proxy_config"] is None   # unset env -> direct connection
+
+
 _CHANNEL_FEED = (
     '<?xml version="1.0" encoding="UTF-8"?>'
     '<feed xmlns="http://www.w3.org/2005/Atom">'

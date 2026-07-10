@@ -34,6 +34,16 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC ticker list fetch (has a default UA otherwise)
+          # YouTube blocks its caption endpoint from datacenter IPs. Supadata fetches
+          # server-side, so this is what makes the cloud run work. mode=native (the
+          # default) costs 1 credit/transcript; SUPADATA_MODE=auto adds AI fallback
+          # at 2 credits PER MINUTE — don't set it unless you mean to.
+          SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+          SUPADATA_MODE: ${{ vars.SUPADATA_MODE }}
+          # Alternative to Supadata: a residential proxy for the direct fetch.
+          WEBSHARE_PROXY_USERNAME: ${{ secrets.WEBSHARE_PROXY_USERNAME }}
+          WEBSHARE_PROXY_PASSWORD: ${{ secrets.WEBSHARE_PROXY_PASSWORD }}
+          YT_PROXY_URL: ${{ secrets.YT_PROXY_URL }}
           # Digest email — set EITHER Resend or SMTP. Set neither and the email is
           # silently skipped (the scan still runs). See engine/mailer.py.
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}

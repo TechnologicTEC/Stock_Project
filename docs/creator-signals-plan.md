@@ -143,7 +143,7 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 | 1 | DB tables + migration + creator seed + orchestrator storing videos (no extraction) | ✅ done |
 | 2 | Extraction (dict + LLM) + validation + screening + store mentions | ✅ done |
 | 3 | Creator Signals page (read-only) | ✅ done |
-| 4 | GitHub Actions workflow (`scripts/scan_creators.py` + `creator-signals.yml`) | ✅ built — **awaiting first real run to confirm the cloud-IP transcript risk** |
+| 4 | GitHub Actions workflow (`scripts/scan_creators.py` + `creator-signals.yml`) | ✅ built — ⚠️ **transcripts ARE blocked from the runner (see below)** |
 | 5 — Polish | Extraction-retry flag ✅ · multi-creator management (resolve/add/enable-disable + UI) ✅ · email digest & quote-validation ☐ deferred | ✅ mostly done |
 
 ### Phase 5 delivered
@@ -163,6 +163,32 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
   when the run turned up new mentions**, so it can't be spammy, and a mail failure
   never breaks the scan. Recipient: `DIGEST_EMAIL_TO`, else the first `OWNER_EMAILS`.
 - **Deferred:** quote-based validation (SEC-list validation already covers it well).
+
+### ⚠️ RESOLVED: the datacenter-IP risk was real
+First real run (2026-07-10): `done: {'creators': 1, 'new_videos': 15, 'blocked': 15}`.
+The **feed works fine** from the runner (all 15 videos found); it's specifically
+the **caption endpoint** that rejects GitHub's Azure IP (`IpBlocked`/`RequestBlocked`).
+Nothing was stored and everything is queued for retry — the graceful path worked.
+
+Swapping libraries doesn't help — the block is on the IP, not the code
+(`youtube-transcript-api` *is* the free OSS project; yt-dlp's own issue tracker
+documents the same wall on GitHub Actions). **Solution: fetch server-side.**
+
+`youtube_client.get_transcript()` is now a provider layer, same `(status, text)`
+contract:
+1. **Supadata** (`SUPADATA_API_KEY`) — hosted API, fetches server-side → works from
+   a datacenter IP. **This is the configured path.**
+2. **Proxy** (`WEBSHARE_PROXY_*` / `YT_PROXY_URL`) — residential proxy for the direct fetch.
+3. **Direct** — youtube-transcript-api; works from a residential IP only.
+
+Supadata notes: `mode=native` (default) = existing captions, **1 credit each**;
+`SUPADATA_MODE=auto` adds AI transcription at **2 credits per minute** (~40 for a
+20-min video) — don't enable it casually against the 100-credit free tier. Videos
+>20 min return HTTP 202 + a jobId which we poll (job checks are free). 206 maps to
+`no_captions` (authoritative, no retry); 429 falls through to the direct path and
+surfaces as `blocked`, which the scan retries next run.
+
+Volume: ZipTrader posts ~1/day ≈ 30 transcripts/month, inside the free 100.
 
 ### To activate Phase 4
 1. `git push origin main` (workflow + script + reqs) and `git push space main` (deploys the page + tables).

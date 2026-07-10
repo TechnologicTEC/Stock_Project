@@ -19,12 +19,15 @@ retry on the next run.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
+
+from engine.data_sources import supadata_client
 
 _FEED_URL = "https://www.youtube.com/feeds/videos.xml"
 _CHANNEL_ID_RE = re.compile(r"UC[0-9A-Za-z_-]{22}")
@@ -155,12 +158,33 @@ def resolve_channel(url_or_handle: str) -> dict:
     return info
 
 
+def _proxy_config():
+    """Route transcript fetches through a proxy when configured. YouTube blocks
+    the caption endpoint from datacenter IPs (GitHub Actions, HF Spaces, …), so a
+    residential proxy is the fix for a cloud-run scan. Returns None when unset,
+    and only imports the proxies module in that case.
+
+    Set EITHER `WEBSHARE_PROXY_USERNAME` + `WEBSHARE_PROXY_PASSWORD` (the
+    rotating-residential provider youtube-transcript-api supports natively), or a
+    generic `YT_PROXY_URL` like http://user:pass@host:port.
+    """
+    user, password = os.environ.get("WEBSHARE_PROXY_USERNAME"), os.environ.get("WEBSHARE_PROXY_PASSWORD")
+    url = os.environ.get("YT_PROXY_URL")
+    if not (user and password) and not url:
+        return None
+    from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
+
+    if user and password:
+        return WebshareProxyConfig(proxy_username=user, proxy_password=password)
+    return GenericProxyConfig(http_url=url, https_url=url)
+
+
 def _fetch_transcript_text(video_id: str) -> str:
     """Join a video's caption segments into one string. Isolated so tests can
     patch it (and so the youtube-transcript-api import stays lazy)."""
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    api = YouTubeTranscriptApi()
+    api = YouTubeTranscriptApi(proxy_config=_proxy_config())
     if hasattr(api, "fetch"):                       # v1.x instance API
         return " ".join(seg.text for seg in api.fetch(video_id))
     return " ".join(s["text"] for s in YouTubeTranscriptApi.get_transcript(video_id))  # legacy static API
@@ -174,8 +198,9 @@ _NO_CAPTION_ERRORS = {"TranscriptsDisabled", "NoTranscriptFound", "NoTranscriptA
 _BLOCKED_HINTS = ("block", "ipblocked", "toomanyrequests", "requestblocked", "429")
 
 
-def get_transcript(video_id: str) -> tuple[str, str | None]:
-    """(status, text): status is ok | no_captions | blocked | error."""
+def _direct_transcript(video_id: str) -> tuple[str, str | None]:
+    """Fetch captions straight from YouTube. Works from a residential IP; blocked
+    from datacenter IPs unless a proxy is configured (see _proxy_config)."""
     try:
         text = _fetch_transcript_text(video_id)
         return ("ok", text) if (text and text.strip()) else ("no_captions", None)
@@ -187,3 +212,22 @@ def get_transcript(video_id: str) -> tuple[str, str | None]:
         if any(h in blob for h in _BLOCKED_HINTS):
             return "blocked", None
         return "error", None
+
+
+def get_transcript(video_id: str) -> tuple[str, str | None]:
+    """(status, text): status is ok | no_captions | blocked | error.
+
+    Prefers the Supadata API when a key is set — it fetches server-side, so it
+    works from the datacenter IPs that YouTube blocks. Falls back to the direct
+    caption fetch when Supadata isn't configured or errors (a quota failure on
+    the runner then surfaces as `blocked`, which the scan retries next run).
+    """
+    if supadata_client.is_configured():
+        try:
+            text = supadata_client.get_transcript_text(video_id)
+            return ("ok", text) if (text and text.strip()) else ("no_captions", None)
+        except supadata_client.TranscriptUnavailable:
+            return "no_captions", None   # authoritative: don't retry this one forever
+        except Exception:
+            pass                          # quota/outage -> try direct, then classify
+    return _direct_transcript(video_id)
