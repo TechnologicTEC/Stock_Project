@@ -19,6 +19,7 @@ retry on the next run.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -28,6 +29,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from engine.data_sources import supadata_client, youtube_data_api
+
+logger = logging.getLogger(__name__)
 
 _FEED_URL = "https://www.youtube.com/feeds/videos.xml"
 _CHANNEL_ID_RE = re.compile(r"UC[0-9A-Za-z_-]{22}")
@@ -93,8 +96,9 @@ def latest_videos(channel_id: str, limit: int = 15, retries: int = 5) -> list[di
     if youtube_data_api.is_configured():
         try:
             return youtube_data_api.list_uploads(channel_id, limit)
-        except Exception:
-            pass  # quota/outage -> try the RSS feed below
+        except Exception as exc:
+            logger.warning("Data API list_uploads(%s) failed (%s: %s) — falling back to the flaky RSS feed",
+                           channel_id, type(exc).__name__, exc)
     return _parse_feed(_fetch_feed(channel_id, retries), limit)
 
 
@@ -164,8 +168,9 @@ def resolve_channel(url_or_handle: str) -> dict:
             return youtube_data_api.resolve_channel(text)
         except ValueError:
             raise                 # genuinely no such channel — don't mask it
-        except Exception:
-            pass                  # quota/outage -> fall through
+        except Exception as exc:
+            logger.warning("Data API channel lookup failed (%s: %s) — falling back",
+                           type(exc).__name__, exc)
 
     channel_id = _channel_id_from_input(text)
     handle = text if text.startswith("@") else None
@@ -248,6 +253,9 @@ def get_transcript(video_id: str) -> tuple[str, str | None]:
             return ("ok", text) if (text and text.strip()) else ("no_captions", None)
         except supadata_client.TranscriptUnavailable:
             return "no_captions", None   # authoritative: don't retry this one forever
-        except Exception:
-            pass                          # quota/outage -> try direct, then classify
+        except Exception as exc:
+            # Never swallow this silently: a misconfigured key or bad param looks
+            # identical to an IP block once we fall through to the direct fetch.
+            logger.warning("Supadata transcript for %s failed (%s: %s) — falling back to the direct fetch",
+                           video_id, type(exc).__name__, exc)
     return _direct_transcript(video_id)

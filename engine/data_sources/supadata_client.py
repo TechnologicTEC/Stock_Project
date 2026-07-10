@@ -50,14 +50,24 @@ def is_configured() -> bool:
     return bool(_api_key())
 
 
-def _mode() -> str:
-    # native = captions only (1 credit). See the credit note above before changing.
-    return os.environ.get("SUPADATA_MODE", "native")
+_MODES = ("native", "generate", "auto")
+
+
+def mode() -> str:
+    """native = captions only (1 credit). See the credit note above before changing.
+
+    NB: `or`, not `os.environ.get(name, default)` — GitHub Actions injects an
+    **empty string** for an undefined var/secret, and get()'s default only applies
+    when the key is absent. Sending `mode=` produced a 400 from Supadata.
+    """
+    chosen = (os.environ.get("SUPADATA_MODE") or "native").strip().lower()
+    return chosen if chosen in _MODES else "native"
 
 
 def _max_wait() -> float:
+    raw = (os.environ.get("SUPADATA_MAX_WAIT") or "").strip()
     try:
-        return float(os.environ.get("SUPADATA_MAX_WAIT", _DEFAULT_MAX_WAIT_SECONDS))
+        return float(raw) if raw else _DEFAULT_MAX_WAIT_SECONDS
     except ValueError:
         return _DEFAULT_MAX_WAIT_SECONDS
 
@@ -108,7 +118,7 @@ def get_transcript_text(video_id: str) -> str:
     """
     resp = requests.get(
         _BASE,
-        params={"url": _WATCH_URL + video_id, "text": "true", "mode": _mode()},
+        params={"url": _WATCH_URL + video_id, "text": "true", "mode": mode()},
         headers=_headers(),
         timeout=30,
     )

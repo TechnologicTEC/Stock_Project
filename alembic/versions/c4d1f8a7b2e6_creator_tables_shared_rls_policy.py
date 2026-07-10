@@ -39,7 +39,7 @@ _POLICY = "app_shared_rw"
 def _role() -> str:
     """The app's runtime role (must match scripts/setup_app_role.py). Validated —
     role names can't be bound as SQL parameters."""
-    role = os.environ.get("APP_DB_ROLE", "copilot_app")
+    role = os.environ.get("APP_DB_ROLE") or "copilot_app"   # `or`: an empty env var must not win
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", role):
         raise ValueError(f"Unsafe APP_DB_ROLE: {role!r}")
     return role

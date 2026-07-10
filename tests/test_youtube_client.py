@@ -106,6 +106,18 @@ def test_supadata_transcript_unavailable_is_authoritative_no_captions():
     direct.assert_not_called()          # don't burn a retry on a video with no captions
 
 
+def test_supadata_failure_is_logged_not_swallowed(caplog):
+    # A bad key / bad param must not look identical to an IP block in the log.
+    with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \
+         patch("engine.data_sources.supadata_client.get_transcript_text",
+               side_effect=RuntimeError("HTTP 400: invalid-request")), \
+         patch("engine.data_sources.youtube_client._direct_transcript", return_value=("blocked", None)):
+        with caplog.at_level("WARNING"):
+            assert yt.get_transcript("v") == ("blocked", None)
+    assert "Supadata transcript for v failed" in caplog.text
+    assert "invalid-request" in caplog.text
+
+
 def test_supadata_quota_failure_falls_back_to_the_direct_path():
     from engine.data_sources.supadata_client import QuotaExceeded
     with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \

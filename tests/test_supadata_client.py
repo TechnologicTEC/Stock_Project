@@ -25,6 +25,29 @@ def test_is_configured_follows_the_key(monkeypatch):
     assert sd.is_configured() is False
 
 
+def test_mode_defaults_to_native_when_env_var_is_empty(monkeypatch):
+    # GitHub Actions injects "" for an undefined var — get(..., default) would
+    # return "" and we'd send `mode=`, which Supadata rejects with a 400.
+    monkeypatch.setenv("SUPADATA_MODE", "")
+    assert sd.mode() == "native"
+    monkeypatch.setenv("SUPADATA_MODE", "   ")
+    assert sd.mode() == "native"
+
+
+def test_mode_honours_valid_values_and_rejects_junk(monkeypatch):
+    monkeypatch.setenv("SUPADATA_MODE", "AUTO")
+    assert sd.mode() == "auto"
+    monkeypatch.setenv("SUPADATA_MODE", "nonsense")
+    assert sd.mode() == "native"
+
+
+def test_max_wait_survives_an_empty_env_var(monkeypatch):
+    monkeypatch.setenv("SUPADATA_MAX_WAIT", "")
+    assert sd._max_wait() == 180.0
+    monkeypatch.setenv("SUPADATA_MAX_WAIT", "45")
+    assert sd._max_wait() == 45.0
+
+
 def test_returns_plain_text_and_uses_native_mode_by_default():
     with patch("engine.data_sources.supadata_client.requests.get",
                return_value=_resp(200, {"content": "hello world", "lang": "en"})) as get:
