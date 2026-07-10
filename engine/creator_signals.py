@@ -13,6 +13,7 @@ are deliberately NOT persisted so the next run retries them.
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
@@ -31,14 +32,20 @@ _PERSIST_STATUSES = {"ok", "no_captions"}
 
 
 def seed_default_creators() -> int:
-    """Insert any DEFAULT_CREATORS not already present. Returns how many added."""
+    """Insert any DEFAULT_CREATORS not already present. Returns how many added.
+    Idempotent and tolerant of a concurrent inserter — the page calls this on
+    every render, so two tabs must not collide on the unique channel_id."""
     added = 0
-    with get_session() as s:
-        for c in DEFAULT_CREATORS:
-            exists = s.execute(select(Creator).where(Creator.channel_id == c["channel_id"])).scalar_one_or_none()
-            if exists is None:
-                s.add(Creator(**c))
-                added += 1
+    for spec in DEFAULT_CREATORS:
+        with get_session() as s:
+            if s.execute(select(Creator.id).where(Creator.channel_id == spec["channel_id"])).scalar_one_or_none():
+                continue
+        try:
+            with get_session() as s:
+                s.add(Creator(**spec))
+            added += 1
+        except IntegrityError:
+            pass  # someone else seeded it between the check and the insert
     return added
 
 

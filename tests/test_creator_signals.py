@@ -199,6 +199,12 @@ def test_set_creator_active_unknown_returns_false():
     assert creator_signals.set_creator_active("UCdoesnotexist000000000", True) is False
 
 
+def test_seed_default_creators_is_idempotent():
+    assert creator_signals.seed_default_creators() == 1     # ZipTrader inserted
+    assert creator_signals.seed_default_creators() == 0     # second call adds nothing
+    assert [c["display_name"] for c in creator_signals.list_creators()] == ["ZipTrader"]
+
+
 def test_scan_sends_digest_only_for_videos_with_new_mentions():
     with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
          patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "body")), \
