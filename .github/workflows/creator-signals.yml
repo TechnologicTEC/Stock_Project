@@ -34,4 +34,12 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC ticker list fetch (has a default UA otherwise)
+          # Digest email — set EITHER Resend or SMTP. Set neither and the email is
+          # silently skipped (the scan still runs). See engine/mailer.py.
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DIGEST_EMAIL_TO: ${{ secrets.DIGEST_EMAIL_TO }}     # else falls back to OWNER_EMAILS
+          OWNER_EMAILS: ${{ secrets.OWNER_EMAILS }}
         run: python scripts/scan_creators.py

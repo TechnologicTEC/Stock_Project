@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
-from engine import ticker_extraction
+from engine import creator_digest, ticker_extraction
 from engine.data_sources import youtube_client
 from engine.time_utils import utcnow
 
@@ -143,10 +143,11 @@ def _mark_extracted(video_id: str) -> None:
             v.mentions_extracted_at = utcnow()
 
 
-def _extract_pending(summary: dict, limit: int = 25) -> None:
+def _extract_pending(summary: dict, limit: int = 25) -> list[str]:
     """Extract+screen every captioned video not yet extracted — this run's new
     videos plus any whose extraction failed before (retry). On success the retry
-    flag is set; a transient/failed extraction leaves it unset to try again."""
+    flag is set; a transient/failed extraction leaves it unset to try again.
+    Returns the ids of videos that yielded at least one mention (for the digest)."""
     with get_session() as s:
         pending = [(v.video_id, v.transcript) for v in s.execute(
             select(CreatorVideo).where(
@@ -156,13 +157,18 @@ def _extract_pending(summary: dict, limit: int = 25) -> None:
             ).order_by(CreatorVideo.processed_at.desc()).limit(limit)
         ).scalars().all()]
 
+    with_mentions: list[str] = []
     for video_id, transcript in pending:
         try:
-            summary["mentions"] = summary.get("mentions", 0) + _screen_and_store_mentions(video_id, transcript)
+            found = _screen_and_store_mentions(video_id, transcript)
+            summary["mentions"] = summary.get("mentions", 0) + found
             _mark_extracted(video_id)
+            if found:
+                with_mentions.append(video_id)
         except Exception as exc:
             summary["extract_deferred"] = summary.get("extract_deferred", 0) + 1
             print(f"    {video_id} extract deferred (will retry): {type(exc).__name__}: {exc}", flush=True)
+    return with_mentions
 
 
 def scan_creators(video_limit: int = 15) -> dict:
@@ -184,36 +190,53 @@ def scan_creators(video_limit: int = 15) -> dict:
         for video in videos:
             _process_video(creator, video, summary)
 
-    _extract_pending(summary)
+    newly_mentioned = _extract_pending(summary)
+    # Only email when this run actually turned up new stock mentions.
+    if newly_mentioned and creator_digest.send_digest(signals_for_videos(newly_mentioned)):
+        summary["digest_sent"] = True
+
     print(f"\ndone: {summary}", flush=True)
     return summary
+
+
+def _shape(s, video: CreatorVideo, creators: dict) -> dict:
+    """One video + its mentions (best screener score first) in read-model form."""
+    mentions = s.execute(select(VideoMention).where(VideoMention.video_id == video.video_id)).scalars().all()
+    mentions.sort(key=lambda m: (m.screener_score is None, -(m.screener_score or 0.0), m.ticker))
+    return {
+        "video_id": video.video_id, "title": video.title, "url": video.url,
+        "published_at": video.published_at, "creator": creators.get(video.creator_id, "Unknown"),
+        "mentions": [{
+            "ticker": m.ticker, "company_name": m.company_name, "stance": m.stance,
+            "screener_score": m.screener_score, "recommendation": m.recommendation,
+            "confidence": m.confidence,
+        } for m in mentions],
+    }
+
+
+def _creator_names(s) -> dict:
+    return {c.id: (c.display_name or c.handle or c.channel_id) for c in s.execute(select(Creator)).scalars()}
 
 
 def recent_signals(limit_videos: int = 12) -> list[dict]:
     """Recent captioned videos and their screened mentions, newest first — the
     read model for the Creator Signals page. Global/shared data (no user scope)."""
     with get_session() as s:
-        creators = {c.id: (c.display_name or c.handle or c.channel_id)
-                    for c in s.execute(select(Creator)).scalars()}
+        creators = _creator_names(s)
         rows = s.execute(
             select(CreatorVideo).where(CreatorVideo.transcript_status == "ok")
             .order_by(CreatorVideo.processed_at.desc()).limit(limit_videos * 3)
         ).scalars().all()
         rows.sort(key=lambda v: (v.published_at or v.processed_at), reverse=True)
+        return [_shape(s, v, creators) for v in rows[:limit_videos]]
 
-        out = []
-        for v in rows[:limit_videos]:
-            mentions = s.execute(
-                select(VideoMention).where(VideoMention.video_id == v.video_id)
-            ).scalars().all()
-            mentions.sort(key=lambda m: (m.screener_score is None, -(m.screener_score or 0.0), m.ticker))
-            out.append({
-                "video_id": v.video_id, "title": v.title, "url": v.url,
-                "published_at": v.published_at, "creator": creators.get(v.creator_id, "Unknown"),
-                "mentions": [{
-                    "ticker": m.ticker, "company_name": m.company_name, "stance": m.stance,
-                    "screener_score": m.screener_score, "recommendation": m.recommendation,
-                    "confidence": m.confidence,
-                } for m in mentions],
-            })
-    return out
+
+def signals_for_videos(video_ids: list[str]) -> list[dict]:
+    """The same read model, restricted to specific videos — used by the digest."""
+    if not video_ids:
+        return []
+    with get_session() as s:
+        creators = _creator_names(s)
+        rows = s.execute(select(CreatorVideo).where(CreatorVideo.video_id.in_(video_ids))).scalars().all()
+        rows.sort(key=lambda v: (v.published_at or v.processed_at), reverse=True)
+        return [_shape(s, v, creators) for v in rows]

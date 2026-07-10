@@ -197,3 +197,29 @@ def test_add_creator_resolves_and_inserts_then_reactivates():
 
 def test_set_creator_active_unknown_returns_false():
     assert creator_signals.set_creator_active("UCdoesnotexist000000000", True) is False
+
+
+def test_scan_sends_digest_only_for_videos_with_new_mentions():
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
+         patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "body")), \
+         patch("engine.ticker_extraction.extract_mentions",
+               return_value=[Mention("NVDA", "NVIDIA", "bullish", 0.9)]), \
+         patch("engine.screener.screen_tickers",
+               return_value=[SimpleNamespace(ticker="NVDA", overall_score=70.0, recommendation="Buy")]), \
+         patch("engine.creator_digest.send_digest", return_value=True) as digest:
+        summary = creator_signals.scan_creators()
+
+    assert summary.get("digest_sent") is True
+    sent = digest.call_args.args[0]
+    assert sent[0]["video_id"] == "AAA" and sent[0]["mentions"][0]["ticker"] == "NVDA"
+
+
+def test_scan_sends_no_digest_when_no_mentions_found():
+    # extract_mentions is stubbed to [] by the autouse fixture -> nothing to report.
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \
+         patch("engine.data_sources.youtube_client.get_transcript", return_value=("ok", "body")), \
+         patch("engine.creator_digest.send_digest") as digest:
+        summary = creator_signals.scan_creators()
+
+    digest.assert_not_called()
+    assert "digest_sent" not in summary

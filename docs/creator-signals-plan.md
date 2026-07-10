@@ -156,8 +156,13 @@ in-memory SQLite conftest. Orchestrator tests: new videos process, dupes skip,
 - **Multi-creator management:** `youtube_client.resolve_channel()` (URL/@handle/UC
   id → channel), `creator_signals.add_creator / set_creator_active / list_creators`,
   and a "⚙️ Manage creators" section on the page (add by URL/handle, enable/disable).
-- **Deferred:** email digest (needs a mail-provider decision + secret) and
-  quote-based validation (SEC-list validation already covers it well).
+- **Email digest ✅:** `engine/mailer.py` (provider-agnostic: **Resend** via
+  `RESEND_API_KEY`, or **SMTP** via `SMTP_HOST/USER/PASSWORD`; a no-op if neither
+  is set) + `engine/creator_digest.py` (subject + HTML table, carries the same
+  "mention ≠ endorsement / not advice" framing). `scan_creators()` emails **only
+  when the run turned up new mentions**, so it can't be spammy, and a mail failure
+  never breaks the scan. Recipient: `DIGEST_EMAIL_TO`, else the first `OWNER_EMAILS`.
+- **Deferred:** quote-based validation (SEC-list validation already covers it well).
 
 ### To activate Phase 4
 1. `git push origin main` (workflow + script + reqs) and `git push space main` (deploys the page + tables).
