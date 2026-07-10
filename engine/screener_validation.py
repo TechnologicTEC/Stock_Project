@@ -93,6 +93,38 @@ def walk_forward(ticker: str, start: date, end: date,
     return points
 
 
+def _fit_trend(df: pd.DataFrame) -> dict | None:
+    """Least-squares line through (score, forward_return_pct), for the chart.
+
+    Careful: this is a fit on the **raw values**, so it corresponds to the
+    *Pearson* correlation — NOT to the headline information coefficient, which is
+    *Spearman* (a rank correlation) and therefore far less swayed by one outlier.
+    They normally agree in direction but not in magnitude, and the page says so.
+
+    Returns None when a line would be meaningless: too few points, or every score
+    identical (zero variance → infinite slope).
+    """
+    if len(df) < MIN_POINTS_FOR_SUMMARY:
+        return None
+    x, y = df["score"], df["forward_return_pct"]
+    variance = float(x.var())
+    if not variance or pd.isna(variance):
+        return None
+
+    slope = float(x.cov(y) / variance)
+    intercept = float(y.mean() - slope * x.mean())
+    r = x.corr(y)
+    x0, x1 = float(x.min()), float(x.max())
+    return {
+        "slope": round(slope, 4),
+        "intercept": round(intercept, 4),
+        "x0": x0, "x1": x1,
+        "y0": round(slope * x0 + intercept, 4),
+        "y1": round(slope * x1 + intercept, 4),
+        "pearson_r": round(float(r), 3) if pd.notna(r) else None,
+    }
+
+
 def summarize(points: list[dict]) -> dict:
     """Turn walk-forward points into a verdict: the score↔forward-return rank
     correlation (information coefficient) and the average forward return within
@@ -100,7 +132,8 @@ def summarize(points: list[dict]) -> dict:
     Screener has signal" would look like."""
     n = len(points)
     if n < MIN_POINTS_FOR_SUMMARY:
-        return {"n": n, "insufficient_data": True, "information_coefficient": None, "bands": []}
+        return {"n": n, "insufficient_data": True, "information_coefficient": None,
+                "bands": [], "trend": None}
 
     df = pd.DataFrame(points)
     # Information coefficient = Spearman rank correlation. Computed as Pearson on
@@ -121,4 +154,5 @@ def summarize(points: list[dict]) -> dict:
         "insufficient_data": False,
         "information_coefficient": round(float(ic), 3) if pd.notna(ic) else None,
         "bands": bands,
+        "trend": _fit_trend(df),
     }

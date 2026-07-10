@@ -50,23 +50,30 @@ def test_health_page_renders_with_holdings_when_every_data_source_fails():
     """Worst case: holdings exist but every external source comes back
     empty - the page must still render with placeholders, not crash.
 
-    All three sources are explicitly mocked rather than relying on however
-    much network access the test happens to be running with. That
-    distinction matters here specifically: yfinance needs no API key at
-    all, so on a machine with real internet access it can successfully
-    fetch real price history (and compute a real beta) even with zero
-    configured keys - "no API keys" does NOT imply "no data" for anything
-    yfinance-backed. An earlier version of this test had no mocks and
-    happened to pass in a sandboxed build environment with no route to
-    Yahoo Finance, which silently depended on that environment's network
-    restrictions rather than testing the actual no-data code path."""
+    *Every* source is explicitly mocked rather than relying on however much
+    network access the test happens to be running with. That distinction
+    matters here specifically: yfinance needs no API key at all, so on a
+    machine with real internet access it can successfully fetch real price
+    history (and compute a real beta) even with zero configured keys - "no
+    API keys" does NOT imply "no data" for anything yfinance-backed. An
+    earlier version of this test had no mocks and happened to pass in a
+    sandboxed build environment with no route to Yahoo Finance, which
+    silently depended on that environment's network restrictions rather
+    than testing the actual no-data code path.
+
+    price_history later grew an **Alpaca fallback** for when yfinance comes
+    back empty, which quietly reopened that same hole: a developer with
+    ALPACA_API_KEY in .env got a real beta (0.85) instead of the "-"
+    placeholder. So Alpaca is switched off here too, exactly as an
+    unconfigured key behaves."""
     portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
 
-    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=RuntimeError("no Finnhub key configured")):
-        with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=[]):
-            with patch("engine.health.fred_client.get_series", side_effect=RuntimeError("no FRED key configured")):
-                at = AppTest.from_file(PAGE_PATH)
-                at.run(timeout=30)
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=RuntimeError("no Finnhub key configured")), \
+         patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=[]), \
+         patch("engine.data_sources.alpaca_client.is_configured", return_value=False), \
+         patch("engine.health.fred_client.get_series", side_effect=RuntimeError("no FRED key configured")):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
 
     assert not at.exception
     metric_values = {m.label: m.value for m in at.metric}

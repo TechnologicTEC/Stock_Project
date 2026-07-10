@@ -58,6 +58,24 @@ def test_validation_page_runs_and_renders_verdict():
     assert mock_wf.call_args.kwargs.get("include_news") is False
 
 
+def test_validation_page_draws_a_trend_line_and_explains_it_against_the_ic():
+    """The scatter's trend line is a raw least-squares fit, while the headline IC
+    is a rank correlation — the caption must say so, or the two get conflated."""
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+
+    with patch("engine.screener_validation.walk_forward", return_value=_canned_points()):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        next(b for b in at.button if "Run validation" in b.label).click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    captions = " ".join(c.value for c in at.caption)
+    assert "least-squares fit" in captions
+    assert "per score point" in captions       # the slope is quoted, not just drawn
+    assert "rank" in captions                  # ...and distinguished from the IC
+
+
 def test_validation_page_news_toggle_opts_into_gdelt():
     portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
 

@@ -1,12 +1,35 @@
 """
 Every test gets a fresh, isolated in-memory SQLite database — no test can
 leak state into another, and none of them touch your real db/investment.db.
+
+It also gets a neutral *identity*: `engine.config` loads `.env` into os.environ
+at import, so without this a developer's own `.env` decided who the app thought
+was signed in.
 """
 import pytest
 import streamlit as st
 
 from db import session as db_session
 from engine import credentials
+
+# Env vars that change *who the app thinks you are*. `app/_auth.gate()` reads
+# these on every page, so a developer's .env would otherwise silently re-point
+# the pages at a different user than the fixtures seed data for.
+_IDENTITY_ENV = ("DEV_LOGIN_EMAIL", "REQUIRE_LOGIN", "OWNER_EMAILS", "FRIEND_EMAILS")
+
+
+@pytest.fixture(autouse=True)
+def neutral_identity(monkeypatch):
+    """Pin every test to the bootstrap owner.
+
+    Without this, `.env`'s DEV_LOGIN_EMAIL made `gate()` resolve to that personal
+    account while the fixtures wrote holdings as the bootstrap user — so every
+    page test rendered its empty-portfolio branch and failed on a missing widget.
+    Tests that care about roles set these vars themselves (monkeypatch inside the
+    test wins, since fixtures run first).
+    """
+    for key in _IDENTITY_ENV:
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture(autouse=True)

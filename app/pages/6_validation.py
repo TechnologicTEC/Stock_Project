@@ -13,6 +13,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from app._auth import gate
@@ -169,8 +170,28 @@ fig = px.scatter(
     labels={"score": "Screener score (as of that date)", "forward_return_pct": f"Return over next {result['horizon_days']} days (%)", "recommendation": ""},
 )
 fig.add_hline(y=0, line_dash="dot", line_color="#888780")
+
+trend = summary.get("trend")
+if trend:
+    fig.add_trace(go.Scatter(
+        x=[trend["x0"], trend["x1"]], y=[trend["y0"], trend["y1"]],
+        mode="lines", name=f"Trend {trend['slope']:+.2f}%/pt",
+        line=dict(color="#444444", width=2), hoverinfo="skip",
+    ))
+
 fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="top", y=-0.15, x=0))
 st.plotly_chart(fig, width="stretch", key="validation_scatter")
+
+if trend:
+    r_txt = f"{trend['pearson_r']:+.2f}" if trend["pearson_r"] is not None else "—"
+    st.caption(
+        f"The trend line is a least-squares fit: **{trend['slope']:+.2f}%** of forward return per score point "
+        f"(Pearson r = {r_txt} on the raw values). The information coefficient above is a **rank** correlation, "
+        "so it shrugs off a single outlier that can swing this line — read them as agreeing on *direction*, "
+        "not on magnitude."
+    )
+elif not summary.get("insufficient_data"):
+    st.caption("No trend line: the scores in this window don't vary enough to fit one.")
 
 # --------------------------------------------------------------------------
 # Per-observation factor breakdown — shows every factor (news included)

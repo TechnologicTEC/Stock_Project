@@ -32,6 +32,50 @@ def test_summarize_flags_insufficient_data():
     summary = sv.summarize(points)
     assert summary["insufficient_data"] is True
     assert summary["information_coefficient"] is None
+    assert summary["trend"] is None
+
+
+# --------------------------------------------------------------------------
+# Trend line — the least-squares fit drawn on the scatter
+# --------------------------------------------------------------------------
+
+def _points(pairs):
+    return [{"date": date(2022, 1, 1) + timedelta(days=i), "score": s,
+             "recommendation": "Hold", "forward_return_pct": r}
+            for i, (s, r) in enumerate(pairs)]
+
+
+def test_trend_fits_a_line_through_a_perfect_relationship():
+    # y = 0.5x - 20 exactly -> slope 0.5, endpoints sit on the line.
+    summary = sv.summarize(_points([(40, 0.0), (50, 5.0), (60, 10.0), (70, 15.0), (80, 20.0)]))
+    trend = summary["trend"]
+    assert trend["slope"] == 0.5 and trend["intercept"] == -20.0
+    assert (trend["x0"], trend["y0"]) == (40.0, 0.0)
+    assert (trend["x1"], trend["y1"]) == (80.0, 20.0)
+    assert trend["pearson_r"] == 1.0
+
+
+def test_trend_slope_is_negative_when_higher_scores_precede_lower_returns():
+    summary = sv.summarize(_points([(30, 10.0), (45, 6.0), (60, 2.0), (75, -3.0), (90, -8.0)]))
+    assert summary["trend"]["slope"] < 0
+    assert summary["information_coefficient"] < 0        # rank IC and raw fit agree on direction
+
+
+def test_no_trend_line_when_every_score_is_identical():
+    # Zero variance in x -> slope undefined; don't draw a meaningless line.
+    summary = sv.summarize(_points([(60, r) for r in (-4.0, -1.0, 0.0, 3.0, 7.0)]))
+    assert summary["trend"] is None
+    assert summary["insufficient_data"] is False         # the IC section still renders
+
+
+def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():
+    # One wild point drags the least-squares slope negative (-1.41) while the rank
+    # IC stays positive (+0.14) — exactly why the page says to compare the two on
+    # direction, not magnitude, and why the trend line alone would mislead.
+    summary = sv.summarize(_points([(40, 1.0), (50, 2.0), (60, 3.0), (70, 4.0), (80, 5.0), (90, -100.0)]))
+    assert summary["information_coefficient"] > 0        # ranks: mostly still increasing
+    assert summary["trend"]["slope"] < 0                 # raw fit: dragged down by the outlier
+    assert summary["trend"]["pearson_r"] < 0             # ...and so is the raw correlation
 
 
 # --------------------------------------------------------------------------
