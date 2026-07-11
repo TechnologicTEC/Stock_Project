@@ -529,6 +529,24 @@ def _pct_color(value) -> str:
     )
 
 
+def _reco_color(text) -> str:
+    """Tint the Screener cell by its Buy/Sell lean."""
+    if not isinstance(text, str):
+        return ""
+    if "Buy" in text:
+        return "background-color: rgba(34, 197, 94, 0.20)"
+    if "Sell" in text:
+        return "background-color: rgba(239, 68, 68, 0.20)"
+    return ""
+
+
+rate_holdings = st.checkbox(
+    "📊 Rate my holdings with the Screener",
+    help="Runs the Investment Screener on each holding to show its Buy/Hold/Sell rating. It fetches "
+         "analyst data per ticker, so it's heavier than the rest of the page — off by default. Educational, "
+         "not advice.",
+)
+
 table_df = pd.DataFrame(valuation)[
     ["ticker", "asset_type", "shares", "cost_basis", "current_price", "market_value", "gain_loss_pct", "day_change_pct"]
 ].rename(
@@ -539,6 +557,18 @@ table_df = pd.DataFrame(valuation)[
     }
 )
 
+if rate_holdings:
+    with st.spinner("Rating your holdings with the Screener…"):
+        ratings = _cache.screener_ratings(tuple(sorted(h["ticker"] for h in holdings)))
+
+    def _rating_label(ticker: str) -> str:
+        r = ratings.get(ticker)
+        if not r or r.get("score") is None:
+            return "—"
+        return f"{r['recommendation']} · {r['score']:.0f}"
+
+    table_df["Screener"] = table_df["Ticker"].map(_rating_label)
+
 # Convert the USD money columns into the display currency (% columns are
 # unit-invariant, so they're left alone).
 money_columns = ["Cost/share", "Price", "Market value"]
@@ -546,17 +576,20 @@ for col in money_columns:
     table_df[col] = pd.to_numeric(table_df[col], errors="coerce") * fx_rate
 
 money_fmt = currency.symbol(active_currency) + "{:,.2f}"
-styled = (
-    table_df.style.map(_pct_color, subset=["Gain/loss %", "Today %"])
-    .format(
-        {
-            "Cost/share": money_fmt, "Price": money_fmt, "Market value": money_fmt,
-            "Gain/loss %": "{:+.2f}%", "Today %": "{:+.2f}%", "Shares": "{:,.4f}",
-        },
-        na_rep="—",
-    )
+styled = table_df.style.map(_pct_color, subset=["Gain/loss %", "Today %"])
+if rate_holdings:
+    styled = styled.map(_reco_color, subset=["Screener"])
+styled = styled.format(
+    {
+        "Cost/share": money_fmt, "Price": money_fmt, "Market value": money_fmt,
+        "Gain/loss %": "{:+.2f}%", "Today %": "{:+.2f}%", "Shares": "{:,.4f}",
+    },
+    na_rep="—",
 )
 st.dataframe(styled, width="stretch", hide_index=True)
+if rate_holdings:
+    st.caption("**Screener** = Buy/Hold/Sell rating · score out of 100. An explainable weighted-factor score "
+               "from free data — educational, not financial advice.")
 
 with st.expander("🗑️ Remove a holding"):
     st.caption("Erases the position and its entire transaction history — use this for an entry added by mistake. To undo just one buy/sell, use **Transaction history** above instead.")

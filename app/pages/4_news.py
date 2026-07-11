@@ -50,6 +50,42 @@ if not ticker:
     st.info("Add a holding or watchlist item — or type a ticker above — to see its news and earnings.")
     st.stop()
 
+# --------------------------------------------------------------------------
+# Cross-signal summary (review #5) — opt-in, because it runs the Screener.
+# --------------------------------------------------------------------------
+_SIGNAL_ICON = {"positive": "🟢", "negative": "🔴", "neutral": "⚪", "n/a": "·"}
+
+if st.checkbox(
+    "🔀 Cross-signal summary",
+    help="Tally the app's independent reads on this ticker — Screener, news sentiment, last earnings, and "
+         "creator mentions — to see where they agree or disagree. Runs the Screener, so it's opt-in. Not a "
+         "prediction.",
+):
+    with st.spinner(f"Gathering signals for {ticker}…"):
+        summary = _cache.signal_summary(ticker)
+
+    if not summary["counted"]:
+        st.caption("None of the signals have data for this ticker yet.")
+    else:
+        pos, neu, neg, counted = (summary["positive"], summary["neutral"],
+                                  summary["negative"], summary["counted"])
+        if pos > neg and pos >= 2:
+            lean = "🟢 **Signals lean positive**"
+        elif neg > pos and neg >= 2:
+            lean = "🔴 **Signals lean negative**"
+        elif pos and neg:
+            lean = "🟡 **Signals are mixed**"
+        else:
+            lean = "⚪ **No clear lean**"
+        st.markdown(f"{lean} — {pos} positive · {neu} neutral · {neg} negative, of {counted} signals with data.")
+        st.dataframe(
+            pd.DataFrame([{"Signal": r.name, "": _SIGNAL_ICON[r.stance], "Read": r.detail}
+                          for r in summary["reads"]]),
+            width="stretch", hide_index=True,
+        )
+        st.caption("Where the app's independent reads agree or disagree — **not a prediction and not a combined "
+                   "score**. Each read keeps its own caveats on its own page.")
+
 view = st.radio("View", ["📰 News", "📈 Earnings"], horizontal=True, label_visibility="collapsed")
 
 # --------------------------------------------------------------------------

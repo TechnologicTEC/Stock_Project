@@ -43,6 +43,31 @@ def test_news_page_renders_news_view_with_sentiment():
     assert metrics["Overall sentiment"] == "90/100"  # single headline @ 0.8 -> 0-100 scale, no sign
 
 
+def test_news_page_cross_signal_summary_is_opt_in():
+    from engine.signals import SignalRead
+    portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
+    summary = {"ticker": "AAPL", "positive": 2, "neutral": 1, "negative": 0, "counted": 3,
+               "reads": [SignalRead("Screener", "positive", "Buy · 68/100"),
+                         SignalRead("News sentiment", "neutral", "Neutral (50/100)"),
+                         SignalRead("Latest earnings", "positive", "Beat estimates by 12%"),
+                         SignalRead("Creator mentions", "n/a", "not mentioned recently")]}
+
+    with patch("engine.news.finnhub_client.get_company_news", return_value=[]), \
+         patch("engine.news.rss_client.get_google_news", return_value=[]), \
+         patch("engine.news.sentiment.is_available", return_value=False), \
+         patch("engine.signals.aggregate_signals", return_value=summary) as agg:
+        at = AppTest.from_file(NEWS_PAGE_PATH)
+        at.run(timeout=30)
+        agg.assert_not_called()                          # not computed until opted in
+
+        next(c for c in at.checkbox if "Cross-signal summary" in c.label).set_value(True).run()
+
+    assert not at.exception
+    agg.assert_called_once()
+    md = " ".join(m.value for m in at.markdown)
+    assert "Signals lean positive" in md and "2 positive" in md
+
+
 def test_news_page_earnings_view_shows_beat():
     portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
     raw = {"earningsCalendar": [

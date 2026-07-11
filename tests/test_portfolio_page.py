@@ -57,6 +57,28 @@ def test_portfolio_page_renders_with_holdings_without_error():
     assert metric_values["Total value"] == "$1,500.00"  # AAPL: 10*$100 + VTI: 5*$100, fake quote price=100
 
 
+def test_portfolio_page_screener_ratings_are_opt_in_and_add_a_column():
+    from types import SimpleNamespace
+    portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
+    fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
+    result = [SimpleNamespace(ticker="AAPL", overall_score=68.0, recommendation="Buy")]
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)), \
+         patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")), \
+         patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars), \
+         patch("engine.screener.screen_tickers", return_value=result) as screen:
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        screen.assert_not_called()                       # heavy screener is NOT run by default
+
+        next(c for c in at.checkbox if "Rate my holdings" in c.label).set_value(True).run()
+
+    assert not at.exception
+    screen.assert_called_once()                          # ...only after opting in
+    holdings_df = next(d.value for d in at.dataframe if "Screener" in list(d.value.columns))
+    assert "Buy · 68" in holdings_df["Screener"].tolist()
+
+
 def test_portfolio_page_currency_toggle_converts_displayed_values_to_nzd():
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
     fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]

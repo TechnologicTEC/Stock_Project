@@ -200,6 +200,24 @@ def test_set_creator_active_unknown_returns_false():
     assert creator_signals.set_creator_active("UCdoesnotexist000000000", True) is False
 
 
+def test_ticker_stance_summarizes_recent_mentions():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    now = utcnow()
+    _seed_video(cid, "V1", now - timedelta(days=1))
+    _seed_video(cid, "V2", now - timedelta(days=5))
+    _seed_video(cid, "OLD", now - timedelta(days=200))
+    _seed_mention("V1", "NVDA", "bullish")
+    _seed_mention("V2", "NVDA", "bullish")
+    _seed_mention("OLD", "NVDA", "bearish")     # outside the window -> ignored
+
+    stance = creator_signals.ticker_stance("nvda")
+    assert stance["mentions"] == 2 and stance["stance"] == "bullish"
+    assert stance["counts"] == {"bullish": 2, "bearish": 0, "neutral": 0}
+    assert creator_signals.ticker_stance("AAPL") is None   # never mentioned
+
+
 def _seed_video(cid, video_id, published_at, title="t"):
     with get_session() as s:
         s.add(CreatorVideo(creator_id=cid, video_id=video_id, title=title, url=f"u/{video_id}",

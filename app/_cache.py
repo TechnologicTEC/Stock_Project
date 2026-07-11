@@ -40,6 +40,27 @@ def news_analysis(ticker: str):
     return news.analyze_ticker(ticker)
 
 
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def screener_ratings(tickers: tuple[str, ...]) -> dict:
+    """{ticker: {"score", "recommendation"}} from the Investment Screener — shared
+    market data, keyed by the ticker set. Heavy (per-ticker analyst calls), so
+    it's opt-in on the Portfolio page and cached here. Imported lazily to keep
+    the screener's stack off every page's import."""
+    from engine import screener
+
+    return {r.ticker: {"score": r.overall_score, "recommendation": r.recommendation}
+            for r in screener.screen_tickers(list(tickers))}
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def signal_summary(ticker: str) -> dict:
+    """Cross-signal agreement for a ticker — shared market data, keyed by ticker.
+    Runs the Screener, so it's opt-in on the page and cached here."""
+    from engine import signals
+
+    return signals.aggregate_signals(ticker)
+
+
 def clear() -> None:
     """Drop all cached results. Call after any write so nothing shows stale."""
     st.cache_data.clear()

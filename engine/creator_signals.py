@@ -304,6 +304,31 @@ def mention_leaderboard(days: int = LEADERBOARD_DAYS,
     return board
 
 
+def ticker_stance(ticker: str, days: int = LEADERBOARD_DAYS) -> dict | None:
+    """Recent creator sentiment for ONE ticker: {mentions, counts, stance} where
+    `stance` is the leading bullish/bearish/neutral. None if not mentioned in the
+    window. Used by the cross-signal summary (engine/signals.py)."""
+    ticker = ticker.strip().upper()
+    cutoff = utcnow() - timedelta(days=days)
+    with get_session() as s:
+        rows = s.execute(
+            select(VideoMention.stance, CreatorVideo.published_at, CreatorVideo.processed_at)
+            .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
+            .where(VideoMention.ticker == ticker)
+        ).all()
+
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for stance, published_at, processed_at in rows:
+        when = _naive(published_at) or _naive(processed_at)
+        if when is None or when < cutoff:
+            continue
+        counts[stance if stance in counts else "neutral"] += 1
+    total = sum(counts.values())
+    if not total:
+        return None
+    return {"mentions": total, "counts": counts, "stance": max(counts, key=counts.get)}
+
+
 def signals_for_videos(video_ids: list[str]) -> list[dict]:
     """The same read model, restricted to specific videos — used by the digest."""
     if not video_ids:
