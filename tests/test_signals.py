@@ -17,8 +17,13 @@ def _news(score):
     return SimpleNamespace(overall_score=score)
 
 
-def _earn(beat, pct=None):
-    return SimpleNamespace(latest=({"beat": beat, "eps_surprise_pct": pct} if beat is not None else None))
+def _earn(beat=None, pct=None, release_score=None):
+    surprises = [{"period": "2026-Q1", "beat": beat, "eps_surprise_pct": pct}] if beat is not None else []
+    release = None
+    if release_score is not None:
+        label = "Positive" if release_score > 0 else "Negative" if release_score < 0 else "Neutral"
+        release = {"sentiment_score": release_score, "sentiment_label": label}
+    return SimpleNamespace(surprises=surprises, latest=(surprises[0] if surprises else None), release=release)
 
 
 def _run(screener=None, news=None, earn=None, stance=None):
@@ -56,11 +61,31 @@ def test_hold_and_neutral_news_are_neutral_not_counted_as_lean():
     assert _read(out, "News sentiment").stance == "neutral"
 
 
+def test_earnings_falls_back_to_press_release_sentiment_when_no_beat_data():
+    # Finnhub free tier returns no EPS surprises, but an 8-K release was scored.
+    out = _run(earn=_earn(release_score=0.5))          # positive release
+    assert _read(out, "Latest earnings").stance == "positive"
+    assert _read(out, "Latest earnings").detail == "Release sentiment: Positive"
+
+    neg = _run(earn=_earn(release_score=-0.4))
+    assert _read(neg, "Latest earnings").stance == "negative"
+
+    neutral = _run(earn=_earn(release_score=0.05))     # inside the ±0.15 band
+    assert _read(neutral, "Latest earnings").stance == "neutral"
+
+
+def test_earnings_beat_data_wins_over_release_sentiment():
+    out = _run(earn=_earn(beat=True, pct=10.0, release_score=-0.9))   # beat, but grim-sounding release
+    assert _read(out, "Latest earnings").stance == "positive"         # the hard number wins
+    assert _read(out, "Latest earnings").detail == "Beat estimates by 10%"
+
+
 def test_missing_data_is_na_and_excluded_from_the_count():
-    # no screener result, no news score, no earnings, not mentioned by any creator
-    out = _run(screener=[], news=_news(None), earn=_earn(None), stance=None)
+    # no screener result, no news score, no earnings at all, no creator mentions
+    out = _run(screener=[], news=_news(None), earn=_earn(), stance=None)
     assert out["counted"] == 0
     assert all(r.stance == "n/a" for r in out["reads"])
+    assert _read(out, "Latest earnings").detail == "no earnings data"
     assert _read(out, "Creator mentions").detail == "not mentioned recently"
 
 

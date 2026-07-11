@@ -57,16 +57,31 @@ def _news_read(ticker: str) -> SignalRead:
 def _earnings_read(ticker: str) -> SignalRead:
     from engine import earnings
     try:
-        latest = earnings.analyze_ticker(ticker).latest
+        analysis = earnings.analyze_ticker(ticker)
     except Exception:
         return SignalRead("Latest earnings", NA, "unavailable")
-    if not latest or latest.get("beat") is None:
-        return SignalRead("Latest earnings", NA, "no reported quarter")
-    pct = latest.get("eps_surprise_pct")
-    by = f" by {abs(pct):.0f}%" if pct else ""
-    if latest["beat"]:
-        return SignalRead("Latest earnings", POSITIVE, f"Beat estimates{by}")
-    return SignalRead("Latest earnings", NEGATIVE, f"Missed estimates{by}")
+
+    # Prefer a real beat/miss — the most recent quarter that actually has an
+    # estimate (the very latest one sometimes doesn't).
+    quarter = next((q for q in analysis.surprises if q.get("beat") is not None), None)
+    if quarter:
+        pct = quarter.get("eps_surprise_pct")
+        by = f" by {abs(pct):.0f}%" if pct else ""
+        stance = POSITIVE if quarter["beat"] else NEGATIVE
+        return SignalRead("Latest earnings", stance, f"{'Beat' if quarter['beat'] else 'Missed'} estimates{by}")
+
+    # Finnhub's free-tier earnings calendar often returns no EPS actual/estimate,
+    # so fall back to the sentiment of the 8-K earnings press release (the same
+    # thing the Earnings tab shows below the — absent — beat/miss numbers).
+    release = analysis.release
+    if release and release.get("sentiment_score") is not None:
+        score = release["sentiment_score"]        # FinBERT, -1..1
+        label = release.get("sentiment_label") or "Neutral"
+        stance = POSITIVE if score > 0.15 else NEGATIVE if score < -0.15 else NEUTRAL
+        return SignalRead("Latest earnings", stance, f"Release sentiment: {label}")
+    if release:
+        return SignalRead("Latest earnings", NEUTRAL, "Press release available (no sentiment)")
+    return SignalRead("Latest earnings", NA, "no earnings data")
 
 
 def _creator_read(ticker: str) -> SignalRead:
