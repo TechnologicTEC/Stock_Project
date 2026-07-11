@@ -15,6 +15,7 @@ part of the report empty rather than erroring.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -120,6 +121,60 @@ def _describe_surprise(latest: dict | None) -> str:
             f"${latest['eps_estimate']:.2f} estimate — {verb}{by}.")
 
 
+# --------------------------------------------------------------------------
+# Press-release presentation: turn the raw 8-K text blob into (a) a few
+# key-figure highlight sentences and (b) readable paragraphs. Deterministic —
+# it only re-uses sentences the company actually wrote, never invents numbers.
+# --------------------------------------------------------------------------
+
+_FIN_KEYWORDS = (
+    "revenue", "net income", "net loss", "earnings", "eps", "per share", "operating income",
+    "operating margin", "gross margin", "guidance", "outlook", "cash flow", "free cash",
+    "dividend", "full year", "full-year", "quarter", "grew", "growth", "increased",
+    "decreased", "declined", "up ", "down ", "raised", "lowered", "record", "backlog",
+)
+# A dollar amount, a percentage, or a scaled figure — the mark of a substantive line.
+_FIGURE_RE = re.compile(r"\$\s?\d|\b\d[\d,]*\.?\d*\s?(?:%|percent|million|billion|bps)\b", re.I)
+# Split on sentence boundaries but NOT on the '.' inside "$1.25" (period + digit).
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\"'])")
+
+
+def press_release_highlights(text: str | None, limit: int = 6) -> list[str]:
+    """The most informative sentences from a press release — those pairing a real
+    figure ($ / % / million-billion) with financial context. Fluff and boilerplate
+    ("About the Company", CEO platitudes with no numbers) are dropped. Sentences
+    are returned in their original order, best-scoring first up to `limit`."""
+    flat = re.sub(r"\s+", " ", text or "").strip()
+    if not flat:
+        return []
+    scored, seen = [], set()
+    for i, raw in enumerate(_SENTENCE_SPLIT.split(flat)):
+        sentence = raw.strip()
+        if not (40 <= len(sentence) <= 320) or not _FIGURE_RE.search(sentence):
+            continue
+        keyword_hits = sum(k in sentence.lower() for k in _FIN_KEYWORDS)
+        if not keyword_hits:
+            continue
+        dedupe_key = sentence.lower()[:64]
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        scored.append((i, keyword_hits, sentence))
+    best = sorted(scored, key=lambda t: -t[1])[:limit]
+    return [s for _, _, s in sorted(best, key=lambda t: t[0])]  # back to reading order
+
+
+def format_release_body(text: str | None) -> str:
+    """Raw press-release text as wrapping markdown paragraphs (not a monospace
+    wall). `$` is escaped so figures like `$1.2 billion` don't trip Streamlit's
+    `$…$` LaTeX math rendering."""
+    if not text or not text.strip():
+        return ""
+    paragraphs = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n\s*\n", text)]
+    paragraphs = [p for p in paragraphs if p] or [re.sub(r"\s+", " ", text).strip()]
+    return "\n\n".join(p.replace("$", r"\$") for p in paragraphs)
+
+
 def _describe_release(release: dict | None) -> str:
     if not release:
         return ""
@@ -135,6 +190,10 @@ def analyze_ticker(ticker: str) -> EarningsAnalysis:
     release = get_press_release(ticker)
     if release is not None:
         release["sentiment_label"] = news.sentiment_label(release.get("sentiment_score"))
+        release["highlights"] = press_release_highlights(release.get("text"))
+        # markdown-safe copies for the page ($ escaped so figures don't LaTeX-render)
+        release["highlights_md"] = [h.replace("$", r"\$") for h in release["highlights"]]
+        release["body_md"] = format_release_body(release.get("text"))
 
     latest = surprises[0] if surprises else None
 

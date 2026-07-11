@@ -156,8 +156,14 @@ else:
         with r2:
             st.write(f"**Filed:** {release.get('filing_date') or '—'}")
             st.markdown(f"[View the full filing on SEC.gov ↗]({release['url']})")
-        with st.expander("Read the press-release text"):
-            st.text((release.get("text") or "").strip() or "No text extracted.")
+
+        highlights = release.get("highlights_md") or []
+        if highlights:
+            st.markdown("**Key figures from the release**")
+            st.markdown("\n".join(f"- {h}" for h in highlights))
+
+        with st.expander("Read the full press-release text"):
+            st.markdown(release.get("body_md") or "_No text extracted._")
     else:
         st.caption(
             "No 8-K earnings press release found for this ticker. Not every company files an EX-99.1 "

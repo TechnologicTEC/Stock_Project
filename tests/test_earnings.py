@@ -86,3 +86,57 @@ def test_analyze_ticker_with_nothing_found():
     assert analysis.surprises == []
     assert analysis.release is None
     assert "No earnings data" in analysis.summary
+
+
+# --------------------------------------------------------------------------
+# Press-release presentation: highlights + readable body
+# --------------------------------------------------------------------------
+
+_RELEASE = (
+    "ACME Corp Reports Third Quarter 2026 Results\n\n"
+    "ACME Corp today announced financial results for the quarter ended June 30, 2026.\n\n"
+    "Total revenue was $1.25 billion, up 18% year over year, driven by strong widget demand.\n\n"
+    "Net income was $210 million, or $0.85 per diluted share, compared to $0.60 a year ago.\n\n"
+    '"We are pleased with our record quarter," said the CEO of ACME Corp.\n\n'  # no figure -> dropped
+    "The company raised its full-year revenue guidance to $5.1 billion.\n\n"
+    "About ACME Corp: ACME builds enterprise widgets for customers worldwide."   # boilerplate -> dropped
+)
+
+
+def test_highlights_pick_figure_bearing_sentences_and_drop_fluff():
+    hl = earnings.press_release_highlights(_RELEASE)
+    joined = " || ".join(hl)
+    assert any("revenue was $1.25 billion" in h and "18%" in h for h in hl)
+    assert any("$0.85 per diluted share" in h for h in hl)
+    assert any("guidance to $5.1 billion" in h for h in hl)
+    assert "About ACME Corp" not in joined          # boilerplate excluded
+    assert "pleased with our record quarter" not in joined  # no figure -> excluded
+    assert all("$" in h or "%" in h for h in hl)    # every highlight carries a real number
+
+
+def test_highlights_keep_reading_order_and_dedupe():
+    a = "Total revenue rose to $9.0 billion for the quarter, an increase of 12% year over year."
+    b = "Net income for the period was $2.0 billion, or $1.10 per diluted share, a record result."
+    hl = earnings.press_release_highlights(f"{a} {b} {a}")   # a repeated
+    assert hl == [a, b]                                      # reading order kept, duplicate removed
+
+
+def test_highlights_and_body_empty_when_no_text():
+    assert earnings.press_release_highlights(None) == []
+    assert earnings.press_release_highlights("   ") == []
+    assert earnings.format_release_body(None) == ""
+
+
+def test_format_release_body_escapes_dollars_and_makes_paragraphs():
+    body = earnings.format_release_body("Revenue was $1.25 billion.\n\nNet income was $210 million.")
+    assert r"\$1.25 billion" in body and r"\$210 million" in body  # $ escaped for markdown
+    assert "\n\n" in body                                          # paragraph break preserved
+
+
+def test_analyze_ticker_attaches_highlights_and_body_to_release():
+    release = {"filing_date": "2026-07-15", "url": "http://sec/x", "text": _RELEASE, "sentiment_score": 0.4}
+    with patch("engine.earnings.get_surprises", return_value=[]), \
+         patch("engine.earnings.get_press_release", return_value=release):
+        analysis = earnings.analyze_ticker("ACME")
+    assert analysis.release["highlights"]
+    assert r"\$" in analysis.release["body_md"]
