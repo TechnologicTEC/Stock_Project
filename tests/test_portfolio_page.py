@@ -57,6 +57,25 @@ def test_portfolio_page_renders_with_holdings_without_error():
     assert metric_values["Total value"] == "$1,500.00"  # AAPL: 10*$100 + VTI: 5*$100, fake quote price=100
 
 
+def test_portfolio_page_shows_holdings_value_distinct_from_cost_basis():
+    # Paid $1,500 (10 × $150); now worth $1,000 (10 × $100) — a $500 loss.
+    portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
+    fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, price=100.0)), \
+         patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")), \
+         patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+
+    assert not at.exception
+    m = {metric.label: metric.value for metric in at.metric}
+    assert m["Holdings value"] == "$1,000.00"     # current market value (was previously not shown at all)
+    assert m["Cost basis"] == "$1,500.00"          # what was paid
+    assert m["Total gain / loss"] == "$-500.00"    # the difference
+    assert m["Total value"] == "$1,000.00"         # holdings value + $0 wallet
+
+
 def test_portfolio_page_screener_ratings_are_opt_in_and_add_a_column():
     from types import SimpleNamespace
     portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))

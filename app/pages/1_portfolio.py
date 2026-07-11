@@ -301,6 +301,7 @@ if summary["holdings_with_errors"]:
     )
 
 total_value_str = money(summary["total_value"])
+holdings_value_str = money(summary["invested_value"])
 gain_loss_str = money(summary["total_gain_loss"])
 day_change_str = money(summary["total_day_change"])
 cost_basis_str = money(summary["total_cost"])
@@ -308,18 +309,28 @@ wallet_str = money(summary["wallet_balance"])
 
 # Size the value font to the longest of these so nothing gets ellipsis-clipped
 # (worse in NZD / six-figure totals) — see apply_metric_value_sizing.
-apply_metric_value_sizing([total_value_str, gain_loss_str, day_change_str, cost_basis_str, wallet_str])
+apply_metric_value_sizing([total_value_str, holdings_value_str, gain_loss_str, day_change_str,
+                           cost_basis_str, wallet_str])
 
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Total value", total_value_str)
-m2.metric(
+# Order groups the story: total, then the two numbers whose difference IS the
+# gain/loss (current value vs. what you paid), then the change and cash.
+m1, m2, m3, m4, m5, m6 = st.columns(6)
+m1.metric("Total value", total_value_str,
+          help="Everything you have here: your holdings' current market value plus wallet cash.")
+m2.metric("Holdings value", holdings_value_str,
+          help="Current market value of your stocks (shares × today's price). Excludes wallet cash — "
+               "this is the sum of the Market value column below.")
+m3.metric("Cost basis", cost_basis_str,
+          help="What you PAID for your current holdings (shares × your average cost/share) — not what "
+               "they're worth today. Holdings value minus cost basis is your gain/loss.")
+m4.metric(
     "Total gain / loss",
     gain_loss_str,
     f"{summary['total_gain_loss_pct']:.2f}%" if summary["total_gain_loss_pct"] is not None else None,
+    help="Holdings value minus cost basis.",
 )
-m3.metric("Today's change", day_change_str)
-m4.metric("Cost basis", cost_basis_str)
-m5.metric("Wallet (cash)", wallet_str)
+m5.metric("Today's change", day_change_str, help="Change in your holdings' value since the previous close.")
+m6.metric("Wallet (cash)", wallet_str)
 
 st.divider()
 
