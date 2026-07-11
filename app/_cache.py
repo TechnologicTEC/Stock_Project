@@ -35,6 +35,18 @@ def health_report(user_id: int | None, lookback_days: int):
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def portfolio_summary(user_id: int | None):
+    """Aggregate value/gain-loss/day-change — per user (user_id is the cache key)."""
+    return portfolio.get_portfolio_summary()
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def live_valuation(user_id: int | None):
+    """Per-holding valuation (prices are already source-cached) — per user."""
+    return portfolio.get_live_valuation()
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def news_analysis(ticker: str):
     """News + sentiment for a ticker — shared market data, keyed by ticker."""
     return news.analyze_ticker(ticker)

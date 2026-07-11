@@ -94,6 +94,38 @@ def test_screener_page_full_run_and_save():
     assert len(history) == 1
 
 
+def test_screener_page_shows_validation_track_record_when_available():
+    from engine import projections
+    watchlist.add_to_watchlist("AAPL")
+    projections.remember_validation_ic("AAPL", 0.20, n=18)      # a strong remembered IC
+    raw = {"AAPL": _raw("AAPL", pe=15.0)}
+
+    with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        at.multiselect[0].set_value(["AAPL"])
+        at.run(timeout=30)
+        next(b for b in at.button if "Run screener" in b.label).click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    md = " ".join(m.value for m in at.markdown)
+    assert "Track record" in md and "+0.20" in md               # the recommendation carries its IC
+
+    # And a ticker that's never been validated gets the "go validate it" nudge.
+    caps = " ".join(c.value for c in at.caption)
+    watchlist.add_to_watchlist("MSFT")
+    raw["MSFT"] = _raw("MSFT")
+    with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
+        at2 = AppTest.from_file(PAGE_PATH)
+        at2.run(timeout=30)
+        at2.multiselect[0].set_value(["MSFT"])
+        at2.run(timeout=30)
+        next(b for b in at2.button if "Run screener" in b.label).click()
+        at2.run(timeout=30)
+    assert any("Not validated yet" in c.value for c in at2.caption)
+
+
 def test_screener_page_shows_known_limitations_banner():
     watchlist.add_to_watchlist("AAPL")
     raw = {"AAPL": _raw("AAPL")}

@@ -230,6 +230,13 @@ def cached_validation_ic(ticker: str) -> float | None:
     return rec.get("information_coefficient")
 
 
+def cached_validation_record(ticker: str) -> dict | None:
+    """The full remembered validation record for `ticker` (information_coefficient,
+    n, horizon_days, as_of), or None. Used by the Screener page to annotate a
+    recommendation with its own measured track record (review #6)."""
+    return cache.get_value(_validation_ic_cache_key(ticker), ttl_seconds=VALIDATION_IC_TTL_SECONDS) or None
+
+
 def outlook_confidence(ic: float | None) -> float:
     """0..1 shrink factor for the tilt. No cached IC → a cautious default; a
     measured IC scales linearly up to IC_REFERENCE; a zero/negative IC (the

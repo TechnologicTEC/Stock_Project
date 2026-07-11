@@ -15,7 +15,7 @@ import streamlit as st
 
 from app._auth import gate
 from db.session import init_db
-from engine import portfolio, screener, watchlist
+from engine import portfolio, screener, screener_validation, watchlist
 
 st.set_page_config(page_title="Screener — Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()
@@ -168,9 +168,24 @@ with st.expander("ℹ️ How the overall score is built", expanded=False):
         "debt/equity still use one general threshold set for every industry."
     )
 
+_TRACK_ICON = {"positive": "🟢", "weak": "🟡", "none": "⚪", "negative": "🔴"}
+
 for r in results:
     label = f"{r.ticker} — {r.overall_score:.1f} ({r.recommendation})" if r.overall_score is not None else f"{r.ticker} — Insufficient data"
     with st.expander(label):
+        # Review #6: pair the recommendation with its own measured track record.
+        track = screener_validation.track_record(r.ticker)
+        if track:
+            st.markdown(
+                f"{_TRACK_ICON[track['stance']]} **Track record:** this Screener score {track['text']} "
+                f"(validation IC **{track['ic']:+.2f}**"
+                + (f", n={track['n']}" if track["n"] else "")
+                + (f", as of {track['as_of']}" if track["as_of"] else "") + ")."
+            )
+        else:
+            st.caption("↪️ Not validated yet — run **Screener Validation** on this ticker to see whether the "
+                       "score has actually predicted its returns before trusting the rating.")
+
         valuation_factor = r.factors.get("valuation")
         if valuation_factor is not None:
             bucket = valuation_factor.raw.get("sector_bucket")

@@ -93,6 +93,35 @@ def walk_forward(ticker: str, start: date, end: date,
     return points
 
 
+# Interpreting a remembered IC as a plain-English track record (review #6).
+# Thresholds are deliberately conservative — single-name ICs are small and noisy.
+_IC_TIERS = [
+    (0.10, "positive", "has shown decent predictive power for this ticker"),
+    (0.03, "weak", "has shown weak-but-positive predictive power here"),
+    (-0.03, "none", "has shown little to no predictive power here — treat the rating cautiously"),
+]
+
+
+def track_record(ticker: str) -> dict | None:
+    """An honest read of a ticker's *remembered* validation IC, for annotating the
+    Screener's recommendation with how predictive that score has actually been.
+    None when no validation has been run for the ticker. Not a prediction — a
+    backward-looking measure of whether high scores preceded high returns."""
+    from engine import projections
+
+    rec = projections.cached_validation_record(ticker.strip().upper())
+    if not rec or rec.get("information_coefficient") is None:
+        return None
+    ic = rec["information_coefficient"]
+    stance, text = "negative", ("has been NEGATIVELY related to returns for this ticker — "
+                                "the rating has worked against you here")
+    for threshold, tier_stance, tier_text in _IC_TIERS:
+        if ic >= threshold:
+            stance, text = tier_stance, tier_text
+            break
+    return {"ic": round(ic, 3), "n": rec.get("n"), "as_of": rec.get("as_of"), "stance": stance, "text": text}
+
+
 def _fit_trend(df: pd.DataFrame) -> dict | None:
     """Least-squares line through (score, forward_return_pct), for the chart.
 

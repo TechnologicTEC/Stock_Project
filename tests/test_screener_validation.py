@@ -68,6 +68,26 @@ def test_no_trend_line_when_every_score_is_identical():
     assert summary["insufficient_data"] is False         # the IC section still renders
 
 
+def test_track_record_interprets_a_remembered_ic_by_tier():
+    from engine import projections
+    cases = {0.20: "positive", 0.05: "weak", 0.00: "none", -0.20: "negative"}
+    for ic, expected in cases.items():
+        projections.remember_validation_ic("NVDA", ic, n=18, horizon_days=21)
+        tr = sv.track_record("nvda")
+        assert tr["stance"] == expected and tr["ic"] == round(ic, 3) and tr["n"] == 18
+
+
+def test_track_record_is_none_when_never_validated():
+    assert sv.track_record("NEVERVALIDATED") is None
+
+
+def test_negative_ic_track_record_warns_it_worked_against_you():
+    from engine import projections
+    projections.remember_validation_ic("BBAI", -0.15, n=12)
+    tr = sv.track_record("BBAI")
+    assert tr["stance"] == "negative" and "worked against you" in tr["text"]
+
+
 def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():
     # One wild point drags the least-squares slope negative (-1.41) while the rank
     # IC stays positive (+0.14) — exactly why the page says to compare the two on
