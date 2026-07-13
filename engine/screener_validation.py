@@ -194,3 +194,67 @@ def summarize(points: list[dict]) -> dict:
         "bands": bands,
         "trend": _fit_trend(df),
     }
+
+
+# --------------------------------------------------------------------------
+# Pooled, per-factor validation (review #8) — run the walk-forward across many
+# tickers and measure the IC PER FACTOR, so weighting can be informed by which
+# factors have actually predicted returns for *your* universe, not by priors.
+# --------------------------------------------------------------------------
+
+def _rank_ic(values: list[float], returns: list[float]) -> float | None:
+    """Spearman (rank) correlation, or None below the minimum sample."""
+    if len(values) < MIN_POINTS_FOR_SUMMARY:
+        return None
+    corr = pd.Series(values).rank().corr(pd.Series(returns).rank())
+    return round(float(corr), 3) if pd.notna(corr) else None
+
+
+def factor_information_coefficients(points: list[dict]) -> dict:
+    """Per-factor IC pooled across all points: {factor: {label, ic, n}}. Each is
+    the rank correlation between that factor's point-in-time score and the
+    subsequent return — higher means the factor has tracked returns better."""
+    from engine import screener
+
+    out = {}
+    for factor in screener.FACTOR_WEIGHTS:
+        values, returns = [], []
+        for point in points:
+            score = (point.get("factors") or {}).get(factor)
+            fwd = point.get("forward_return_pct")
+            if score is not None and fwd is not None:
+                values.append(score)
+                returns.append(fwd)
+        out[factor] = {"label": screener.FACTOR_LABELS.get(factor, factor),
+                       "ic": _rank_ic(values, returns), "n": len(values)}
+    return out
+
+
+def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_days: int = 30,
+                        include_news: bool = False, on_progress=None) -> list[dict]:
+    """walk_forward across many tickers, each point tagged with its ticker so the
+    results can be pooled. Slow — one point-in-time reconstruction per ticker. A
+    ticker that can't be reconstructed contributes nothing rather than erroring."""
+    points: list[dict] = []
+    total = len(tickers)
+    for i, ticker in enumerate(tickers, start=1):
+        try:
+            pts = walk_forward(ticker, start, end, step_days=step_days,
+                               horizon_days=horizon_days, include_news=include_news)
+        except Exception:
+            pts = []
+        for point in pts:
+            point["ticker"] = ticker.strip().upper()
+        points.extend(pts)
+        if on_progress is not None:
+            on_progress(i, total, ticker)
+    return points
+
+
+def summarize_pooled(points: list[dict]) -> dict:
+    """The overall summary (IC/bands/trend) over the POOLED points, plus the
+    per-factor ICs and ticker count — the data-driven basis for reweighting."""
+    summary = summarize(points)
+    summary["n_tickers"] = len({p.get("ticker") for p in points if p.get("ticker")})
+    summary["factor_ic"] = factor_information_coefficients(points)
+    return summary

@@ -68,6 +68,49 @@ def test_no_trend_line_when_every_score_is_identical():
     assert summary["insufficient_data"] is False         # the IC section still renders
 
 
+def _fpt(ticker, fwd, factors, score=50.0):
+    return {"date": date(2022, 1, 1), "ticker": ticker, "score": score,
+            "recommendation": "Hold", "forward_return_pct": fwd, "factors": factors}
+
+
+def test_factor_ic_measures_each_factor_against_forward_return():
+    # momentum score tracks the forward return perfectly; sentiment is the exact
+    # opposite; valuation is constant (uninformative).
+    pts = [_fpt(f"T{i}", float(i), {"momentum": float(i * 10), "sentiment": float(90 - i * 10),
+                                    "valuation": 50.0}) for i in range(6)]
+    fic = sv.factor_information_coefficients(pts)
+    assert fic["momentum"]["ic"] == 1.0 and fic["momentum"]["n"] == 6
+    assert fic["sentiment"]["ic"] == -1.0
+    assert fic["valuation"]["ic"] is None            # zero variance -> undefined
+    assert fic["momentum"]["label"] == "Momentum / Technical"
+
+
+def test_factor_ic_needs_the_minimum_sample_and_skips_none():
+    pts = [_fpt(f"T{i}", float(i), {"momentum": (None if i < 3 else float(i))}) for i in range(6)]
+    fic = sv.factor_information_coefficients(pts)
+    assert fic["momentum"]["n"] == 3 and fic["momentum"]["ic"] is None   # only 3 usable (<5)
+
+
+def test_pooled_walk_forward_tags_points_and_reports_progress():
+    def fake_wf(ticker, *a, **k):
+        return [{"score": 60.0, "forward_return_pct": 2.0, "factors": {"momentum": 70.0}, "date": date(2022, 1, 1)}]
+    seen = []
+    with patch("engine.screener_validation.walk_forward", side_effect=fake_wf):
+        pts = sv.pooled_walk_forward(["aapl", "msft"], date(2022, 1, 1), date(2022, 6, 1),
+                                     on_progress=lambda d, t, tk: seen.append((d, t, tk)))
+    assert [p["ticker"] for p in pts] == ["AAPL", "MSFT"]     # tagged
+    assert seen == [(1, 2, "aapl"), (2, 2, "msft")]           # progress reported
+
+
+def test_summarize_pooled_adds_ticker_count_and_per_factor_ic():
+    pts = [_fpt("A" if i % 2 else "B", float(i), {"momentum": float(i * 5)}, score=float(i * 10))
+           for i in range(6)]
+    s = sv.summarize_pooled(pts)
+    assert s["n_tickers"] == 2
+    assert "factor_ic" in s and "momentum" in s["factor_ic"]
+    assert s["information_coefficient"] is not None            # pooled overall IC still computed
+
+
 def test_track_record_interprets_a_remembered_ic_by_tier():
     from engine import projections
     cases = {0.20: "positive", 0.05: "weak", 0.00: "none", -0.20: "negative"}

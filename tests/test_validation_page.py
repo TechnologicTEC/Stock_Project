@@ -76,6 +76,32 @@ def test_validation_page_draws_a_trend_line_and_explains_it_against_the_ic():
     assert "rank" in captions                  # ...and distinguished from the IC
 
 
+def test_validation_page_pooled_per_factor_ic():
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+    pooled_summary = {
+        "n": 40, "n_tickers": 3, "insufficient_data": False, "information_coefficient": 0.06,
+        "bands": [], "trend": None,
+        "factor_ic": {
+            "momentum": {"label": "Momentum / Technical", "ic": 0.09, "n": 40},
+            "valuation": {"label": "Valuation", "ic": -0.01, "n": 38},
+        },
+    }
+    with patch("engine.screener_validation.pooled_walk_forward", return_value=[{"ticker": "AAPL"}]) as run, \
+         patch("engine.screener_validation.summarize_pooled", return_value=pooled_summary):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        next(b for b in at.button if "Run pooled validation" in b.label).click()
+        at.run(timeout=30)
+
+    assert not at.exception
+    run.assert_called_once()
+    labels = {m.label for m in at.metric}
+    assert "Pooled overall IC" in labels and "Tickers pooled" in labels
+    # the per-factor IC table renders with the factor labels
+    dfs = [d.value for d in at.dataframe if "Factor" in list(d.value.columns)]
+    assert dfs and "Momentum / Technical" in dfs[0]["Factor"].tolist()
+
+
 def test_validation_page_news_toggle_opts_into_gdelt():
     portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
 

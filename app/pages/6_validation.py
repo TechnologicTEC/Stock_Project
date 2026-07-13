@@ -106,6 +106,62 @@ if st.button("▶️ Run validation", type="primary"):
             "points": points, "summary": summary,
         }
 
+# --------------------------------------------------------------------------
+# Pooled, per-factor validation (review #8) — which factors actually predict,
+# across your whole universe. This is the honest basis for reweighting.
+# --------------------------------------------------------------------------
+st.divider()
+with st.expander("📊 Validate across ALL your tickers — which factors predict? (per-factor IC)"):
+    st.caption(
+        "Pools the walk-forward across your holdings + watchlist and measures the information coefficient "
+        "**per factor** — i.e. which factors' scores have tracked subsequent returns for *your* tickers. "
+        "This is the data-driven basis for reweighting the Screener, instead of guessing. It reuses the "
+        "look-back / horizon / news settings above. Slow (it reconstructs each ticker's history) and still "
+        "small-sample, so read it as directional, not a fitted model."
+    )
+    if st.button("▶️ Run pooled validation", key="run_pooled"):
+        progress = st.progress(0.0, text="Starting…")
+
+        def _on_progress(done, total, tk):
+            progress.progress(done / total, text=f"Validating {tk} — {done}/{total}")
+
+        with st.spinner("Reconstructing point-in-time scores for each ticker…"):
+            pooled_points = validation.pooled_walk_forward(
+                known, start_date, today, step_days=step_days, horizon_days=horizon_days,
+                include_news=include_news, on_progress=_on_progress,
+            )
+        progress.empty()
+        st.session_state["pooled_result"] = {
+            "summary": validation.summarize_pooled(pooled_points), "horizon_days": horizon_days,
+        }
+
+    pooled = st.session_state.get("pooled_result")
+    if pooled:
+        s = pooled["summary"]
+        if s.get("insufficient_data") or not s.get("n_tickers"):
+            st.info("Not enough reconstructed history across your tickers yet — try a longer look-back.")
+        else:
+            pooled_ic = s["information_coefficient"]
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Tickers pooled", s["n_tickers"])
+            p2.metric("Observations", s["n"])
+            p3.metric("Pooled overall IC", f"{pooled_ic:+.3f}" if pooled_ic is not None else "—")
+
+            factor_rows = [{"Factor": v["label"], "IC": v["ic"], "Observations": v["n"]}
+                           for v in s["factor_ic"].values()]
+            factor_df = pd.DataFrame(factor_rows).sort_values("IC", ascending=False, na_position="last")
+            st.dataframe(
+                factor_df.style.format({"IC": "{:+.3f}"}, na_rep="—"),
+                width="stretch", hide_index=True,
+            )
+            st.caption(
+                f"Forward horizon {pooled['horizon_days']} days. Higher IC = that factor's score has tracked "
+                "returns better across your tickers; near-zero or negative = it hasn't earned its weight. "
+                "**Directional guidance for how to reweight — not an auto-fit.** It's a pooled (not per-date "
+                "cross-sectional) read on small samples, so don't over-trust any single number."
+            )
+
+
 result = st.session_state.get("validation_result")
 if result is None:
     st.stop()
@@ -234,3 +290,4 @@ st.dataframe(
     breakdown_df.style.format({"Score": "{:.1f}", **factor_fmt}, na_rep="—"),
     width="stretch", hide_index=True,
 )
+
