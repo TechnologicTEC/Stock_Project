@@ -98,7 +98,8 @@ if st.button("▶️ Run validation", type="primary"):
         # confidence behind its optional median tilt (no need to re-run this).
         if summary.get("information_coefficient") is not None:
             projections.remember_validation_ic(
-                ticker, summary["information_coefficient"], n=summary.get("n"), horizon_days=horizon_days
+                ticker, summary["information_coefficient"], n=summary.get("n"),
+                horizon_days=horizon_days, include_news=include_news,
             )
         st.session_state["validation_result"] = {
             "ticker": ticker, "horizon_days": horizon_days, "include_news": include_news,
@@ -131,6 +132,17 @@ m2.metric(
          "below 0 is the opposite. Real single-name ICs are small — consistently above ~+0.05 is notable.",
 )
 m3.metric("Forward horizon", f"{result['horizon_days']} days")
+
+# What the IC actually covers (#7): the reconstructed score reuses the live
+# scorers point-in-time for every factor except news sentiment.
+if result.get("include_news"):
+    st.caption("This validates the point-in-time score **including** a news-sentiment factor rebuilt from "
+               "GDELT tone — which isn't the same signal as the live FinBERT-headline sentiment, so it's an "
+               "approximation of the live score, not an exact match.")
+else:
+    st.caption("This validates the point-in-time score **excluding news sentiment** (its 15% weight is "
+               "redistributed). The live Screener recommendation does weight current news sentiment, so the "
+               "IC reflects the fundamentals/momentum core rather than the exact live score.")
 
 if summary.get("insufficient_data"):
     st.info("Not enough scored dates in this window to draw a conclusion — try a longer look-back.")

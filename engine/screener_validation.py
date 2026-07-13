@@ -119,7 +119,16 @@ def track_record(ticker: str) -> dict | None:
         if ic >= threshold:
             stance, text = tier_stance, tier_text
             break
-    return {"ic": round(ic, 3), "n": rec.get("n"), "as_of": rec.get("as_of"), "stance": stance, "text": text}
+    # Honesty (#7): the validated score reconstructs every factor point-in-time
+    # EXCEPT news sentiment when it was off — so the IC then covers a core the
+    # live recommendation adds sentiment on top of. Say so.
+    covers_news = bool(rec.get("include_news"))
+    scope_note = "" if covers_news else (
+        " Measured on the fundamentals/momentum core — the live news-sentiment factor can't be "
+        "reconstructed historically, so it's excluded from this IC."
+    )
+    return {"ic": round(ic, 3), "n": rec.get("n"), "as_of": rec.get("as_of"),
+            "stance": stance, "text": text, "covers_news": covers_news, "scope_note": scope_note}
 
 
 def _fit_trend(df: pd.DataFrame) -> dict | None:

@@ -209,14 +209,15 @@ def _validation_ic_cache_key(label: str) -> str:
 
 def remember_validation_ic(
     ticker: str, information_coefficient: float | None, *, n: int | None = None,
-    horizon_days: int | None = None, as_of: date | None = None,
+    horizon_days: int | None = None, as_of: date | None = None, include_news: bool | None = None,
 ) -> None:
     """Persist a ticker's walk-forward IC so the projection can reuse it as the
-    tilt's confidence without re-running the (slow) validation. Called by the
-    validation page after each run."""
+    tilt's confidence without re-running the (slow) validation. `include_news`
+    records whether the validated score included the news-sentiment factor, so
+    the Screener's track-record note can be honest about what the IC covers."""
     cache.set_value(_validation_ic_cache_key(ticker), {
         "information_coefficient": information_coefficient,
-        "n": n, "horizon_days": horizon_days,
+        "n": n, "horizon_days": horizon_days, "include_news": include_news,
         "as_of": (as_of or date.today()).isoformat(),
     })
 

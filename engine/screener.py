@@ -77,8 +77,10 @@ from engine.data_sources import finnhub_client
 FUNDAMENTALS_TTL_SECONDS = 20 * 60 * 60   # ~daily, per Section 8's "refreshed ~daily"
 ANALYST_DATA_TTL_SECONDS = 20 * 60 * 60   # recommendation trends / price targets / insider sentiment
 PROFILE_TTL_SECONDS = 7 * 24 * 60 * 60    # sector/industry rarely changes; 7 days is plenty
-MOMENTUM_LOOKBACK_DAYS = 220              # enough for a 200-day SMA with buffer for weekends/holidays
-MOMENTUM_RETURN_LOOKBACK_DAYS = 126       # ~6 months of trading days
+MOMENTUM_LOOKBACK_DAYS = 400              # ~13 months calendar — enough trading days for 12-1 momentum
+MOMENTUM_RETURN_LOOKBACK_DAYS = 126       # ~6 months of trading days (short-history fallback only)
+MOMENTUM_12_1_LOOKBACK_DAYS = 252         # ~12 months of trading days
+MOMENTUM_12_1_SKIP_DAYS = 21              # ~1 month skipped — recent returns mean-revert, so they're excluded
 INSIDER_LOOKBACK_DAYS = 180
 
 RSI_LENGTH = 14
@@ -139,7 +141,9 @@ GROSS_MARGIN_CURVE = [(10, 10), (30, 40), (50, 65), (70, 85), (85, 100)]   # %
 NET_MARGIN_CURVE = [(-10, 0), (0, 20), (8, 55), (18, 80), (30, 100)]       # %
 ROE_CURVE = [(0, 10), (8, 40), (15, 65), (25, 85), (35, 100)]              # %
 DEBT_TO_EQUITY_CURVE = [(0, 100), (0.5, 80), (1.0, 60), (2.0, 30), (4.0, 0)]
-MOMENTUM_RETURN_CURVE = [(-30, 0), (-10, 30), (0, 50), (15, 70), (30, 90), (50, 100)]  # % over lookback
+MOMENTUM_RETURN_CURVE = [(-30, 0), (-10, 30), (0, 50), (15, 70), (30, 90), (50, 100)]  # % over 6-mo fallback
+# 12-1 returns span ~11 months, so the curve is a touch wider than the 6-month one.
+MOMENTUM_12_1_CURVE = [(-40, 0), (-15, 25), (0, 50), (20, 70), (40, 90), (70, 100)]  # % over the 12-1 window
 ANALYST_UPSIDE_CURVE = [(-20, 0), (0, 40), (10, 60), (25, 80), (40, 100)]  # % to mean target
 INSIDER_MSPR_CURVE = [(-100, 0), (0, 50), (100, 100)]  # Finnhub's MSPR is documented as -100..+100, not -1..+1
 
@@ -617,10 +621,20 @@ def _compute_momentum_raw(df: pd.DataFrame) -> dict:
     if df is None or df.empty or len(df) < 20:
         return {}
     closes = df["close"].astype(float)
+    n = len(closes)
     result: dict = {"price": float(closes.iloc[-1])}
 
-    lookback_idx = max(0, len(closes) - MOMENTUM_RETURN_LOOKBACK_DAYS)
-    baseline = float(closes.iloc[lookback_idx])
+    # 12-1 momentum: return from ~12 months ago to ~1 month ago. Skipping the most
+    # recent month is deliberate — short-term returns mean-revert, so including
+    # them dilutes the (evidence-backed) intermediate-term momentum signal.
+    if n >= MOMENTUM_12_1_LOOKBACK_DAYS + 1:
+        recent = float(closes.iloc[n - 1 - MOMENTUM_12_1_SKIP_DAYS])   # ~1 month ago
+        base = float(closes.iloc[n - 1 - MOMENTUM_12_1_LOOKBACK_DAYS])  # ~12 months ago
+        if base:
+            result["momentum_12_1_pct"] = (recent / base - 1.0) * 100.0
+
+    # Fallback for names without a full year of history: total return over ~6 months.
+    baseline = float(closes.iloc[max(0, n - MOMENTUM_RETURN_LOOKBACK_DAYS)])
     if baseline:
         result["period_return_pct"] = (closes.iloc[-1] / baseline - 1.0) * 100.0
 
@@ -635,55 +649,44 @@ def _compute_momentum_raw(df: pd.DataFrame) -> dict:
     return result
 
 
-def _absolute_rsi_score(rsi: float | None) -> float | None:
-    """Sweet spot around RSI 60: strong upward momentum without being
-    extremely overbought. Symmetric falloff on both sides - this is a
-    deliberately simple, explainable heuristic, not a fitted model."""
-    if rsi is None:
-        return None
-    return max(0.0, min(100.0, 100.0 - 2.0 * abs(rsi - 60.0)))
-
-
-def _absolute_ma_position_score(price: float | None, sma: float | None) -> float | None:
-    """How far above/below its 50-day moving average the price is, scaled
-    so +-10% maps to the 0-100 ends of the range."""
-    if not price or not sma:
-        return None
-    pct_above = (price - sma) / sma * 100.0
-    return max(0.0, min(100.0, 50.0 + pct_above * 5.0))
+def _momentum_return(rv: dict) -> tuple[float | None, list, str]:
+    """The scored momentum return: 12-1 when there's a year of history, else the
+    ~6-month total return. Returns (value, curve, human label)."""
+    if rv.get("momentum_12_1_pct") is not None:
+        return rv["momentum_12_1_pct"], MOMENTUM_12_1_CURVE, "12-month return (skipping the last month)"
+    if rv.get("period_return_pct") is not None:
+        return rv["period_return_pct"], MOMENTUM_RETURN_CURVE, "~6-month return (short history — fallback)"
+    return None, MOMENTUM_12_1_CURVE, "return"
 
 
 def _score_momentum(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorResult]:
     raw_values = {t: _compute_momentum_raw(d.price_df) for t, d in raw_by_ticker.items()}
-    returns = {t: rv.get("period_return_pct") for t, rv in raw_values.items()}
-    return_scores = {t: _score_from_curve(v, MOMENTUM_RETURN_CURVE) for t, v in returns.items()}
+    returns = {t: _momentum_return(rv)[0] for t, rv in raw_values.items()}
     return_peer = _percentile_ranks(returns, higher_is_better=True)
 
     results = {}
     for t in raw_by_ticker:
         rv = raw_values[t]
-        rsi_score = _absolute_rsi_score(rv.get("rsi"))
-        ma_score = _absolute_ma_position_score(rv.get("price"), rv.get("sma50"))
-        sub = [s for s in (return_scores[t], rsi_score, ma_score) if s is not None]
+        value, curve, label = _momentum_return(rv)
+        # The factor score is the intermediate-term (12-1) return ALONE. RSI and
+        # moving-average position are short-term signals that don't add
+        # cross-sectional predictive power, so they're shown as context only.
+        return_score = _score_from_curve(value, curve)
 
-        reasons = [
-            r for r in (
-                _curve_reason(
-                    "Price return over the lookback window", rv.get("period_return_pct"),
-                    return_scores[t], return_peer[t], value_fmt="+.1f", unit="%",
-                ),
-            ) if r is not None
-        ]
+        reasons = []
+        reason = _curve_reason(label.capitalize(), value, return_score, return_peer[t],
+                               value_fmt="+.1f", unit="%")
+        if reason is not None:
+            reasons.append(reason)
         if rv.get("rsi") is not None:
-            zone = "overbought" if rv["rsi"] > 70 else "oversold" if rv["rsi"] < 30 else "a healthy momentum range"
-            reasons.append(f"RSI({RSI_LENGTH}) of {rv['rsi']:.0f} - {zone}")
+            zone = "overbought" if rv["rsi"] > 70 else "oversold" if rv["rsi"] < 30 else "a healthy range"
+            reasons.append(f"RSI({RSI_LENGTH}) of {rv['rsi']:.0f} — {zone} *(context, not scored)*")
         if rv.get("sma50") is not None and rv.get("price") is not None:
             pct = (rv["price"] - rv["sma50"]) / rv["sma50"] * 100.0
-            reasons.append(f"Price is {pct:+.1f}% relative to its {SMA_SHORT}-day moving average")
+            reasons.append(f"Price is {pct:+.1f}% vs its {SMA_SHORT}-day average *(context, not scored)*")
 
-        score = sum(sub) / len(sub) if sub else None
         results[t] = FactorResult(
-            score=score,
+            score=return_score,
             reasons=reasons or ["Not enough price history to compute momentum for this ticker"],
             raw=rv,
         )

@@ -181,6 +181,7 @@ for r in results:
                 f"(validation IC **{track['ic']:+.2f}**"
                 + (f", n={track['n']}" if track["n"] else "")
                 + (f", as of {track['as_of']}" if track["as_of"] else "") + ")."
+                + track.get("scope_note", "")
             )
         else:
             st.caption("↪️ Not validated yet — run **Screener Validation** on this ticker to see whether the "

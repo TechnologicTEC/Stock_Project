@@ -78,26 +78,6 @@ def test_extract_metric_skips_non_numeric_garbage():
 
 
 # --------------------------------------------------------------------------
-# Absolute momentum sub-scores
-# --------------------------------------------------------------------------
-
-def test_rsi_sweet_spot_scores_highest_near_60():
-    assert screener._absolute_rsi_score(60) == 100.0
-    assert screener._absolute_rsi_score(60) > screener._absolute_rsi_score(85)
-    assert screener._absolute_rsi_score(60) > screener._absolute_rsi_score(20)
-    assert screener._absolute_rsi_score(None) is None
-
-
-def test_ma_position_score_rewards_price_above_sma():
-    above = screener._absolute_ma_position_score(price=110, sma=100)  # +10%
-    below = screener._absolute_ma_position_score(price=90, sma=100)   # -10%
-    assert above == pytest.approx(100.0)
-    assert below == pytest.approx(0.0)
-    assert screener._absolute_ma_position_score(None, 100) is None
-    assert screener._absolute_ma_position_score(100, 0) is None
-
-
-# --------------------------------------------------------------------------
 # Factor scorers - constructed directly from synthetic TickerRawData,
 # bypassing _gather_raw_data entirely so the scoring math is tested in
 # isolation from any network/cache behavior.
@@ -172,12 +152,33 @@ def _flat_price_df(closes: list[float]) -> pd.DataFrame:
 
 
 def test_score_momentum_rewards_uptrend_over_downtrend():
-    uptrend = list(np.linspace(80, 120, 220))
-    downtrend = list(np.linspace(120, 80, 220))
+    uptrend = list(np.linspace(80, 120, 260))     # >1yr history -> uses the 12-1 window
+    downtrend = list(np.linspace(120, 80, 260))
     raw = {"UP": _raw("UP", price_df=_flat_price_df(uptrend)), "DOWN": _raw("DOWN", price_df=_flat_price_df(downtrend))}
 
     result = screener._score_momentum(raw)
     assert result["UP"].score > result["DOWN"].score
+
+
+def test_momentum_uses_12_1_and_ignores_a_recent_crash():
+    # Rises 100->150 over ~11 months, then crashes 150->110 in the final month.
+    # 12-1 momentum (12mo ago -> 1mo ago) is strongly +, and the recent crash is
+    # SKIPPED — so momentum stays high, unlike a total-return or RSI measure.
+    prices = list(np.linspace(100, 150, 239)) + list(np.linspace(150, 110, 21))
+    result = screener._score_momentum({"X": _raw("X", price_df=_flat_price_df(prices))})
+    assert result["X"].score > 70                              # the recent drop didn't drag it down
+    assert result["X"].raw["momentum_12_1_pct"] > 30
+    reasons = " ".join(result["X"].reasons)
+    assert "skipping the last month" in reasons
+    assert "context, not scored" in reasons                    # RSI/MA are shown but not in the score
+
+
+def test_score_momentum_short_history_falls_back_to_6_month_return():
+    # ~7 months of history (<1yr): no 12-1, so the ~6-month total return is used.
+    raw = {"UP": _raw("UP", price_df=_flat_price_df(list(np.linspace(80, 120, 150))))}
+    result = screener._score_momentum(raw)
+    assert result["UP"].score is not None and result["UP"].raw.get("momentum_12_1_pct") is None
+    assert "fallback" in " ".join(result["UP"].reasons)
 
 
 def test_score_momentum_insufficient_history_returns_none():

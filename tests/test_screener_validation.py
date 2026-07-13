@@ -72,9 +72,24 @@ def test_track_record_interprets_a_remembered_ic_by_tier():
     from engine import projections
     cases = {0.20: "positive", 0.05: "weak", 0.00: "none", -0.20: "negative"}
     for ic, expected in cases.items():
-        projections.remember_validation_ic("NVDA", ic, n=18, horizon_days=21)
+        projections.remember_validation_ic("NVDA", ic, n=18, horizon_days=21, include_news=True)
         tr = sv.track_record("nvda")
         assert tr["stance"] == expected and tr["ic"] == round(ic, 3) and tr["n"] == 18
+
+
+def test_track_record_flags_when_the_ic_excludes_news_sentiment():
+    from engine import projections
+    # Validated with news OFF (the default) -> the IC covers the core, not the
+    # live score, and the note must say so (#7).
+    projections.remember_validation_ic("NVDA", 0.05, n=20, include_news=False)
+    tr = sv.track_record("NVDA")
+    assert tr["covers_news"] is False
+    assert "news-sentiment factor can't be reconstructed" in tr["scope_note"]
+
+    # Validated with news ON -> no exclusion caveat.
+    projections.remember_validation_ic("NVDA", 0.05, n=20, include_news=True)
+    tr = sv.track_record("NVDA")
+    assert tr["covers_news"] is True and tr["scope_note"] == ""
 
 
 def test_track_record_is_none_when_never_validated():
