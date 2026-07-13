@@ -47,6 +47,10 @@ currency_choice = st.radio(
 try:
     fx_rate = currency.get_rate(currency_choice)
     active_currency = currency_choice
+    info = currency.rate_info(currency_choice)
+    if info:
+        st.caption(f"1 USD = {info['nzd_per_usd']:.4f} {currency_choice} · {info['source']}"
+                   + (f", as of {info['as_of']}" if info.get("as_of") else ""))
 except Exception:
     if currency_choice != currency.BASE_CURRENCY:
         st.warning(f"Couldn't load the {currency_choice} exchange rate right now — showing USD.")

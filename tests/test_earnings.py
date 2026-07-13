@@ -140,3 +140,31 @@ def test_analyze_ticker_attaches_highlights_and_body_to_release():
         analysis = earnings.analyze_ticker("ACME")
     assert analysis.release["highlights"]
     assert r"\$" in analysis.release["body_md"]
+
+
+# --------------------------------------------------------------------------
+# Upcoming earnings ("reports soon")
+# --------------------------------------------------------------------------
+
+def test_next_earnings_picks_soonest_future_date_and_days_until():
+    from datetime import date, timedelta
+    today = date.today()
+    soon = (today + timedelta(days=3)).isoformat()
+    later = (today + timedelta(days=40)).isoformat()
+    raw = {"earningsCalendar": [
+        {"date": later, "epsActual": None, "epsEstimate": 2.5, "hour": "amc"},
+        {"date": soon, "epsActual": None, "epsEstimate": 1.9, "hour": "bmo"},   # soonest
+        {"date": (today - timedelta(days=5)).isoformat(), "epsActual": 1.1, "epsEstimate": 1.0},  # past -> skip
+    ]}
+    with patch("engine.earnings.finnhub_client.get_earnings_calendar", return_value=raw):
+        nxt = earnings.next_earnings("AAPL")
+    assert nxt["date"] == soon and nxt["days_until"] == 3
+    assert nxt["hour"] == "bmo" and nxt["eps_estimate"] == 1.9
+
+
+def test_next_earnings_none_when_no_upcoming():
+    with patch("engine.earnings.finnhub_client.get_earnings_calendar",
+               return_value={"earningsCalendar": [{"date": "2020-01-01", "epsActual": 1.0}]}):
+        assert earnings.next_earnings("AAPL") is None
+    with patch("engine.earnings.finnhub_client.get_earnings_calendar", side_effect=RuntimeError("403")):
+        assert earnings.next_earnings("AAPL") is None

@@ -6,12 +6,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from datetime import date
+
 import streamlit as st
 
 from app import _cache
 from app._auth import gate
 from db.session import current_user_id, init_db
 from engine import creator_signals, portfolio
+
+_EARNINGS_HOUR = {"bmo": "before open", "amc": "after close"}
 
 st.set_page_config(page_title="Investment Co-Pilot", page_icon="📊", layout="wide")
 init_db()
@@ -102,6 +106,20 @@ with right:
             st.write(f"**{entry['ticker']}** — mentioned **{entry['mentions']}×**"
                      + (f" · last {seen}" if seen else ""))
         st.caption("Stocks your creators keep coming back to — repetition is attention, not advice.")
+
+# ---- Reporting soon -------------------------------------------------------
+upcoming = _cache.upcoming_earnings(tuple(sorted(h["ticker"] for h in holdings)))
+if upcoming:
+    st.subheader("📅 Reporting soon")
+    for e in upcoming:
+        d = e["days_until"]
+        rel = "**today**" if d == 0 else "**tomorrow**" if d == 1 else f"in **{d} days**"
+        when = date.fromisoformat(e["date"]).strftime("%b %d")
+        hour = _EARNINGS_HOUR.get(e.get("hour"), "")
+        est = f" · est. EPS ${e['eps_estimate']:.2f}" if e.get("eps_estimate") is not None else ""
+        st.write(f"**{e['ticker']}** reports {rel} — {when}{', ' + hour if hour else ''}{est}")
+    st.caption("Upcoming earnings for your holdings (next 3 weeks). Estimates only — Finnhub's free tier "
+               "withholds the actual beat/miss.")
 
 st.divider()
 st.caption("This is a personal, educational tool — not financial advice.")

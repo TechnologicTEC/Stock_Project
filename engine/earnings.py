@@ -66,6 +66,43 @@ def _fetch_surprises(ticker: str) -> list[dict]:
     return rows
 
 
+UPCOMING_LOOKAHEAD_DAYS = 120       # how far ahead to look for the next report
+
+
+def _fetch_upcoming(ticker: str) -> list[dict]:
+    today = date.today()
+    raw = finnhub_client.get_earnings_calendar(ticker, today, today + timedelta(days=UPCOMING_LOOKAHEAD_DAYS))
+    rows = []
+    for item in raw.get("earningsCalendar", []):
+        day = item.get("date")
+        if not day or item.get("epsActual") is not None:
+            continue  # only future / not-yet-reported dates (free tier gives these even without actuals)
+        rows.append({"date": day, "eps_estimate": item.get("epsEstimate"), "hour": item.get("hour")})
+    rows.sort(key=lambda r: r["date"])
+    return rows
+
+
+def next_earnings(ticker: str) -> dict | None:
+    """The soonest upcoming earnings report for `ticker`: {date, eps_estimate,
+    hour, days_until}, or None. Finnhub's free tier withholds past *actuals* but
+    still returns forward dates, so this works where beat/miss doesn't."""
+    ticker = ticker.upper()
+    try:
+        rows = cache.get_or_fetch(f"earnings_upcoming:{ticker}", EARNINGS_TTL_SECONDS,
+                                  lambda: _fetch_upcoming(ticker))
+    except Exception:
+        return None
+    if not rows:
+        return None
+    nxt = rows[0]
+    try:
+        when = date.fromisoformat(nxt["date"])
+    except (TypeError, ValueError):
+        return None
+    return {"date": nxt["date"], "eps_estimate": nxt.get("eps_estimate"),
+            "hour": nxt.get("hour"), "days_until": (when - date.today()).days}
+
+
 def get_surprises(ticker: str) -> list[dict]:
     ticker = ticker.upper()
     try:

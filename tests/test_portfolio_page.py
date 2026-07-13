@@ -101,13 +101,13 @@ def test_portfolio_page_screener_ratings_are_opt_in_and_add_a_column():
 def test_portfolio_page_currency_toggle_converts_displayed_values_to_nzd():
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
     fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
-    fx_series = [{"date": "2026-06-30", "value": 0.5}]  # USD per NZD = 0.5, so 1 USD = 2 NZD
+    fx = {"value": 0.5, "date": "2026-06-30", "source": "ECB (frankfurter.app)"}  # USD/NZD 0.5 -> 1 USD = 2 NZD
 
     at = AppTest.from_file(PAGE_PATH)
     with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, price=150.0)):
         with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
             with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
-                with patch("engine.currency.fred_client.get_series", return_value=fx_series):
+                with patch("engine.currency.frankfurter_client.usd_per_nzd", return_value=fx):
                     at.run(timeout=30)
                     assert {m.label: m.value for m in at.metric}["Total value"] == "$1,500.00"  # USD default
 

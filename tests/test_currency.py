@@ -17,30 +17,47 @@ def test_symbols():
     assert currency.symbol(None) == "$"  # falls back to the base symbol
 
 
-def test_get_rate_nzd_uses_the_most_recent_fred_observation():
-    # DEXUSNZ is USD-per-NZD, oldest first; the latest value is what we want.
-    series = [
-        {"date": "2026-06-29", "value": 0.60},
-        {"date": "2026-06-30", "value": 0.625},  # most recent
-    ]
-    with patch("engine.currency.fred_client.get_series", return_value=series) as mock_get:
+def test_get_rate_nzd_uses_the_fresh_ecb_rate():
+    ecb = {"value": 0.625, "date": "2026-07-10", "source": "ECB (frankfurter.app)"}
+    with patch("engine.currency.frankfurter_client.usd_per_nzd", return_value=ecb) as mock_ecb, \
+         patch("engine.currency.fred_client.get_series") as mock_fred:
         rate = currency.get_rate("NZD")
 
     assert rate == pytest.approx(1 / 0.625)  # 1 USD buys 1/0.625 NZD
-    mock_get.assert_called_once()
+    mock_ecb.assert_called_once()
+    mock_fred.assert_not_called()            # ECB was fresh, FRED not needed
+
+
+def test_get_rate_nzd_falls_back_to_fred_when_ecb_is_down():
+    series = [{"date": "2026-06-29", "value": 0.60}, {"date": "2026-06-30", "value": 0.55}]  # latest last
+    with patch("engine.currency.frankfurter_client.usd_per_nzd", side_effect=RuntimeError("ecb down")), \
+         patch("engine.currency.fred_client.get_series", return_value=series):
+        rate = currency.get_rate("NZD")
+    assert rate == pytest.approx(1 / 0.55)   # FRED's most recent observation
+
+
+def test_rate_info_reports_the_source_and_date():
+    ecb = {"value": 0.5756, "date": "2026-07-10", "source": "ECB (frankfurter.app)"}
+    with patch("engine.currency.frankfurter_client.usd_per_nzd", return_value=ecb):
+        info = currency.rate_info("NZD")
+    assert info["usd_per_nzd"] == 0.5756
+    assert info["nzd_per_usd"] == pytest.approx(1 / 0.5756)
+    assert info["as_of"] == "2026-07-10" and "ECB" in info["source"]
+    assert currency.rate_info("USD") is None
 
 
 def test_get_rate_nzd_is_cached_and_not_refetched_within_ttl():
-    series = [{"date": "2026-06-30", "value": 0.5}]
-    with patch("engine.currency.fred_client.get_series", return_value=series) as mock_get:
+    ecb = {"value": 0.5, "date": "2026-07-10", "source": "ECB (frankfurter.app)"}
+    with patch("engine.currency.frankfurter_client.usd_per_nzd", return_value=ecb) as mock_ecb:
         currency.get_rate("NZD")
         currency.get_rate("NZD")
 
-    assert mock_get.call_count == 1  # second call served from the cache layer
+    assert mock_ecb.call_count == 1  # second call served from the cache layer
 
 
-def test_get_rate_nzd_raises_when_fred_returns_nothing():
-    with patch("engine.currency.fred_client.get_series", return_value=[]):
+def test_get_rate_nzd_raises_when_no_source_has_data():
+    with patch("engine.currency.frankfurter_client.usd_per_nzd", side_effect=RuntimeError("down")), \
+         patch("engine.currency.fred_client.get_series", return_value=[]):
         with pytest.raises(RuntimeError):
             currency.get_rate("NZD")
 

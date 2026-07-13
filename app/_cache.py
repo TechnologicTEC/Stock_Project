@@ -47,6 +47,20 @@ def live_valuation(user_id: int | None):
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def upcoming_earnings(tickers: tuple[str, ...], within_days: int = 21) -> list[dict]:
+    """Which of `tickers` report earnings within `within_days`, soonest first —
+    shared market data, keyed by the ticker set. Dates are source-cached (24h)."""
+    from engine import earnings
+
+    out = []
+    for ticker in tickers:
+        nxt = earnings.next_earnings(ticker)
+        if nxt and nxt.get("days_until") is not None and 0 <= nxt["days_until"] <= within_days:
+            out.append({"ticker": ticker, **nxt})
+    return sorted(out, key=lambda e: e["days_until"])
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def news_analysis(ticker: str):
     """News + sentiment for a ticker — shared market data, keyed by ticker."""
     return news.analyze_ticker(ticker)

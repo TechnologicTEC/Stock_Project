@@ -58,6 +58,22 @@ def test_dashboard_shows_snapshot_movers_and_creator_signals():
     assert "PLTR" in md and "3×" in md                 # creator repeat mention
 
 
+def test_dashboard_shows_upcoming_earnings():
+    from datetime import date, timedelta
+    soon = (date.today() + timedelta(days=2)).isoformat()
+    with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "AAPL"}]), \
+         patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
+         patch("engine.portfolio.get_live_valuation", return_value=[]), \
+         patch("engine.creator_signals.mention_leaderboard", return_value=[]), \
+         patch("engine.earnings.next_earnings",
+               return_value={"date": soon, "eps_estimate": 1.93, "hour": "amc", "days_until": 2}):
+        at = AppTest.from_file(_MAIN)
+        at.run(timeout=30)
+    assert not at.exception
+    body = " ".join(m.value for m in at.markdown) + " ".join(s.value for s in at.subheader)
+    assert "Reporting soon" in body and "AAPL" in body and "2 days" in body
+
+
 def test_dashboard_handles_no_movers_and_no_creator_signals():
     flat = [{"ticker": "NVDA", "day_change_pct": None, "day_change_value": None}]
     with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
