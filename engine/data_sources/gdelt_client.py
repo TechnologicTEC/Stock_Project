@@ -26,12 +26,27 @@ The bigquery import is deferred into the client so this module still imports
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
 from engine import cache
 
 _TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
+# Legal/entity suffixes stripped before the org LIKE. GDELT's organization field
+# stores "apple", not "apple inc." — so matching the profile name verbatim
+# ("Apple Inc.") found nothing. Dropping these makes the match actually hit.
+_ORG_SUFFIXES = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited",
+                 "plc", "lp", "llc", "holdings", "holding", "group", "the", "sa", "nv", "ag",
+                 "class", "common", "stock", "ordinary", "shares"}
+
+
+def _org_query_term(company_name: str) -> str:
+    """The core company name for GDELT's org LIKE — lowercased, punctuation and
+    legal suffixes removed ('Apple Inc.' -> 'apple')."""
+    words = re.sub(r"[^a-z0-9 ]", " ", (company_name or "").lower()).split()
+    kept = [w for w in words if w not in _ORG_SUFFIXES]
+    return " ".join(kept).strip() or (company_name or "").strip().lower()
 GDELT_TONE_TTL_SECONDS = 7 * 24 * 60 * 60   # historical tone doesn't change; cache a week
 SENTIMENT_WINDOW_DAYS = 30                  # news lookback feeding a single as-of score
 MAX_SCAN_GB = 60.0                          # dry-run estimate above this -> skip (don't spend quota)
@@ -51,7 +66,7 @@ def _run_daily_tone_query(company_name: str, start: date, end: date) -> list[dic
     from google.cloud import bigquery
 
     client = _bq_client()
-    org_like = f"%{company_name.strip().lower()}%"
+    org_like = f"%{_org_query_term(company_name)}%"
     sql = f"""
         SELECT DATE(_PARTITIONTIME) AS day,
                AVG(SAFE_CAST(SPLIT(V2Tone, ',')[OFFSET(0)] AS FLOAT64)) AS avg_tone,
@@ -89,7 +104,9 @@ def get_daily_tone(company_name: str, start: date, end: date) -> list[dict]:
     list on any failure (no bigquery, no credentials, quota guard, no coverage)."""
     if not company_name or not company_name.strip():
         return []
-    key = f"gdelt_tone:{company_name.strip().lower()}:{start.isoformat()}:{end.isoformat()}"
+    # _v2: the org-name normalization changed what the query matches, so bust any
+    # empties cached under the old (suffix-mismatched) query.
+    key = f"gdelt_tone_v2:{company_name.strip().lower()}:{start.isoformat()}:{end.isoformat()}"
     try:
         return cache.get_or_fetch(key, GDELT_TONE_TTL_SECONDS,
                                   lambda: _run_daily_tone_query(company_name, start, end))

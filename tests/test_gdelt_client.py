@@ -7,6 +7,19 @@ from engine.data_sources import gdelt_client as gd
 
 
 # --------------------------------------------------------------------------
+# org query term — strip legal suffixes/punctuation so the GDELT LIKE matches
+# --------------------------------------------------------------------------
+
+def test_org_query_term_strips_suffixes_and_punctuation():
+    # GDELT stores "apple", not "apple inc." — the suffix made the match miss.
+    assert gd._org_query_term("Apple Inc.") == "apple"
+    assert gd._org_query_term("Advanced Micro Devices, Inc.") == "advanced micro devices"
+    assert gd._org_query_term("NVIDIA Corporation") == "nvidia"
+    assert gd._org_query_term("The Coca-Cola Company") == "coca cola"
+    assert gd._org_query_term("") == ""
+
+
+# --------------------------------------------------------------------------
 # tone -> 0-100 sentiment mapping
 # --------------------------------------------------------------------------
 

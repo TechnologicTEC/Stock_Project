@@ -269,8 +269,11 @@ elif not summary.get("insufficient_data"):
 st.subheader("Factor breakdown per observation")
 st.caption(
     "Each score is the weighted blend of these factors (a factor with no data has its weight "
-    "redistributed). **News** is GDELT article tone over the 30 days before each date — populated only "
-    "when *Include news sentiment* is ticked (GDELT provides tone, not the individual headlines)."
+    "redistributed). A blank cell means that factor couldn't be reconstructed point-in-time for this "
+    "ticker: **Valuation / Growth / Profitability** come from SEC XBRL filings, so they're blank for ETFs "
+    "and many non-US filers; **News** is GDELT article tone over the 30 days before each date, populated "
+    "only when *Include news sentiment* is ticked and the company has coverage (it provides tone, not "
+    "individual headlines)."
 )
 _FACTOR_COLUMNS = [
     ("valuation", "Valuation"), ("growth", "Growth"), ("profitability", "Profitability"),
