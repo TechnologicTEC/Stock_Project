@@ -216,3 +216,27 @@ def test_walk_forward_does_not_score_dates_whose_forward_window_has_not_elapsed(
 
     assert points  # the older dates still score
     assert all(p["date"] <= today - timedelta(days=91) for p in points)
+
+
+def test_pooled_result_survives_a_lost_session_via_the_store():
+    # A pooled run can outlive the Streamlit websocket; session_state is then
+    # empty on reconnect. The stored copy is what makes the result reappear.
+    key = sv.pooled_cache_key(["aapl", "msft"], lookback_days=730, horizon_days=91,
+                              step_days=30, include_news=True)
+    assert sv.load_pooled_result(key) is None          # nothing stored yet
+
+    summary = {"n": 40, "n_tickers": 2, "information_coefficient": 0.06,
+               "insufficient_data": False, "bands": [], "trend": None,
+               "factor_ic": {"momentum": {"label": "Momentum", "ic": 0.2, "n": 40}}}
+    sv.save_pooled_result(key, summary)
+
+    restored = sv.load_pooled_result(key)
+    assert restored["n_tickers"] == 2 and restored["factor_ic"]["momentum"]["ic"] == 0.2
+
+
+def test_pooled_cache_key_changes_with_the_settings():
+    base = dict(lookback_days=730, horizon_days=91, step_days=30, include_news=False)
+    k1 = sv.pooled_cache_key(["AAPL"], **base)
+    assert k1 == sv.pooled_cache_key(["aapl"], **base)                      # case/order-insensitive
+    assert k1 != sv.pooled_cache_key(["AAPL", "MSFT"], **base)              # ticker set matters
+    assert k1 != sv.pooled_cache_key(["AAPL"], **{**base, "include_news": True})

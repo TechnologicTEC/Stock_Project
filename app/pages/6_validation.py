@@ -119,6 +119,19 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
         "look-back / horizon / news settings above. Slow (it reconstructs each ticker's history) and still "
         "small-sample, so read it as directional, not a fitted model."
     )
+    pooled_key = validation.pooled_cache_key(
+        known, lookback_days=LOOKBACKS[lookback_label], horizon_days=horizon_days,
+        step_days=step_days, include_news=include_news,
+    )
+
+    if include_news:
+        st.warning(
+            "**News sentiment is on.** The first pooled run has to pull GDELT tone from BigQuery for every "
+            "ticker — expect a few minutes and a chunk of your free BigQuery quota. It's cached per company "
+            "per year, so re-runs (and other tickers sharing the window) are fast and free.",
+            icon="⏳",
+        )
+
     if st.button("▶️ Run pooled validation", key="run_pooled"):
         progress = st.progress(0.0, text="Starting…")
 
@@ -131,12 +144,22 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                 include_news=include_news, on_progress=_on_progress,
             )
         progress.empty()
-        st.session_state["pooled_result"] = {
-            "summary": validation.summarize_pooled(pooled_points), "horizon_days": horizon_days,
-        }
+        pooled_summary = validation.summarize_pooled(pooled_points)
+        # Persist OUTSIDE session_state: a long run can outlive the websocket, and
+        # the reconnected browser gets a FRESH session with empty session_state —
+        # which silently threw away the finished result. The stored copy survives.
+        validation.save_pooled_result(pooled_key, pooled_summary)
+        st.session_state["pooled_result"] = {"summary": pooled_summary, "horizon_days": horizon_days}
 
     pooled = st.session_state.get("pooled_result")
+    if pooled is None:                       # session dropped mid-run? show the stored run.
+        stored = validation.load_pooled_result(pooled_key)
+        if stored:
+            pooled = {"summary": stored, "horizon_days": horizon_days, "from_store": True}
+
     if pooled:
+        if pooled.get("from_store"):
+            st.caption("Showing the last completed run for these settings (restored after the page reloaded).")
         s = pooled["summary"]
         if s.get("insufficient_data") or not s.get("n_tickers"):
             st.info("Not enough reconstructed history across your tickers yet — try a longer look-back.")

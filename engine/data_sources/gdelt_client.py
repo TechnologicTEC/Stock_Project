@@ -123,13 +123,49 @@ def tone_to_sentiment(avg_tone: float | None) -> float | None:
     return max(0.0, min(100.0, 50.0 + avg_tone * 10.0))
 
 
+def daily_tone_for_year(company_name: str, year: int) -> list[dict]:
+    """A whole calendar year of daily tone in ONE cached query.
+
+    The walk-forward asks for a 30-day window per as-of date. Querying per date
+    meant ~24 BigQuery jobs *per ticker* — a pooled run was ~288 jobs, ~24
+    minutes, and half the monthly free query quota. One job per company-year is
+    cached and then reused by every as-of date, every ticker pass, and every
+    re-run. Same bytes, ~12x fewer round trips."""
+    if not company_name or not company_name.strip():
+        return []
+    key = f"gdelt_tone_year:{company_name.strip().lower()}:{year}"
+    try:
+        return cache.get_or_fetch(
+            key, GDELT_TONE_TTL_SECONDS,
+            lambda: _run_daily_tone_query(company_name, date(year, 1, 1), date(year + 1, 1, 1)),
+        )
+    except Exception:
+        return []
+
+
 def sentiment_as_of(company_name: str, as_of: date, window_days: int = SENTIMENT_WINDOW_DAYS) -> float | None:
     """Point-in-time news sentiment (0–100) for `company_name` as of `as_of`:
     the article-count-weighted average tone over the preceding `window_days`,
-    mapped to the Screener's scale. None if there's no coverage in the window."""
-    rows = get_daily_tone(company_name, as_of - timedelta(days=window_days), as_of)
+    mapped to the Screener's scale. None if there's no coverage in the window.
+
+    Reads from the cached per-year tone series rather than issuing a query per
+    as-of date (see daily_tone_for_year)."""
+    if not company_name or not company_name.strip():
+        return None
+    window_start = as_of - timedelta(days=window_days)
+
+    rows: list[dict] = []
+    for year in range(window_start.year, as_of.year + 1):   # a window can straddle a year boundary
+        rows.extend(daily_tone_for_year(company_name, year))
+
     weighted, total = 0.0, 0
     for row in rows:
+        try:
+            day = date.fromisoformat(row["day"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (window_start <= day < as_of):
+            continue
         tone, n = row.get("avg_tone"), row.get("n") or 0
         if tone is not None and n:
             weighted += tone * n

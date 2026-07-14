@@ -19,11 +19,12 @@ Honest limitations (surfaced, not hidden):
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import date, timedelta
 
 import pandas as pd
 
-from engine import price_history, screener_history
+from engine import cache, price_history, screener_history
 
 DEFAULT_STEP_DAYS = 30          # score roughly monthly
 DEFAULT_HORIZON_DAYS = 91       # ~3-month forward return
@@ -258,3 +259,31 @@ def summarize_pooled(points: list[dict]) -> dict:
     summary["n_tickers"] = len({p.get("ticker") for p in points if p.get("ticker")})
     summary["factor_ic"] = factor_information_coefficients(points)
     return summary
+
+
+# --------------------------------------------------------------------------
+# Persisting a pooled run. A pooled validation can run for minutes; Streamlit's
+# websocket may drop in that time and the browser reconnects with a FRESH
+# session — so a result stashed only in st.session_state silently vanishes even
+# though the work completed. Store it in the shared cache too, keyed by the exact
+# settings, so reloading the page shows the finished run.
+# --------------------------------------------------------------------------
+
+POOLED_RESULT_TTL_SECONDS = 30 * 24 * 60 * 60      # a pooled run stays readable for a month
+
+
+def pooled_cache_key(tickers, *, lookback_days: int, horizon_days: int,
+                     step_days: int, include_news: bool) -> str:
+    """Identifies a pooled run by its inputs — change any setting and it's a new key."""
+    joined = ",".join(sorted(t.strip().upper() for t in tickers))
+    digest = hashlib.sha1(joined.encode()).hexdigest()[:12]
+    return (f"pooled_validation:{digest}:{lookback_days}:{horizon_days}:"
+            f"{step_days}:{int(bool(include_news))}")
+
+
+def save_pooled_result(key: str, summary: dict) -> None:
+    cache.set_value(key, summary)
+
+
+def load_pooled_result(key: str) -> dict | None:
+    return cache.get_value(key, ttl_seconds=POOLED_RESULT_TTL_SECONDS) or None
