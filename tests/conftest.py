@@ -33,6 +33,18 @@ def neutral_identity(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def pin_price_source(monkeypatch):
+    """Pin price history to yfinance for the whole suite.
+
+    `price_history.canonical_source()` prefers Alpaca whenever its keys are present
+    — and `.env` (loaded by engine.config at import) makes them present even under
+    pytest. Without this pin the suite would leave its mocked-yfinance path and try
+    real Alpaca. Tests that specifically exercise Alpaca override it themselves.
+    """
+    monkeypatch.setenv("PRICE_HISTORY_SOURCE", "yfinance")
+
+
+@pytest.fixture(autouse=True)
 def isolated_test_db():
     db_session.configure("sqlite:///:memory:")
     db_session.init_db()

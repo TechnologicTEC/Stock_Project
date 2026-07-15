@@ -16,7 +16,7 @@ it needs to read *all* users' tickers (RLS would otherwise scope it to one) and
 write the shared caches. It never reads or writes per-user rows. Idempotent.
 
 Run:
-    DATABASE_URL=<us-east-1 postgres URL> PRICE_HISTORY_PREFER_ALPACA=1 \
+    DATABASE_URL=<us-east-1 postgres URL> PRICE_HISTORY_SOURCE=alpaca \
     FINNHUB_API_KEY=... ALPACA_API_KEY=... ALPACA_SECRET_KEY=... \
     python scripts/warm_cache.py
 """

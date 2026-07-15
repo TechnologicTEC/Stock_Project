@@ -8,7 +8,7 @@ Connects via DATABASE_URL as an admin / BYPASSRLS Postgres role — the creator
 tables are global/shared, not per-user. Idempotent (videos are deduped).
 
 Run:
-    DATABASE_URL=<postgres URL> PRICE_HISTORY_PREFER_ALPACA=1 GEMINI_API_KEY=... \
+    DATABASE_URL=<postgres URL> PRICE_HISTORY_SOURCE=alpaca GEMINI_API_KEY=... \
     FINNHUB_API_KEY=... ALPACA_API_KEY=... ALPACA_SECRET_KEY=... \
     EDGAR_USER_AGENT='Your Name you@example.com' python scripts/scan_creators.py
 """

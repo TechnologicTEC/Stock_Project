@@ -37,7 +37,7 @@ jobs:
       - name: Warm price + fundamentals + news caches
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
-          PRICE_HISTORY_PREFER_ALPACA: "1"
+          PRICE_HISTORY_SOURCE: "alpaca"   # pin the same provider the app uses, so the warmed cache is read (not re-fetched)
           WARM_NEWS: "1"
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}

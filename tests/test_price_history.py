@@ -47,3 +47,35 @@ def test_refresh_returns_zero_and_caches_nothing_when_source_empty(monkeypatch):
             n = price_history.refresh("ZZZZ", date(2026, 6, 1), date(2026, 6, 3))
     assert n == 0
     assert cache.get_price_history("ZZZZ", "yfinance", date(2026, 6, 1), date(2026, 6, 3)) == []
+
+
+# --------------------------------------------------------------------------
+# canonical_source — decided identically everywhere so local and the Space (and
+# a shared cache) reconstruct the SAME series. This is the local-vs-online fix.
+# --------------------------------------------------------------------------
+
+def test_canonical_source_explicit_env_wins(monkeypatch):
+    monkeypatch.setenv("PRICE_HISTORY_SOURCE", "alpaca")
+    assert price_history.canonical_source() == "alpaca"
+    monkeypatch.setenv("PRICE_HISTORY_SOURCE", "yfinance")
+    assert price_history.canonical_source() == "yfinance"
+    # an unknown value falls back to the safe default rather than a bad label
+    monkeypatch.setenv("PRICE_HISTORY_SOURCE", "bloomberg")
+    assert price_history.canonical_source() == "yfinance"
+
+
+def test_canonical_source_prefers_alpaca_when_configured(monkeypatch):
+    monkeypatch.delenv("PRICE_HISTORY_SOURCE", raising=False)  # conftest sets it; clear for this test
+    with patch("engine.data_sources.alpaca_client.is_configured", return_value=True):
+        assert price_history.canonical_source() == "alpaca"
+    with patch("engine.data_sources.alpaca_client.is_configured", return_value=False):
+        assert price_history.canonical_source() == "yfinance"
+
+
+def test_fetch_bars_uses_exactly_the_named_provider(monkeypatch):
+    # Honest labelling: a bar cached under "alpaca" must have come from Alpaca, so
+    # a shared cache never mixes providers into one inconsistent series.
+    with patch("engine.price_history._alpaca_bars", return_value=_bars(1)) as alp, \
+         patch("engine.price_history._yf_bars", return_value=_bars(2)) as yf:
+        assert price_history._fetch_bars("AAPL", date(2026, 6, 1), date(2026, 6, 1), "alpaca") == _bars(1)
+        assert alp.called and not yf.called

@@ -14,7 +14,7 @@ import pandas as pd
 from engine import cache
 from engine.data_sources import yfinance_client
 
-DEFAULT_SOURCE = "yfinance"
+DEFAULT_SOURCE = "yfinance"   # the no-key fallback; canonical_source() decides the live default
 # Market holidays and *today* are weekdays that never get a bar, so "any missing
 # business day -> fetch" otherwise re-hits the network on every page load (and
 # hangs when yfinance is blocked). Re-attempt a given end-date at most this often.
@@ -42,26 +42,54 @@ def _alpaca_bars(ticker: str, start: date, end: date) -> list[dict]:
     return []
 
 
-def _fetch_bars(ticker: str, start: date, end: date) -> list[dict]:
-    """Daily OHLCV bars, trying two sources in order and returning the first
-    non-empty result. **yfinance** (no key) is primary by default so tests/local
-    keep their existing behaviour; set `PRICE_HISTORY_PREFER_ALPACA=1` (on a cloud
-    host like Hugging Face, where Yahoo blocks datacenter IPs) to try **Alpaca**'s
-    official API first instead — it works with the user's keys and is fast."""
-    sources = [_yf_bars, _alpaca_bars]
-    if os.environ.get("PRICE_HISTORY_PREFER_ALPACA"):
-        sources.reverse()
-    for fetch in sources:
-        bars = fetch(ticker, start, end)
-        if bars:
-            return bars
-    return []
+_VALID_SOURCES = frozenset({"yfinance", "alpaca"})
 
 
-def ensure_cached(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> None:
+def canonical_source() -> str:
+    """The price provider to use, decided **identically in every environment** so
+    a shared cache and repeated runs agree — this is what makes local and the
+    deployed Space reconstruct the SAME series.
+
+    Priority: an explicit ``PRICE_HISTORY_SOURCE`` env var wins (the test suite
+    pins ``yfinance``); otherwise **Alpaca** whenever its keys are present, because
+    it's the only source that works from a datacenter IP (Yahoo blocks those). So
+    with Alpaca configured — true on your machine AND on the Space — both pick
+    ``alpaca`` and read the very same cached rows. Falls back to yfinance only when
+    Alpaca isn't configured (e.g. tests, or a user without Alpaca keys), where
+    cross-environment parity isn't in play anyway.
+
+    (Replaces the old ``PRICE_HISTORY_PREFER_ALPACA`` flag, whose asymmetry — set
+    on the Space, unset locally — is exactly what made the two diverge.)"""
+    explicit = os.environ.get("PRICE_HISTORY_SOURCE")
+    if explicit and explicit.strip():
+        chosen = explicit.strip().lower()
+        return chosen if chosen in _VALID_SOURCES else DEFAULT_SOURCE
+    try:
+        from engine.data_sources import alpaca_client
+        if alpaca_client.is_configured():
+            return "alpaca"
+    except Exception:
+        pass
+    return DEFAULT_SOURCE
+
+
+def _fetch_bars(ticker: str, start: date, end: date, source: str) -> list[dict]:
+    """Daily OHLCV bars from EXACTLY ``source``'s provider. Fetching only the named
+    provider (rather than falling back to the other) is deliberate: what we cache
+    under a label must actually have come from that provider, or a *shared* cache
+    would silently mix yfinance and Alpaca bars into one inconsistent series — the
+    original cause of local vs online disagreeing. Dispatch resolves the fetcher by
+    name at call time (not a table captured at import) so it stays test-patchable."""
+    if source == "alpaca":
+        return _alpaca_bars(ticker, start, end)
+    return _yf_bars(ticker, start, end)
+
+
+def ensure_cached(ticker: str, start: date, end: date, source: str | None = None) -> None:
     """Fetches and caches any business days in [start, end] we don't already have.
     A no-op once the range is covered; otherwise throttled (see above) so a
     holiday/today gap doesn't trigger a network call on every render."""
+    source = source or canonical_source()
     ticker = ticker.upper()
     cached_dates = cache.get_cached_price_dates(ticker, source, start, end)
     if not (set(pd.bdate_range(start=start, end=end).date) - cached_dates):
@@ -73,26 +101,28 @@ def ensure_cached(ticker: str, start: date, end: date, source: str = DEFAULT_SOU
     if cache.get_value(attempt_key, ttl_seconds=_FETCH_RETRY_TTL_SECONDS) is not None:
         return  # tried this range's tail recently; the gap is almost certainly holidays/today
     cache.set_value(attempt_key, True)
-    bars = _fetch_bars(ticker, start, end)
+    bars = _fetch_bars(ticker, start, end, source)
     if bars:
         cache.save_price_bars(ticker, source, bars)
 
 
-def refresh(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> int:
+def refresh(ticker: str, start: date, end: date, source: str | None = None) -> int:
     """Fetch [start, end] and cache it **unconditionally**, bypassing the
     ensure_cached freshness/holiday guard. For the scheduled warm job (which
     *wants* the day's new bar) and any forced refresh. Returns bars fetched."""
-    bars = _fetch_bars(ticker.upper(), start, end)
+    source = source or canonical_source()
+    bars = _fetch_bars(ticker.upper(), start, end, source)
     if bars:
         cache.save_price_bars(ticker, source, bars)
     return len(bars)
 
 
-def get_history_df(ticker: str, start: date, end: date, source: str = DEFAULT_SOURCE) -> pd.DataFrame:
+def get_history_df(ticker: str, start: date, end: date, source: str | None = None) -> pd.DataFrame:
     """Returns a DataFrame indexed by date with open/high/low/close/volume
     columns, calling ensure_cached() first. Empty DataFrame if nothing's
     available (bad ticker, no network, etc) - callers should treat that as
     'no data', not an error."""
+    source = source or canonical_source()
     ensure_cached(ticker, start, end, source)
     history = cache.get_price_history(ticker, source, start, end)
     if not history:
@@ -101,11 +131,12 @@ def get_history_df(ticker: str, start: date, end: date, source: str = DEFAULT_SO
     return df
 
 
-def price_series(ticker: str, start: date, end: date, business_days, source: str = DEFAULT_SOURCE) -> pd.Series:
+def price_series(ticker: str, start: date, end: date, business_days, source: str | None = None) -> pd.Series:
     """Close prices reindexed onto `business_days`, forward/back-filled to
     cover gaps (weekends already excluded by using business days; holidays
     and short histories are covered by the fill). Returns 0.0 throughout if
     nothing's available."""
+    source = source or canonical_source()
     ensure_cached(ticker, start, end, source)
     history = cache.get_price_history(ticker, source, start, end)
     if not history:

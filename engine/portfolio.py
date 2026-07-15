@@ -23,7 +23,6 @@ from engine.time_utils import utcnow
 
 QUOTE_TTL_SECONDS = 5 * 60          # Section 4: "cache for 5-15 min during market hours"
 PROFILE_TTL_SECONDS = 7 * 24 * 60 * 60  # sector/country/market-cap rarely changes; 7 days is plenty
-PRICE_HISTORY_SOURCE = "yfinance"
 
 VALID_ASSET_TYPES = {"stock", "etf", "crypto", "bond", "cash", "other"}
 
@@ -741,7 +740,9 @@ def get_allocation_by_market_cap() -> list[dict]:
 # --------------------------------------------------------------------------
 
 def _price_series(ticker: str, start: date, end: date, business_days) -> pd.Series:
-    return price_history.price_series(ticker, start, end, business_days, source=PRICE_HISTORY_SOURCE)
+    # Default source -> price_history.canonical_source() (Alpaca when configured),
+    # so the value chart reads the same cached series as the screener/validation.
+    return price_history.price_series(ticker, start, end, business_days)
 
 
 def _cash_series(transactions: list[dict], cash_flows: list[dict], business_days) -> pd.Series:

@@ -41,8 +41,8 @@ them **secret** (not public "variable"):
 | `FINNHUB_API_KEY` | your Finnhub key | Powers most pages; without it the deployed app shows little data. |
 | `FRED_API_KEY` | your FRED key | Sharpe ratio / risk-free rate. |
 | `EDGAR_USER_AGENT` | `Your Name your@email` | Screener Validation. |
-| `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | your paper keys | Paper Trading **and** the historical price source on the cloud (see next row). |
-| `PRICE_HISTORY_PREFER_ALPACA` | `1` | **Recommended on HF.** Fetch price history (value-over-time chart, screener momentum, backtests) from Alpaca first — yfinance/Yahoo blocks datacenter IPs and hangs. Needs the Alpaca keys above. |
+| `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | your paper keys | Paper Trading **and** the historical price source (value-over-time chart, screener momentum, backtests, validation). With these set, price history auto-uses Alpaca everywhere — yfinance/Yahoo blocks datacenter IPs and hangs. |
+| `PRICE_HISTORY_SOURCE` | *(unset)* | Optional override of the price provider (`alpaca` or `yfinance`). Leave unset: the app auto-prefers Alpaca whenever the keys above are present, so local and the Space use the **same** provider and share the same cached series. (Replaces the old `PRICE_HISTORY_PREFER_ALPACA` flag, whose local/Space asymmetry made validations disagree.) |
 | `GEMINI_API_KEY` | your Gemini key | Optional — Assistant's LLM mode. |
 | `OWNER_EMAILS` | your email | Harmless now; needed for Stage 2. |
 | `HF_TOKEN` | a free HF read token | Optional — quieter/faster FinBERT download. |

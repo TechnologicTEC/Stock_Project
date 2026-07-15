@@ -28,7 +28,7 @@ jobs:
       - name: Scan creators + screen mentions
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
-          PRICE_HISTORY_PREFER_ALPACA: "1"
+          PRICE_HISTORY_SOURCE: "alpaca"   # match the app's price provider (see engine/price_history.canonical_source)
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}       # LLM extraction (dictionary fallback without it)
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}

@@ -61,7 +61,6 @@ LOOKBACK_OPTIONS = {"3M": 90, "6M": 182, "1Y": 365, "2Y": 730}  # shared with ap
 MIN_DATA_POINTS = 20  # ~4 trading weeks; below this, beta/Sharpe/drawdown/return are considered too noisy to report
 TRADING_DAYS_PER_YEAR = 252
 BENCHMARK_TICKER = "SPY"
-BENCHMARK_SOURCE = "yfinance"
 
 RISK_FREE_RATE_SERIES_ID = "DGS3MO"   # 3-Month Treasury Constant Maturity Rate, daily - verified live via FRED docs
 RISK_FREE_RATE_TTL_SECONDS = 24 * 60 * 60
@@ -420,7 +419,7 @@ def get_health_report(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> HealthRepor
     beta, beta_n = None, 0
     try:
         business_days = pd.bdate_range(start=start, end=end).date
-        benchmark_prices = price_history.price_series(BENCHMARK_TICKER, start, end, business_days, source=BENCHMARK_SOURCE)
+        benchmark_prices = price_history.price_series(BENCHMARK_TICKER, start, end, business_days)
         benchmark_returns = _daily_returns(benchmark_prices)
         beta, beta_n = compute_beta(portfolio_returns, benchmark_returns)
     except Exception as exc:
