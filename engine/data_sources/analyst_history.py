@@ -23,7 +23,16 @@ from datetime import date, timedelta
 from engine import cache
 from engine.data_sources import yfinance_client
 
-RATING_EVENTS_TTL_SECONDS = 24 * 60 * 60
+# 7 days, not 24h. These dated rating-change events feed ONLY the historical
+# reconstruction (screener_history), whose newest scorable date is already ~a
+# horizon back — so the last few days of ratings never matter here. More
+# importantly the source is Yahoo/yfinance, which blocks datacenter IPs: the
+# deployed Space (and GitHub runners) CAN'T re-fetch when this expires, so a short
+# TTL just made the Space silently drop tickers its cache had aged out. A week-long
+# TTL lets a single run from a residential IP (your local machine) keep the shared
+# cache warm, so local and online reconstruct the SAME analyst factor. See the
+# module docstring's "empty for non-US names / thin for small caps" caveat too.
+RATING_EVENTS_TTL_SECONDS = 7 * 24 * 60 * 60
 # A firm whose last rating change is older than this is treated as lapsed
 # coverage and not counted — analysts typically refresh well inside ~15 months.
 STALENESS_DAYS = 450
