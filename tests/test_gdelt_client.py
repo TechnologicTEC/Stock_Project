@@ -123,3 +123,32 @@ def test_get_daily_tone_returns_empty_on_failure():
 
 def test_get_daily_tone_empty_for_blank_company():
     assert gd.get_daily_tone("", date(2023, 5, 1), date(2023, 6, 1)) == []
+
+
+# --------------------------------------------------------------------------
+# is_configured — "no BigQuery credentials here" must be *reportable*, not just
+# an empty factor. The deployed Space has no Google Cloud creds, so the news
+# factor silently produced 0 observations with no stated reason.
+# --------------------------------------------------------------------------
+
+def test_is_configured_true_when_bigquery_client_constructs():
+    gd._bq_client.cache_clear()
+    with patch("engine.data_sources.gdelt_client._bq_client", return_value=object()):
+        assert gd.is_configured() is True
+
+
+def test_is_configured_false_without_credentials():
+    gd._bq_client.cache_clear()
+    with patch("engine.data_sources.gdelt_client._bq_client",
+               side_effect=RuntimeError("could not automatically determine credentials")):
+        assert gd.is_configured() is False
+
+
+def test_daily_tone_for_year_logs_the_reason_it_came_back_empty(caplog):
+    # The failure must leave a trace — otherwise "no credentials" and "no coverage"
+    # are indistinguishable from the outside.
+    with patch("engine.data_sources.gdelt_client._run_daily_tone_query",
+               side_effect=RuntimeError("no credentials")):
+        with caplog.at_level("WARNING"):
+            assert gd.daily_tone_for_year("Nocreds Corp", 2024) == []
+    assert "no credentials" in caplog.text

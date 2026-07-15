@@ -26,11 +26,14 @@ The bigquery import is deferred into the client so this module still imports
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 
 from engine import cache
+
+logger = logging.getLogger(__name__)
 
 _TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
 # Legal/entity suffixes stripped before the org LIKE. GDELT's organization field
@@ -57,6 +60,22 @@ MAX_BYTES_BILLED = 80_000_000_000           # absolute backstop on any single qu
 def _bq_client():
     from google.cloud import bigquery  # deferred: keeps the module importable without the dep
     return bigquery.Client()
+
+
+def is_configured() -> bool:
+    """True when BigQuery is actually usable *here*.
+
+    GDELT tone is the only historical news source and it runs on BigQuery, which
+    needs Google Cloud credentials + a project. Those exist on a dev machine after
+    `gcloud auth application-default login`, but NOT on a deployed Space unless a
+    service-account key is added — where the news factor therefore stays blank.
+    Callers use this to say so rather than silently returning no data."""
+    try:
+        _bq_client()
+        return True
+    except Exception as exc:
+        logger.info("GDELT/BigQuery unavailable here (%s: %s)", type(exc).__name__, exc)
+        return False
 
 
 def _run_daily_tone_query(company_name: str, start: date, end: date) -> list[dict]:
@@ -139,7 +158,11 @@ def daily_tone_for_year(company_name: str, year: int) -> list[dict]:
             key, GDELT_TONE_TTL_SECONDS,
             lambda: _run_daily_tone_query(company_name, date(year, 1, 1), date(year + 1, 1, 1)),
         )
-    except Exception:
+    except Exception as exc:
+        # Never swallow this silently: "no BigQuery credentials" and "no news
+        # coverage" both produced an empty factor, which looked identical.
+        logger.warning("GDELT tone for %r/%s failed (%s: %s) — news factor will be blank",
+                       company_name, year, type(exc).__name__, exc)
         return []
 
 

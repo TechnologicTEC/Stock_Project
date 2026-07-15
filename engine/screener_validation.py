@@ -35,6 +35,17 @@ _SCORE_BANDS = [(0, 40, "0–40 (Sell)"), (40, 60, "40–60 (Hold)"),
                 (60, 75, "60–75 (Buy)"), (75, 101, "75–100 (Strong Buy)")]
 
 
+def news_sentiment_available() -> bool:
+    """Whether the historical news factor can actually be reconstructed *here*.
+
+    It's GDELT-over-BigQuery, which needs Google Cloud credentials. Those exist on
+    a dev machine (`gcloud auth application-default login`) but not on the deployed
+    Space, where the factor would otherwise come back silently empty — 0 observations
+    with no explanation. The page checks this and says so up front."""
+    from engine.data_sources import gdelt_client
+    return gdelt_client.is_configured()
+
+
 def _price_on_or_before(ticker: str, day: date) -> float | None:
     df = price_history.get_history_df(ticker, day - timedelta(days=10), day)
     if df.empty or "close" not in df.columns:

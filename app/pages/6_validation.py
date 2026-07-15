@@ -79,6 +79,22 @@ include_news = st.checkbox(
          "after the first run for a ticker.",
 )
 
+# The news factor is the ONLY one that needs a credential this environment might not
+# have (Google Cloud, for BigQuery). Without it every GDELT call fails, the factor
+# scores None, and the run finishes with "Sentiment — 0 observations" and no reason.
+# Say it up front instead of letting a long run end in a silent blank.
+if include_news and not validation.news_sentiment_available():
+    st.warning(
+        "**News sentiment can't be reconstructed in this environment — it will come back blank "
+        "(0 observations).** The historical news factor is GDELT article tone, queried through Google "
+        "BigQuery, and no Google Cloud credentials are configured here. Every other factor is unaffected, "
+        "so the run is still valid — just on 5 factors, exactly as if this box were unticked.\n\n"
+        "It works wherever you've run `gcloud auth application-default login` and set `GOOGLE_CLOUD_PROJECT` "
+        "(your local machine). To enable it on the deployed app you'd need to add a Google Cloud "
+        "service-account key as a Space secret.",
+        icon="⚠️",
+    )
+
 today = date.today()
 start_date = today - timedelta(days=LOOKBACKS[lookback_label])
 horizon_days = HORIZONS[horizon_label]
@@ -149,10 +165,18 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
         # the reconnected browser gets a FRESH session with empty session_state —
         # which silently threw away the finished result. The stored copy survives.
         validation.save_pooled_result(pooled_key, pooled_summary)
-        st.session_state["pooled_result"] = {"summary": pooled_summary, "horizon_days": horizon_days}
+        # Tag the in-session copy with the exact settings key it was computed for.
+        # Without this, a result from earlier settings (or an interrupted run) got
+        # redisplayed after you changed the look-back / ticked news — showing a
+        # stale "not enough" that no longer matched the controls above it.
+        st.session_state["pooled_result"] = {
+            "summary": pooled_summary, "horizon_days": horizon_days, "key": pooled_key,
+        }
 
     pooled = st.session_state.get("pooled_result")
-    if pooled is None:                       # session dropped mid-run? show the stored run.
+    if pooled is not None and pooled.get("key") != pooled_key:
+        pooled = None                        # session result is for different settings — ignore it
+    if pooled is None:                       # session dropped mid-run? show the stored run for THESE settings.
         stored = validation.load_pooled_result(pooled_key)
         if stored:
             pooled = {"summary": stored, "horizon_days": horizon_days, "from_store": True}
@@ -161,8 +185,18 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
         if pooled.get("from_store"):
             st.caption("Showing the last completed run for these settings (restored after the page reloaded).")
         s = pooled["summary"]
-        if s.get("insufficient_data") or not s.get("n_tickers"):
-            st.info("Not enough reconstructed history across your tickers yet — try a longer look-back.")
+        if not s.get("n_tickers"):
+            # Zero tickers reconstructed at all — with a real universe this means the
+            # run didn't complete (usually a long first news run that outlived the
+            # connection), not that history is too short. Say so, and how to fix it.
+            st.info(
+                "No reconstructed history came back for this run. If it was a first-time run **with news "
+                "sentiment on**, the GDELT pull can outlast the page connection — the tone is now cached, so "
+                "click **Run pooled validation** again and it'll complete quickly."
+            )
+        elif s.get("insufficient_data"):
+            st.info(f"Only {s['n_tickers']} ticker(s) reconstructed and too few dated points to summarise — "
+                    "try a longer look-back or a shorter forward horizon.")
         else:
             pooled_ic = s["information_coefficient"]
             p1, p2, p3 = st.columns(3)
