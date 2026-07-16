@@ -1,0 +1,60 @@
+name: Validate screener across the S&P 500
+
+# Reconstructs the Screener point-in-time across a broad, neutral universe and
+# measures the CROSS-SECTIONAL information coefficient per factor — i.e. whether a
+# higher score really did mean a better stock than its peers on the same date.
+#
+# Why a batch job: ~500 tickers x ~20 dates is thousands of reconstructions. It
+# outlives a browser connection (we already learned that the hard way), so it runs
+# here and writes the summary to the shared Supabase cache; the Validation page
+# just reads the stored result.
+#
+# NOTE — the analyst factor will come back thin from here. It reconstructs from
+# Yahoo's rating-change stream via yfinance, which blocks datacenter IPs. Run
+# scripts/validate_universe.py from a normal machine if you need that factor
+# covered; every other factor is unaffected. See the script's docstring.
+
+on:
+  schedule:
+    # 04:00 UTC Sunday — weekly is plenty: the result moves slowly, and after the
+    # first run the per-ticker SEC/price caches are warm so re-runs are much faster.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      universe_every:
+        description: "Take every Nth name (1 = all ~500, 5 = a ~100-name sample)"
+        required: false
+        default: "1"
+      universe_size:
+        description: "Cap the number of tickers (0 = no cap)"
+        required: false
+        default: "0"
+
+concurrency: validate-universe   # never overlap runs
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    # Thousands of reconstructions on a cold cache. Generous, but bounded so a
+    # wedged run can't burn the whole Actions budget.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-validate.txt
+      - name: Reconstruct + measure cross-sectional IC
+        env:
+          DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}   # BYPASSRLS role; writes shared caches only
+          PRICE_HISTORY_SOURCE: "alpaca"   # match the app's provider (engine/price_history.canonical_source)
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC requires an identifying UA
+          # Empty string when the input is absent (workflow_dispatch vs schedule) —
+          # the script's _int_env uses `or default`, never get(name, default).
+          UNIVERSE_EVERY: ${{ inputs.universe_every }}
+          UNIVERSE_SIZE: ${{ inputs.universe_size }}
+        run: python scripts/validate_universe.py

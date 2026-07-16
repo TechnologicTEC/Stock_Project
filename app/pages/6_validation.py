@@ -123,6 +123,95 @@ if st.button("▶️ Run validation", type="primary"):
         }
 
 # --------------------------------------------------------------------------
+# Cross-sectional validation on a NEUTRAL universe. This is the one that can
+# actually justify reweighting: a few hundred names you didn't pick, ranked
+# against each other on each date. Produced by scripts/validate_universe.py (a
+# batch job — thousands of reconstructions outlive a browser connection), so the
+# page only ever reads the stored result.
+# --------------------------------------------------------------------------
+st.divider()
+with st.expander("🌍 Validate across the S&P 500 — the read that could justify reweighting", expanded=False):
+    uni = validation.load_universe_result()
+    if not uni:
+        st.info(
+            "No universe run stored yet. Run the **Validate screener across the S&P 500** GitHub Action "
+            "(or `python scripts/validate_universe.py` locally), and the result appears here.\n\n"
+            "Why bother: the run above measures the Screener on the ~10 stocks *you already picked* — a "
+            "biased sample, and with overlapping return windows it yields only ~50 independent observations, "
+            "so every factor's error bar swallows its score. A few hundred names you didn't choose is what "
+            "makes the answer mean something."
+        )
+    else:
+        o = uni["overall"]
+        st.caption(
+            f"**{uni.get('universe', 'sp500').upper()}** · {uni['n_tickers']} tickers · {uni['n_points']} "
+            f"reconstructions · horizon {uni['horizon_days']}d, step {uni['step_days']}d · "
+            f"run {uni.get('generated_at', '—')}"
+        )
+        st.markdown(
+            "Unlike the pooled run above, this ranks names **against each other on each date** — the only "
+            "thing the Screener actually claims (\"this stock is better than that one\"), rather than mixing "
+            "it with \"is now a good time to own stocks\", which it can't know."
+        )
+
+        u1, u2, u3, u4 = st.columns(4)
+        u1.metric("Cross-sectional IC", f"{o['mean_ic']:+.3f}" if o["mean_ic"] is not None else "—",
+                  help="Average per-date rank correlation between score and the following return, across names.")
+        u2.metric("t-stat", f"{o['t_stat']:+.2f}" if o["t_stat"] is not None else "—",
+                  help="Deflated for overlapping return windows. |t| > 1.96 = distinguishable from zero.")
+        u3.metric("Independent dates", f"{o['n_dates_eff']} of {o['n_dates']}",
+                  help="Sampling a return more often than its own horizon re-measures the same move, so "
+                       "the dates sampled are NOT all independent trials.")
+        u4.metric("Hit rate", f"{o['hit_rate']:.0%}" if o["hit_rate"] is not None else "—",
+                  help="Share of dates where the IC was positive. 50% is a coin flip.")
+
+        if not o.get("significant"):
+            st.warning(
+                "**Still not statistically significant.** The binding constraint is *independent time "
+                f"periods*, not tickers: {o['n_dates']} sampled dates collapse to **{o['n_dates_eff']}** "
+                "once overlapping windows are removed. More names sharpen each date's estimate, but only a "
+                "longer look-back (or a shorter horizon) buys more independent periods. Not a reweighting "
+                "mandate yet.",
+                icon="📉",
+            )
+
+        def _verdict(f):
+            if f["significant"]:
+                return "yes"
+            return "no (marginal)" if f.get("significant_uncorrected") else "no"
+
+        rows = [{"Factor": f["label"], "Mean IC": f["mean_ic"], "t-stat": f["t_stat"],
+                 "IC-IR": f["ic_ir"], "Hit rate": f["hit_rate"],
+                 "Distinguishable from zero?": _verdict(f),
+                 "Dates": f["n_dates"]}
+                for f in uni["factor_ic"].values()]
+        uni_df = pd.DataFrame(rows).sort_values("Mean IC", ascending=False, na_position="last")
+        st.dataframe(
+            uni_df.style.format({"Mean IC": "{:+.3f}", "t-stat": "{:+.2f}",
+                                 "IC-IR": "{:+.2f}", "Hit rate": "{:.0%}"}, na_rep="—"),
+            width="stretch", hide_index=True,
+        )
+        thr, n_tests = uni.get("t_threshold"), uni.get("n_tests")
+        if thr:
+            st.caption(
+                f"⚖️ The bar here is **|t| > {thr}**, not the familiar 1.96, because we test "
+                f"**{n_tests} factors against the same data at once**. With 6 factors there's a ~26% chance "
+                "at least one clears 1.96 by pure luck — so reporting whichever one does would be p-hacking "
+                "by accident. Rows marked *“no (marginal)”* passed 1.96 but not this bar: that's exactly what "
+                "a false positive looks like."
+            )
+        st.caption(
+            "**IC-IR** is consistency (mean ÷ spread): a small IC that shows up every date beats a big one "
+            "that flips sign. **Read against the pooled run above — where a factor's sign flips between the "
+            "two, the personal-holdings number is the one to distrust**, because those are stocks you chose.\n\n"
+            "Caveats, honestly: the universe is **today's** index, so failed companies are missing "
+            "(survivorship bias — it inflates return *levels*, but hits every factor alike, which is why "
+            "comparing factors is still fair). It covers one macro regime. And if the run came from the "
+            "GitHub Action, **analyst confidence will be thin** — it reconstructs from Yahoo, which blocks "
+            "datacenter IPs; run the script locally for full coverage."
+        )
+
+# --------------------------------------------------------------------------
 # Pooled, per-factor validation (review #8) — which factors actually predict,
 # across your whole universe. This is the honest basis for reweighting.
 # --------------------------------------------------------------------------
@@ -131,9 +220,11 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
     st.caption(
         "Pools the walk-forward across your holdings + watchlist and measures the information coefficient "
         "**per factor** — i.e. which factors' scores have tracked subsequent returns for *your* tickers. "
-        "This is the data-driven basis for reweighting the Screener, instead of guessing. It reuses the "
-        "look-back / horizon / news settings above. Slow (it reconstructs each ticker's history) and still "
-        "small-sample, so read it as directional, not a fitted model."
+        "It reuses the look-back / horizon / news settings above.\n\n"
+        "**This is not a reweighting basis, despite how it looks.** It measures the Screener on the stocks "
+        "you already picked (a biased sample), and ~10 names with overlapping return windows leave so few "
+        "independent observations that every factor's error bar swallows its score. Use the **S&P 500 "
+        "section above** for that question; treat this as a description of your own book."
     )
     pooled_key = validation.pooled_cache_key(
         known, lookback_days=LOOKBACKS[lookback_label], horizon_days=horizon_days,
@@ -160,7 +251,7 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                 include_news=include_news, on_progress=_on_progress,
             )
         progress.empty()
-        pooled_summary = validation.summarize_pooled(pooled_points)
+        pooled_summary = validation.summarize_pooled(pooled_points, horizon_days=horizon_days)
         # Persist OUTSIDE session_state: a long run can outlive the websocket, and
         # the reconnected browser gets a FRESH session with empty session_state —
         # which silently threw away the finished result. The stored copy survives.
@@ -199,23 +290,53 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                     "try a longer look-back or a shorter forward horizon.")
         else:
             pooled_ic = s["information_coefficient"]
-            p1, p2, p3 = st.columns(3)
+            ci95, n_eff = s.get("ci95"), s.get("n_eff")
+            p1, p2, p3, p4 = st.columns(4)
             p1.metric("Tickers pooled", s["n_tickers"])
-            p2.metric("Observations", s["n"])
-            p3.metric("Pooled overall IC", f"{pooled_ic:+.3f}" if pooled_ic is not None else "—")
+            p2.metric("Observations", s["n"],
+                      help="Raw count. See 'Independent observations' — overlapping return windows mean "
+                           "these are NOT that many separate bets.")
+            p3.metric("Independent observations", n_eff if n_eff else "—",
+                      help=f"Effective sample after de-duplicating overlapping {pooled['horizon_days']}-day "
+                           "return windows and correlated tickers. This is what the error bars are built on.")
+            p4.metric("Pooled overall IC",
+                      f"{pooled_ic:+.3f}" if pooled_ic is not None else "—",
+                      delta=f"± {ci95:.3f} (95%)" if ci95 is not None else None,
+                      delta_color="off")
 
-            factor_rows = [{"Factor": v["label"], "IC": v["ic"], "Observations": v["n"]}
-                           for v in s["factor_ic"].values()]
+            # The headline claim this page has to be honest about: with a handful of
+            # tickers and overlapping windows the interval swallows every factor, so
+            # a positive-looking IC is not evidence of signal.
+            if pooled_ic is not None and ci95 is not None and not s.get("significant"):
+                st.warning(
+                    f"**Not statistically significant.** With {n_eff} independent observations the 95% interval "
+                    f"is ±{ci95:.3f}, so a pooled IC of {pooled_ic:+.3f} can't be told apart from zero (no "
+                    "signal). Treat everything below as a hypothesis, **not** a basis for reweighting — that "
+                    "needs a broader, neutral universe of tickers, not your own holdings.",
+                    icon="📉",
+                )
+
+            factor_rows = [
+                {"Factor": v["label"], "IC": v["ic"],
+                 "95% interval": (f"±{v['ci95']:.3f}" if v.get("ci95") is not None else "—"),
+                 "Distinguishable from zero?": ("yes" if v.get("significant") else "no"),
+                 "Observations": v["n"], "Independent": v.get("n_eff")}
+                for v in s["factor_ic"].values()
+            ]
             factor_df = pd.DataFrame(factor_rows).sort_values("IC", ascending=False, na_position="last")
             st.dataframe(
                 factor_df.style.format({"IC": "{:+.3f}"}, na_rep="—"),
                 width="stretch", hide_index=True,
             )
+            rho = s.get("avg_ticker_correlation")
             st.caption(
-                f"Forward horizon {pooled['horizon_days']} days. Higher IC = that factor's score has tracked "
-                "returns better across your tickers; near-zero or negative = it hasn't earned its weight. "
-                "**Directional guidance for how to reweight — not an auto-fit.** It's a pooled (not per-date "
-                "cross-sectional) read on small samples, so don't over-trust any single number."
+                f"Forward horizon {pooled['horizon_days']} days. A higher IC means that factor's score tracked "
+                "returns better — **but only read a row whose interval excludes zero.** The interval is built on "
+                "*independent* observations: a forward return sampled more often than its own horizon re-measures "
+                "the same price move, so the raw count overstates the evidence"
+                + (f" (your tickers' returns correlate {rho:+.2f} with each other)." if rho is not None else ".")
+                + " **Not an auto-fit, and not yet a reweighting signal** — it's a pooled (not per-date "
+                "cross-sectional) read on the stocks you already picked, which is a biased sample."
             )
 
 

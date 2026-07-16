@@ -20,7 +20,9 @@ Honest limitations (surfaced, not hidden):
 from __future__ import annotations
 
 import hashlib
+import math
 from datetime import date, timedelta
+from statistics import NormalDist
 
 import pandas as pd
 
@@ -222,23 +224,104 @@ def _rank_ic(values: list[float], returns: list[float]) -> float | None:
     return round(float(corr), 3) if pd.notna(corr) else None
 
 
-def factor_information_coefficients(points: list[dict]) -> dict:
-    """Per-factor IC pooled across all points: {factor: {label, ic, n}}. Each is
-    the rank correlation between that factor's point-in-time score and the
-    subsequent return — higher means the factor has tracked returns better."""
+# --------------------------------------------------------------------------
+# How much to trust an IC. The raw observation count badly overstates the
+# evidence, and without this the table invites conclusions the data can't carry
+# ("momentum works, fundamentals don't") when every factor is inside the noise.
+# --------------------------------------------------------------------------
+
+def _avg_pairwise_forward_correlation(points: list[dict]) -> float:
+    """Average correlation of forward returns *across tickers* on shared dates.
+
+    Names that move together are one bet wearing many hats. ~0 means the tickers
+    are genuinely diversified and each one counts; ~1 means they're effectively a
+    single observation per date."""
+    df = pd.DataFrame(points)
+    if df.empty or "ticker" not in df.columns or df["ticker"].nunique() < 2:
+        return 0.0
+    wide = df.pivot_table(index="date", columns="ticker", values="forward_return_pct")
+    corr = wide.corr().values
+    n = corr.shape[0]
+    pairs = [corr[i][j] for i in range(n) for j in range(i + 1, n) if not pd.isna(corr[i][j])]
+    return float(sum(pairs) / len(pairs)) if pairs else 0.0
+
+
+def effective_sample_size(points: list[dict], *, horizon_days: int = DEFAULT_HORIZON_DAYS) -> int:
+    """How many *independent* observations these points really represent.
+
+    Two things inflate the raw count, and both are large here:
+
+    1. **Overlapping windows.** A `horizon_days` forward return sampled every
+       `step_days` shares most of its window with its neighbours — at a 91-day
+       horizon stepped 30 days, consecutive points re-measure the same price move
+       ~3 times. Only about `span / horizon_days` genuinely fresh windows exist per
+       ticker, however many dates we sampled.
+    2. **Cross-correlated tickers.** If every name moves together, ten tickers are
+       one bet. Measured, not assumed (see _avg_pairwise_forward_correlation).
+
+    Returns the deflated count, which is what the standard error must be built on."""
+    df = pd.DataFrame(points)
+    if df.empty:
+        return 0
+    if "ticker" not in df.columns:
+        df = df.assign(ticker="_")
+
+    independent = 0
+    for _, sub in df.groupby("ticker"):
+        span_days = (max(sub["date"]) - min(sub["date"])).days
+        windows = max(1, int(span_days // max(horizon_days, 1)))
+        independent += min(len(sub), windows)   # never claim more than we sampled
+
+    rho = _avg_pairwise_forward_correlation(points)
+    n_tickers = df["ticker"].nunique()
+    # Only positive correlation destroys information; negative/zero means the
+    # tickers are diversifying, so don't "reward" it with a bigger sample.
+    divisor = 1.0 + (n_tickers - 1) * max(rho, 0.0)
+    return max(1, int(round(independent / divisor)))
+
+
+def ic_standard_error(n_eff: int | None) -> float | None:
+    """Standard error of a rank IC on `n_eff` independent observations (~1/sqrt(n)).
+    None when the sample is too small for the estimate to mean anything."""
+    if not n_eff or n_eff < 3:
+        return None
+    return 1.0 / math.sqrt(n_eff - 1)
+
+
+def _ic_with_error_bars(values, returns, subset, horizon_days) -> dict:
+    """An IC plus what it's worth: effective N, standard error, 95% half-width,
+    and whether the interval actually excludes zero."""
+    ic = _rank_ic(values, returns)
+    n_eff = effective_sample_size(subset, horizon_days=horizon_days) if subset else 0
+    se = ic_standard_error(n_eff)
+    ci95 = round(1.96 * se, 3) if se is not None else None
+    # "Significant" only if the 95% interval doesn't straddle zero. On a small,
+    # overlapping sample this is False for basically everything — which is the point.
+    significant = bool(ic is not None and ci95 is not None and abs(ic) > ci95)
+    return {"ic": ic, "n": len(values), "n_eff": n_eff,
+            "se": round(se, 3) if se is not None else None,
+            "ci95": ci95, "significant": significant}
+
+
+def factor_information_coefficients(points: list[dict], *,
+                                    horizon_days: int = DEFAULT_HORIZON_DAYS) -> dict:
+    """Per-factor IC pooled across all points, **with error bars**:
+    {factor: {label, ic, n, n_eff, se, ci95, significant}}. Each IC is the rank
+    correlation between that factor's point-in-time score and the subsequent
+    return; `ci95`/`significant` say whether it's distinguishable from no signal
+    at all. Effective N is computed per factor, since coverage differs (valuation
+    reconstructs on fewer dates than momentum)."""
     from engine import screener
 
     out = {}
     for factor in screener.FACTOR_WEIGHTS:
-        values, returns = [], []
-        for point in points:
-            score = (point.get("factors") or {}).get(factor)
-            fwd = point.get("forward_return_pct")
-            if score is not None and fwd is not None:
-                values.append(score)
-                returns.append(fwd)
-        out[factor] = {"label": screener.FACTOR_LABELS.get(factor, factor),
-                       "ic": _rank_ic(values, returns), "n": len(values)}
+        subset = [p for p in points
+                  if (p.get("factors") or {}).get(factor) is not None
+                  and p.get("forward_return_pct") is not None]
+        values = [p["factors"][factor] for p in subset]
+        returns = [p["forward_return_pct"] for p in subset]
+        stats = _ic_with_error_bars(values, returns, subset, horizon_days)
+        out[factor] = {"label": screener.FACTOR_LABELS.get(factor, factor), **stats}
     return out
 
 
@@ -263,13 +346,190 @@ def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_day
     return points
 
 
-def summarize_pooled(points: list[dict]) -> dict:
+def summarize_pooled(points: list[dict], *, horizon_days: int = DEFAULT_HORIZON_DAYS) -> dict:
     """The overall summary (IC/bands/trend) over the POOLED points, plus the
-    per-factor ICs and ticker count — the data-driven basis for reweighting."""
+    per-factor ICs and ticker count.
+
+    Every IC carries its error bars (effective N / 95% interval / significance).
+    Read them before acting: on a handful of tickers with overlapping return
+    windows, the intervals are wide enough to swallow every factor, so this is
+    NOT yet a basis for reweighting — that needs a broader universe."""
     summary = summarize(points)
     summary["n_tickers"] = len({p.get("ticker") for p in points if p.get("ticker")})
-    summary["factor_ic"] = factor_information_coefficients(points)
+    summary["factor_ic"] = factor_information_coefficients(points, horizon_days=horizon_days)
+    summary["horizon_days"] = horizon_days
+
+    # Same honesty for the headline number.
+    scored = [p for p in points if p.get("forward_return_pct") is not None]
+    summary["n_eff"] = effective_sample_size(scored, horizon_days=horizon_days) if scored else 0
+    se = ic_standard_error(summary["n_eff"])
+    summary["se"] = round(se, 3) if se is not None else None
+    summary["ci95"] = round(1.96 * se, 3) if se is not None else None
+    ic = summary.get("information_coefficient")
+    summary["significant"] = bool(
+        ic is not None and summary["ci95"] is not None and abs(ic) > summary["ci95"]
+    )
+    summary["avg_ticker_correlation"] = round(_avg_pairwise_forward_correlation(scored), 2) if scored else None
     return summary
+
+
+# --------------------------------------------------------------------------
+# Cross-sectional IC — the *proper* test of a ranking model, and the thing that
+# could actually justify reweighting.
+#
+# The pooled IC above answers a muddled question. It mixes "is stock A better
+# than stock B" (cross-sectional — the only thing the Screener actually claims)
+# with "is now a good time to hold stocks" (time-series — which it doesn't claim
+# and can't know). On a basket that moves together the time-series swings swamp
+# the ranking signal, so a pooled IC can look terrible while the ranking is fine,
+# or vice versa.
+#
+# The fix is what quant shops do: on EACH date, rank every name by score and
+# correlate with that date's forward returns ACROSS names. That isolates the
+# ranking. Then average those per-date ICs and ask whether the average is
+# reliably non-zero.
+# --------------------------------------------------------------------------
+
+CROSS_SECTIONAL_MIN_NAMES = 20   # names needed on a date before ranking them means anything
+
+
+def _score_for(point: dict, factor: str | None):
+    """The overall score, or one factor's score, for a point."""
+    if factor is None:
+        return point.get("score")
+    return (point.get("factors") or {}).get(factor)
+
+
+def per_date_ics(points: list[dict], *, factor: str | None = None,
+                 min_names: int = CROSS_SECTIONAL_MIN_NAMES) -> list[float]:
+    """The cross-sectional rank IC on each date that has enough names. Dates with
+    fewer than `min_names` are skipped rather than contributing a rank
+    correlation over a handful of stocks, which is pure noise."""
+    by_date: dict = {}
+    for point in points:
+        score, fwd, day = _score_for(point, factor), point.get("forward_return_pct"), point.get("date")
+        if score is not None and fwd is not None and day is not None:
+            by_date.setdefault(day, []).append((score, fwd))
+
+    ics: list[float] = []
+    for _, rows in sorted(by_date.items(), key=lambda kv: str(kv[0])):
+        if len(rows) < min_names:
+            continue
+        scores = pd.Series([r[0] for r in rows])
+        returns = pd.Series([r[1] for r in rows])
+        corr = scores.rank().corr(returns.rank())
+        if pd.notna(corr):
+            ics.append(float(corr))
+    return ics
+
+
+def cross_sectional_ic(points: list[dict], *, factor: str | None = None,
+                       horizon_days: int = DEFAULT_HORIZON_DAYS,
+                       step_days: int = DEFAULT_STEP_DAYS,
+                       min_names: int = CROSS_SECTIONAL_MIN_NAMES) -> dict:
+    """Average of the per-date cross-sectional ICs, with an honest t-stat.
+
+    `mean_ic` is the headline: the typical rank correlation between score and
+    subsequent return *among names on the same date*. `ic_ir` (mean/std) is its
+    consistency — a small mean IC that shows up every single date beats a big one
+    that flips sign.
+
+    The t-stat deflates `n_dates` for window overlap: sampling a `horizon_days`
+    return every `step_days` makes consecutive dates re-measure the same move, so
+    they are NOT independent trials. Without that deflation the t-stat is inflated
+    by ~sqrt(horizon/step) and everything looks significant."""
+    ics = per_date_ics(points, factor=factor, min_names=min_names)
+    n_dates = len(ics)
+    out = {"mean_ic": None, "ic_ir": None, "t_stat": None, "n_dates": n_dates,
+           "n_dates_eff": 0, "hit_rate": None, "significant": False}
+    if n_dates < 2:
+        return out
+
+    series = pd.Series(ics)
+    mean_ic, sd = float(series.mean()), float(series.std(ddof=1))
+    # Overlapping windows -> fewer independent dates than we sampled.
+    eff = max(1.0, n_dates * min(step_days / max(horizon_days, 1), 1.0))
+
+    if sd > 0:
+        t_stat = mean_ic / (sd / math.sqrt(eff))
+        significant = abs(t_stat) > 1.96
+    else:
+        # Every date produced the identical IC. A t-stat needs variance to divide
+        # by, so it stays undefined (None, never inf — this dict gets JSON-cached).
+        # But zero spread around a non-zero mean is a perfectly *consistent*
+        # signal; calling that "not significant" would understate a real result.
+        t_stat = None
+        significant = mean_ic != 0
+
+    out.update({
+        "mean_ic": round(mean_ic, 3),
+        "ic_ir": round(mean_ic / sd, 3) if sd > 0 else None,
+        "t_stat": round(t_stat, 2) if t_stat is not None else None,
+        "n_dates_eff": int(round(eff)),
+        "hit_rate": round(float((series > 0).mean()), 2),   # share of dates the IC was positive
+        "significant": bool(significant),
+    })
+    return out
+
+
+FAMILY_ALPHA = 0.05    # family-wise error rate across the whole factor table
+
+
+def bonferroni_t_threshold(n_tests: int, alpha: float = FAMILY_ALPHA) -> float:
+    """The |t| a factor must clear when `n_tests` factors are tested at once.
+
+    Testing every factor against the same data and reporting whichever crosses
+    1.96 is p-hacking by accident: with 6 factors at alpha=0.05 each, the chance of
+    at least one FALSE positive is 1 - 0.95**6 ~= 26%. Observed in the wild — the
+    first 5-year run flagged Profitability at t=-1.98, exactly the marginal hit
+    noise produces. Bonferroni splits the budget: each test gets alpha/n, so 6
+    factors need |t| > ~2.64.
+
+    Conservative (it assumes the tests are independent, and correlated factors make
+    it stricter than necessary), which is the right way to be wrong here."""
+    n = max(1, n_tests)
+    return NormalDist().inv_cdf(1 - alpha / (2 * n))
+
+
+def summarize_universe(points: list[dict], *, horizon_days: int = DEFAULT_HORIZON_DAYS,
+                       step_days: int = DEFAULT_STEP_DAYS,
+                       min_names: int = CROSS_SECTIONAL_MIN_NAMES) -> dict:
+    """Cross-sectional validation across a broad universe: the overall score's
+    per-date IC plus each factor's, with t-stats.
+
+    Factor significance is **corrected for multiple comparisons** — we test the
+    whole table at once, so a single factor clearing the naive 1.96 is what chance
+    looks like, not a discovery. `significant` uses the corrected threshold;
+    `significant_uncorrected` is kept so the difference is visible rather than
+    hidden. The overall score is a single pre-specified test, so it keeps 1.96."""
+    from engine import screener
+
+    overall = cross_sectional_ic(points, horizon_days=horizon_days, step_days=step_days,
+                                 min_names=min_names)
+    factors = {}
+    for factor in screener.FACTOR_WEIGHTS:
+        stats = cross_sectional_ic(points, factor=factor, horizon_days=horizon_days,
+                                   step_days=step_days, min_names=min_names)
+        factors[factor] = {"label": screener.FACTOR_LABELS.get(factor, factor), **stats}
+
+    # Only factors that actually produced a t-stat count against the budget.
+    tested = [f for f in factors.values() if f["t_stat"] is not None]
+    threshold = bonferroni_t_threshold(len(tested))
+    for f in factors.values():
+        f["significant_uncorrected"] = f["significant"]
+        f["significant"] = bool(f["t_stat"] is not None and abs(f["t_stat"]) > threshold)
+
+    return {
+        "overall": overall,
+        "factor_ic": factors,
+        "n_points": len(points),
+        "n_tickers": len({p.get("ticker") for p in points if p.get("ticker")}),
+        "horizon_days": horizon_days,
+        "step_days": step_days,
+        "n_tests": len(tested),
+        "t_threshold": round(threshold, 2),
+        "generated_at": date.today().isoformat(),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -298,3 +558,22 @@ def save_pooled_result(key: str, summary: dict) -> None:
 
 def load_pooled_result(key: str) -> dict | None:
     return cache.get_value(key, ttl_seconds=POOLED_RESULT_TTL_SECONDS) or None
+
+
+# --------------------------------------------------------------------------
+# The universe run. One canonical result (not keyed by settings like the pooled
+# one): it's produced by a batch job on a schedule, and the page just shows the
+# latest. The summary carries its own horizon/step/generated_at so the page can
+# say what it actually measured.
+# --------------------------------------------------------------------------
+
+UNIVERSE_RESULT_KEY = "universe_validation:sp500"
+UNIVERSE_RESULT_TTL_SECONDS = 90 * 24 * 60 * 60    # a quarterly-ish run stays readable
+
+
+def save_universe_result(summary: dict) -> None:
+    cache.set_value(UNIVERSE_RESULT_KEY, summary)
+
+
+def load_universe_result() -> dict | None:
+    return cache.get_value(UNIVERSE_RESULT_KEY, ttl_seconds=UNIVERSE_RESULT_TTL_SECONDS) or None

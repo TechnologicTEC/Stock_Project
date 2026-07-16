@@ -1,0 +1,17 @@
+# Deps for the scheduled universe validation (scripts/validate_universe.py) in CI.
+# Not the full requirements.txt — no Streamlit UI stack — and no torch/transformers
+# (this job never scores news with FinBERT). What it does need is the Screener's
+# point-in-time reconstruction stack: SEC fundamentals, price history, and the
+# technicals the momentum factor computes.
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pandas>=2.2
+numpy>=2.0
+pandas-ta-classic>=0.6   # screener technicals (engine/screener.py)
+python-dotenv>=1.0
+requests>=2.31
+beautifulsoup4>=4.12     # SEC / news parsing
+lxml>=5.0                # the parser BeautifulSoup(..., "xml") requires
+finnhub-python>=2.4      # company profile -> sector bucket
+yfinance>=0.2            # price_history imports the client at module load; analyst rating events
+alpaca-py>=0.30          # the pinned price source (PRICE_HISTORY_SOURCE=alpaca)
