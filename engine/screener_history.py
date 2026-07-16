@@ -145,7 +145,8 @@ def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | 
     return metrics
 
 
-def historical_screener_score(ticker: str, as_of: date, include_news: bool = True) -> dict | None:
+def historical_screener_score(ticker: str, as_of: date, include_news: bool = True,
+                              include_analyst: bool = True) -> dict | None:
     """The Screener's overall score for `ticker` **as it would have scored on
     `as_of`**, using only then-knowable data and the live scoring curves.
     Returns None if EDGAR has nothing for the ticker; the score itself can still
@@ -169,7 +170,15 @@ def historical_screener_score(ticker: str, as_of: date, include_news: bool = Tru
     # Reconstructed analyst consensus (step 4) supplies the recommendation
     # component; price targets and insider data have no free point-in-time
     # history, so they stay None and the analyst scorer uses what it has.
-    recommendation = analyst_history.recommendation_as_of(ticker, as_of)
+    #
+    # `include_analyst=False` skips it entirely. That's not an optimisation — it's
+    # the difference between a batch job finishing and timing out. The rating-event
+    # source is Yahoo via yfinance, which BLOCKS datacenter IPs, and yfinance
+    # doesn't fail fast when blocked: it hangs and retries. On a GitHub runner that
+    # turned ~18s/ticker into ~56s/ticker (an 8-hour ETA on 503 names) to fetch
+    # data that comes back empty there anyway. Callers that can't reach Yahoo
+    # should pass False and lose only a factor they were never going to get.
+    recommendation = analyst_history.recommendation_as_of(ticker, as_of) if include_analyst else None
 
     raw = screener.TickerRawData(
         ticker=ticker, fundamentals=metrics, price_df=price_df,

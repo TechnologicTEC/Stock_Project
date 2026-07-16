@@ -9,10 +9,15 @@ name: Validate screener across the S&P 500
 # here and writes the summary to the shared Supabase cache; the Validation page
 # just reads the stored result.
 #
-# NOTE — the analyst factor will come back thin from here. It reconstructs from
-# Yahoo's rating-change stream via yfinance, which blocks datacenter IPs. Run
-# scripts/validate_universe.py from a normal machine if you need that factor
-# covered; every other factor is unaffected. See the script's docstring.
+# NOTE — the analyst factor is OFF here (VALIDATION_INCLUDE_ANALYST=0). It
+# reconstructs from Yahoo's rating-change stream via yfinance, which blocks
+# datacenter IPs and *hangs* rather than failing fast — that alone took the
+# 503-name run from ~18s to ~56s per ticker and timed it out at 3h having done 175.
+# It returns nothing from CI regardless. Run scripts/validate_universe.py from a
+# normal machine with VALIDATION_INCLUDE_ANALYST=1 to cover that factor.
+#
+# The run is RESUMABLE: each ticker's reconstruction is cached in the shared DB for
+# a week, so if this is killed, just run it again — finished tickers are skipped.
 
 on:
   schedule:
@@ -35,9 +40,10 @@ concurrency: validate-universe   # never overlap runs
 jobs:
   validate:
     runs-on: ubuntu-latest
-    # Thousands of reconstructions on a cold cache. Generous, but bounded so a
-    # wedged run can't burn the whole Actions budget.
-    timeout-minutes: 180
+    # Thousands of reconstructions on a cold cache. 350 keeps us under GitHub's
+    # 360-minute job ceiling while leaving room for a full 503-name cold run; a
+    # kill is survivable anyway now that per-ticker results are cached.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -53,6 +59,7 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC requires an identifying UA
+          VALIDATION_INCLUDE_ANALYST: "0"   # Yahoo blocks this runner and hangs; see the header
           # Empty string when the input is absent (workflow_dispatch vs schedule) —
           # the script's _int_env uses `or default`, never get(name, default).
           UNIVERSE_EVERY: ${{ inputs.universe_every }}

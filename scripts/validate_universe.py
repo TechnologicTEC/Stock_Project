@@ -61,6 +61,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no")
+
+
 def main() -> None:
     configure()  # DATABASE_URL from env
 
@@ -75,13 +82,23 @@ def main() -> None:
     lookback = _int_env("VALIDATION_LOOKBACK_DAYS", 1825)
     horizon = _int_env("VALIDATION_HORIZON_DAYS", validation.DEFAULT_HORIZON_DAYS)
     step = _int_env("VALIDATION_STEP_DAYS", validation.DEFAULT_STEP_DAYS)
+    # Default OFF: the rating-event source (Yahoo, via yfinance) blocks datacenter
+    # IPs and hangs rather than failing fast, which is what timed the 503-name CI
+    # run out at 3h having done 175 names. It returns nothing from CI anyway. Set
+    # VALIDATION_INCLUDE_ANALYST=1 when running from a machine that can reach Yahoo.
+    include_analyst = _bool_env("VALIDATION_INCLUDE_ANALYST", False)
 
     tickers = universe.sample(size, every=every)
-    today = date.today()
-    start = today - timedelta(days=lookback)
+    # Pinned to the ISO week, NOT to today: that's what lets a killed run resume
+    # from the per-ticker cache on a later day instead of redoing everything
+    # against a window that shifted underneath it.
+    start, end = validation.pinned_window(date.today(), lookback_days=lookback, horizon_days=horizon)
     print(f"universe: {len(tickers)} of {len(universe.sp500())} S&P 500 names "
           f"(every={every}, size={size or 'all'})", flush=True)
-    print(f"window: {start} -> {today} | horizon {horizon}d | step {step}d", flush=True)
+    print(f"window: {start} -> {end} (pinned to this ISO week) | horizon {horizon}d | step {step}d",
+          flush=True)
+    print(f"analyst factor: {'ON' if include_analyst else 'OFF (yfinance is blocked from datacenter IPs)'}",
+          flush=True)
 
     started = time.time()
 
@@ -92,9 +109,11 @@ def main() -> None:
             print(f"  {done}/{total} ({ticker})  ~{eta/60:.0f} min left", flush=True)
 
     points = validation.pooled_walk_forward(
-        tickers, start, today, step_days=step, horizon_days=horizon,
+        tickers, start, end, step_days=step, horizon_days=horizon,
         include_news=False,     # GDELT needs BigQuery creds; not on a runner
+        include_analyst=include_analyst,
         on_progress=on_progress,
+        use_cache=True,         # resumable: a timeout loses nothing, re-runs skip done tickers
     )
     if not points:
         print("\nNo points reconstructed — nothing to save. Check EDGAR_USER_AGENT / "
@@ -105,6 +124,9 @@ def main() -> None:
     summary["universe"] = "sp500"
     summary["n_requested"] = len(tickers)
     summary["lookback_days"] = lookback
+    summary["include_analyst"] = include_analyst
+    summary["window_start"] = start.isoformat()
+    summary["window_end"] = end.isoformat()
     validation.save_universe_result(summary)
 
     overall = summary["overall"]

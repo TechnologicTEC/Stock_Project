@@ -67,7 +67,7 @@ def forward_return_pct(ticker: str, as_of: date, horizon_days: int) -> float | N
 
 def walk_forward(ticker: str, start: date, end: date,
                  step_days: int = DEFAULT_STEP_DAYS, horizon_days: int = DEFAULT_HORIZON_DAYS,
-                 include_news: bool = True) -> list[dict]:
+                 include_news: bool = True, include_analyst: bool = True) -> list[dict]:
     """Score `ticker` every `step_days` across [start, end] and pair each score
     with its subsequent `horizon_days` return. Points with no score or no
     measurable forward return are skipped. `include_news` gates the GDELT
@@ -92,7 +92,8 @@ def walk_forward(ticker: str, start: date, end: date,
     points: list[dict] = []
     current = start
     while current <= last_scorable:
-        scored = screener_history.historical_screener_score(ticker, current, include_news=include_news)
+        scored = screener_history.historical_screener_score(
+            ticker, current, include_news=include_news, include_analyst=include_analyst)
         if scored and scored["overall_score"] is not None:
             fwd = forward_return_pct(ticker, current, horizon_days)
             if fwd is not None:
@@ -325,17 +326,80 @@ def factor_information_coefficients(points: list[dict], *,
     return out
 
 
+# A reconstructed ticker is expensive (SEC + prices + a scoring pass per date) but
+# perfectly deterministic for a fixed window — so it's worth caching whole. This is
+# what makes a 500-name batch job *resumable*: the first run's 3 hours aren't lost
+# when it times out, and the next run skips straight past everything already done.
+TICKER_POINTS_TTL_SECONDS = 7 * 24 * 60 * 60
+
+
+def pinned_window(today: date, *, lookback_days: int,
+                  horizon_days: int = DEFAULT_HORIZON_DAYS) -> tuple[date, date]:
+    """A reproducible walk-forward window, anchored to the ISO week rather than to
+    `today`. Returns (start, end).
+
+    Why not just use today: the per-ticker cache is keyed on (ticker, start, end,
+    ...), so a window that slides every day makes every re-run miss the cache and
+    redo work it already did — which defeats the whole point of a resumable batch
+    job, and would silently pool tickers measured over *different* windows.
+
+    `end` is pulled back by `horizon_days` so it is already the last scorable date.
+    walk_forward otherwise clamps to `today - horizon` internally, which drifts
+    daily — the same cache key would then mean different things depending on when
+    it was filled. Anchoring both ends makes a week's runs interchangeable."""
+    monday = today - timedelta(days=today.weekday())
+    end = monday - timedelta(days=horizon_days)
+    return end - timedelta(days=lookback_days), end
+
+
+def ticker_points_cache_key(ticker: str, start: date, end: date, *, step_days: int,
+                            horizon_days: int, include_news: bool, include_analyst: bool) -> str:
+    return (f"wf_points:{ticker.strip().upper()}:{start.isoformat()}:{end.isoformat()}:"
+            f"{step_days}:{horizon_days}:{int(bool(include_news))}:{int(bool(include_analyst))}")
+
+
+def _cached_walk_forward(ticker: str, start: date, end: date, *, step_days: int,
+                         horizon_days: int, include_news: bool, include_analyst: bool) -> list[dict]:
+    """walk_forward, memoized in the shared cache. Dates round-trip as ISO strings
+    through JSON, so they're parsed back to `date` — everything downstream (the
+    effective-sample maths especially) expects real date objects."""
+    key = ticker_points_cache_key(ticker, start, end, step_days=step_days, horizon_days=horizon_days,
+                                  include_news=include_news, include_analyst=include_analyst)
+    cached = cache.get_value(key, ttl_seconds=TICKER_POINTS_TTL_SECONDS)
+    if cached is not None:
+        for point in cached:
+            if isinstance(point.get("date"), str):
+                point["date"] = date.fromisoformat(point["date"])
+        return cached
+
+    points = walk_forward(ticker, start, end, step_days=step_days, horizon_days=horizon_days,
+                          include_news=include_news, include_analyst=include_analyst)
+    cache.set_value(key, [{**p, "date": p["date"].isoformat()} for p in points])
+    return points
+
+
 def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_days: int = 30,
-                        include_news: bool = False, on_progress=None) -> list[dict]:
+                        include_news: bool = False, include_analyst: bool = True,
+                        on_progress=None, use_cache: bool = False) -> list[dict]:
     """walk_forward across many tickers, each point tagged with its ticker so the
     results can be pooled. Slow — one point-in-time reconstruction per ticker. A
-    ticker that can't be reconstructed contributes nothing rather than erroring."""
+    ticker that can't be reconstructed contributes nothing rather than erroring.
+
+    `use_cache` memoizes each ticker's points (see _cached_walk_forward) so a long
+    batch run survives being killed and resumes cheaply. Off by default: the page's
+    interactive run should reflect fresh data."""
     points: list[dict] = []
     total = len(tickers)
+    run = _cached_walk_forward if use_cache else None
     for i, ticker in enumerate(tickers, start=1):
         try:
-            pts = walk_forward(ticker, start, end, step_days=step_days,
-                               horizon_days=horizon_days, include_news=include_news)
+            if run is not None:
+                pts = run(ticker, start, end, step_days=step_days, horizon_days=horizon_days,
+                          include_news=include_news, include_analyst=include_analyst)
+            else:
+                pts = walk_forward(ticker, start, end, step_days=step_days,
+                                   horizon_days=horizon_days, include_news=include_news,
+                                   include_analyst=include_analyst)
         except Exception:
             pts = []
         for point in pts:

@@ -234,6 +234,98 @@ def test_a_consistently_zero_ic_is_not_significant():
     assert xs["significant"] is False
 
 
+# --------------------------------------------------------------------------
+# Batch-job survivability. A 503-ticker run timed out at 3h having done 175 and
+# lost all of it; the analyst fetch (Yahoo, blocked from datacenter IPs) hung
+# rather than failing fast and was most of the cost.
+# --------------------------------------------------------------------------
+
+def test_walk_forward_can_skip_the_analyst_fetch_entirely():
+    # include_analyst=False must not even CALL the (hanging) Yahoo path.
+    scored = {"overall_score": 60.0, "recommendation": "Buy", "factor_scores": {"momentum": 70.0}}
+    with patch("engine.screener_history.analyst_history.recommendation_as_of") as rec, \
+         patch("engine.screener_history.historical_screener_score", return_value=scored), \
+         patch("engine.screener_validation.forward_return_pct", return_value=3.0), \
+         patch("engine.screener_validation.price_history.ensure_cached"):
+        sv.walk_forward("AAPL", date(2022, 1, 1), date(2022, 3, 1),
+                        step_days=30, horizon_days=30, include_news=False, include_analyst=False)
+    assert not rec.called
+
+
+def test_pooled_walk_forward_caches_each_ticker_so_a_killed_run_resumes():
+    calls = {"n": 0}
+
+    def fake_wf(ticker, *a, **k):
+        calls["n"] += 1
+        return [{"score": 60.0, "forward_return_pct": 2.0, "factors": {"momentum": 70.0},
+                 "date": date(2022, 1, 1), "recommendation": "Buy"}]
+
+    with patch("engine.screener_validation.walk_forward", side_effect=fake_wf):
+        first = sv.pooled_walk_forward(["AAPL", "MSFT"], date(2022, 1, 1), date(2022, 6, 1),
+                                       step_days=30, horizon_days=30, use_cache=True)
+        # Simulates the next run after a timeout: same window, already-done tickers.
+        second = sv.pooled_walk_forward(["AAPL", "MSFT"], date(2022, 1, 1), date(2022, 6, 1),
+                                        step_days=30, horizon_days=30, use_cache=True)
+
+    assert calls["n"] == 2                      # 2 tickers reconstructed ONCE, not 4 times
+    assert len(first) == len(second) == 2
+    assert {p["ticker"] for p in second} == {"AAPL", "MSFT"}
+    # Dates must survive the JSON round-trip as real dates — the effective-sample
+    # maths does arithmetic on them.
+    assert all(isinstance(p["date"], date) for p in second)
+
+
+def test_pinned_window_is_identical_every_day_of_the_same_week():
+    # THE property that makes a killed run resumable: re-running on a later day
+    # must produce the same window, or the per-ticker cache keys all miss and the
+    # job redoes everything it already did.
+    monday, friday = date(2026, 7, 13), date(2026, 7, 17)
+    assert monday.weekday() == 0 and friday.weekday() == 4
+    w = sv.pinned_window(monday, lookback_days=1825, horizon_days=91)
+    for day_offset in range(7):                       # Mon..Sun
+        assert sv.pinned_window(monday + timedelta(days=day_offset),
+                                lookback_days=1825, horizon_days=91) == w
+    assert sv.pinned_window(friday, lookback_days=1825, horizon_days=91) == w
+
+
+def test_pinned_window_moves_on_to_the_next_week():
+    a = sv.pinned_window(date(2026, 7, 17), lookback_days=1825, horizon_days=91)
+    b = sv.pinned_window(date(2026, 7, 20), lookback_days=1825, horizon_days=91)  # next Monday
+    assert b[1] == a[1] + timedelta(days=7)           # a fresh window, a week on
+
+
+def test_pinned_window_end_is_already_the_last_scorable_date():
+    # end must sit a full horizon in the past, so walk_forward's internal
+    # `min(end, today - horizon)` clamp is a no-op and can't drift day to day.
+    start, end = sv.pinned_window(date(2026, 7, 17), lookback_days=730, horizon_days=91)
+    monday = date(2026, 7, 13)
+    assert end == monday - timedelta(days=91)
+    assert (end - start).days == 730
+
+
+def test_pooled_walk_forward_cache_key_separates_different_windows_and_flags():
+    base = dict(step_days=30, horizon_days=91, include_news=False, include_analyst=True)
+    k = sv.ticker_points_cache_key("AAPL", date(2022, 1, 1), date(2024, 1, 1), **base)
+    assert k != sv.ticker_points_cache_key("AAPL", date(2021, 1, 1), date(2024, 1, 1), **base)
+    assert k != sv.ticker_points_cache_key("MSFT", date(2022, 1, 1), date(2024, 1, 1), **base)
+    assert k != sv.ticker_points_cache_key("AAPL", date(2022, 1, 1), date(2024, 1, 1),
+                                           **{**base, "include_analyst": False})
+
+
+def test_pooled_walk_forward_does_not_cache_by_default():
+    # The page's interactive run should reflect fresh data, not a week-old snapshot.
+    calls = {"n": 0}
+
+    def fake_wf(ticker, *a, **k):
+        calls["n"] += 1
+        return []
+
+    with patch("engine.screener_validation.walk_forward", side_effect=fake_wf):
+        sv.pooled_walk_forward(["AAPL"], date(2022, 1, 1), date(2022, 6, 1))
+        sv.pooled_walk_forward(["AAPL"], date(2022, 1, 1), date(2022, 6, 1))
+    assert calls["n"] == 2
+
+
 def test_bonferroni_threshold_rises_with_the_number_of_factors_tested():
     # One pre-specified test keeps the familiar 1.96...
     assert round(sv.bonferroni_t_threshold(1), 2) == 1.96
@@ -361,7 +453,7 @@ def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():
 # --------------------------------------------------------------------------
 
 def test_walk_forward_collects_score_and_forward_return_points():
-    def fake_score(ticker, as_of, include_news=True):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True):
         return {"overall_score": 72.0, "recommendation": "Buy"}
 
     def fake_forward(ticker, as_of, horizon_days):
@@ -380,7 +472,7 @@ def test_walk_forward_collects_score_and_forward_return_points():
 def test_walk_forward_skips_dates_without_a_score_or_a_forward_return():
     calls = {"n": 0}
 
-    def fake_score(ticker, as_of, include_news=True):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True):
         calls["n"] += 1
         return {"overall_score": None, "recommendation": "Insufficient data"}  # never scorable
 
