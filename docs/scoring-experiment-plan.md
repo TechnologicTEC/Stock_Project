@@ -239,6 +239,36 @@ structural weakness". They are not: absolute-with-sector-overrides beats both
 alternatives, and the reason is that it is the only one of the three that keeps
 both kinds of context.
 
+### H3 diagnostic — what is the +0.046 actually made of? (2026-07-17)
+
+Same points, same dates; only the **target** changes, so this measures the
+Screener rather than modifying it.
+
+```
+IC vs RAW returns            : +0.0460   (stock + sector effects)
+IC vs SECTOR-NEUTRAL returns : +0.0302   (pure stock picking)   paired diff -0.0158, t = -1.52
+SECTOR-LEVEL IC              : +0.1362   (avg sector score -> sector return)  t = +1.75, hit 0.67
+```
+
+**Roughly two thirds of the edge is stock selection.** Strip out each date's
+sector move and +0.046 becomes +0.030 — reduced, but it survives. The Screener is
+*not* merely a sector-picker in disguise, which was the live hypothesis after H2.
+
+**The remaining third looks like sector tilt** — and per unit the sector signal is
+the strongest thing we've measured (+0.136, ~3x the stock-level IC, positive on
+67% of dates). Two reasons not to get excited:
+
+- **It isn't significant** (t=+1.75 < 1.96), and neither is the raw-vs-neutral gap
+  (t=-1.52). The split is *suggestive*, not established.
+- **It's low breadth.** +0.136 across ~11 sectors is a rank correlation over 11
+  points — inherently noisy. Weighting by breadth (IC x sqrt(n)) the two are
+  comparable: stock 0.030*sqrt(499) ~= 0.67 vs sector 0.136*sqrt(11) ~= 0.45. The
+  sector number looks bigger only because it's averaged over far fewer bets.
+
+This also explains H2 cleanly: sector-relative scoring halved the IC because it
+deletes the sector tilt entirely — about a third of the edge — and buys nothing
+back.
+
 ### Verdict: STOP. Holdout never touched.
 
 Both pre-registered candidates failed on the *development* window — the friendly
