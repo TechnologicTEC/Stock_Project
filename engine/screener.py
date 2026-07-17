@@ -357,9 +357,24 @@ class ScreenerResult:
 # Stays ABSOLUTE by default until a pre-registered holdout earns the change.
 # --------------------------------------------------------------------------
 
+# SECTOR_RELATIVE (experiment, H2): percentile among peers IN THE SAME SECTOR.
+#
+# This exists because H1 (CROSS_SECTIONAL) measurably LOST on the development
+# window (+0.0417 vs +0.0460, paired t=-0.64, with power to see +0.0133). The
+# reason wasn't that peer ranking is a bad idea — it's that ABSOLUTE is *already
+# sector-aware* (see SECTOR_CURVE_OVERRIDES: distinct pe/pb/ps/gross_margin curves
+# per bucket). Ranking across the whole index throws that away and compares a
+# utility's P/E to a semiconductor's, so H1 traded sector context for peer context
+# instead of adding it. This mode keeps both. Both variants are kept so the
+# ablation — which half does the work — stays answerable.
 ABSOLUTE = "absolute"
 CROSS_SECTIONAL = "cross_sectional"
-SCORING_MODES = (ABSOLUTE, CROSS_SECTIONAL)
+SECTOR_RELATIVE = "sector_relative"
+SCORING_MODES = (ABSOLUTE, CROSS_SECTIONAL, SECTOR_RELATIVE)
+
+# Below this many scoreable names, a sector is ranked against the whole universe
+# instead: splitting 3 stocks into 0/50/100 manufactures conviction from nothing.
+SECTOR_MIN_NAMES = 5
 
 _scoring_mode: contextvars.ContextVar[str] = contextvars.ContextVar(
     "screener_scoring_mode", default=ABSOLUTE
@@ -389,19 +404,61 @@ def using_scoring_mode(mode: str) -> Iterator[None]:
         _scoring_mode.reset(token)
 
 
+def _percentile_ranks_by_sector(values: dict[str, float | None],
+                                sectors: dict[str, str | None],
+                                *, higher_is_better: bool) -> dict[str, float | None]:
+    """Percentile rank of each ticker among peers **in its own sector**.
+
+    The comparison the metric actually wants: a P/E of 20 is cheap for a
+    semiconductor and dear for a utility, so ranking them against each other (what
+    _percentile_ranks does across the whole batch) answers a question nobody asked.
+
+    Sectors with fewer than SECTOR_MIN_NAMES scoreable names fall back to the
+    universe-wide rank. Ranking 3 stocks within a sector hands out 0/50/100 on no
+    evidence — that's noise wearing a score's clothing, and it would be worse than
+    the coarse comparison it replaced. Both paths return a 0-100 percentile, so the
+    scales still line up.
+    """
+    by_sector: dict[str, dict[str, float | None]] = {}
+    for ticker, value in values.items():
+        bucket = sectors.get(ticker) or DEFAULT_SECTOR_BUCKET
+        by_sector.setdefault(bucket, {})[ticker] = value
+
+    out: dict[str, float | None] = {}
+    thin: list[str] = []
+    for group in by_sector.values():
+        if len([v for v in group.values() if v is not None]) >= SECTOR_MIN_NAMES:
+            out.update(_percentile_ranks(group, higher_is_better=higher_is_better))
+        else:
+            thin.extend(group)
+    if thin:
+        universe_wide = _percentile_ranks(values, higher_is_better=higher_is_better)
+        for ticker in thin:
+            out[ticker] = universe_wide[ticker]
+    return out
+
+
 def _metric_scores(curve_scores: dict[str, float | None],
-                   peer_ranks: dict[str, float | None]) -> dict[str, float | None]:
+                   peer_ranks: dict[str, float | None],
+                   *, values: dict[str, float | None] | None = None,
+                   sectors: dict[str, str | None] | None = None,
+                   higher_is_better: bool = True) -> dict[str, float | None]:
     """The 0-100 sub-score for one raw metric under the active scoring mode.
 
-    Both inputs already exist at every call site — the curve score, and the peer
-    percentile that until now only decorated the explanation text. Choosing between
-    them is the entire experiment.
+    ABSOLUTE takes the fixed curve; CROSS_SECTIONAL the whole-batch percentile
+    (already computed for the explanation text); SECTOR_RELATIVE the within-sector
+    percentile. Choosing between these is the entire experiment.
 
     Deliberately no winsorising: a percentile is a RANK, so an absurd P/E of 900
     simply lands last in the ordering and can't drag the result around the way it
     would inside a mean. Clipping outliers here would be dead code.
     """
-    return peer_ranks if scoring_mode() == CROSS_SECTIONAL else curve_scores
+    mode = scoring_mode()
+    if mode == CROSS_SECTIONAL:
+        return peer_ranks
+    if mode == SECTOR_RELATIVE and values is not None and sectors is not None:
+        return _percentile_ranks_by_sector(values, sectors, higher_is_better=higher_is_better)
+    return curve_scores
 
 
 def _percentile_ranks(values: dict[str, float | None], higher_is_better: bool) -> dict[str, float | None]:
@@ -585,9 +642,10 @@ def _score_valuation(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, Facto
     pb_peer = _percentile_ranks(pb, higher_is_better=False)
     ps_peer = _percentile_ranks(ps, higher_is_better=False)
 
-    pe_scores = _metric_scores(pe_curve, pe_peer)
-    pb_scores = _metric_scores(pb_curve, pb_peer)
-    ps_scores = _metric_scores(ps_curve, ps_peer)
+    sectors = {t: d.sector_bucket for t, d in raw_by_ticker.items()}
+    pe_scores = _metric_scores(pe_curve, pe_peer, values=pe, sectors=sectors, higher_is_better=False)
+    pb_scores = _metric_scores(pb_curve, pb_peer, values=pb, sectors=sectors, higher_is_better=False)
+    ps_scores = _metric_scores(ps_curve, ps_peer, values=ps, sectors=sectors, higher_is_better=False)
 
     results = {}
     for t in raw_by_ticker:
@@ -625,8 +683,9 @@ def _score_growth(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorRe
     rev_peer = _percentile_ranks(revenue_growth, higher_is_better=True)
     eps_peer = _percentile_ranks(eps_growth, higher_is_better=True)
 
-    rev_scores = _metric_scores(rev_curve, rev_peer)
-    eps_scores = _metric_scores(eps_curve, eps_peer)
+    sectors = {t: d.sector_bucket for t, d in raw_by_ticker.items()}
+    rev_scores = _metric_scores(rev_curve, rev_peer, values=revenue_growth, sectors=sectors, higher_is_better=True)
+    eps_scores = _metric_scores(eps_curve, eps_peer, values=eps_growth, sectors=sectors, higher_is_better=True)
 
     results = {}
     for t in raw_by_ticker:
@@ -670,10 +729,11 @@ def _score_profitability(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, F
     roe_peer = _percentile_ranks(roe, higher_is_better=True)
     debt_peer = _percentile_ranks(debt_to_equity, higher_is_better=False)  # lower debt is better
 
-    gross_scores = _metric_scores(gross_curve, gross_peer)
-    net_scores = _metric_scores(net_curve, net_peer)
-    roe_scores = _metric_scores(roe_curve, roe_peer)
-    debt_scores = _metric_scores(debt_curve, debt_peer)
+    sectors = {t: d.sector_bucket for t, d in raw_by_ticker.items()}
+    gross_scores = _metric_scores(gross_curve, gross_peer, values=gross_margin, sectors=sectors, higher_is_better=True)
+    net_scores = _metric_scores(net_curve, net_peer, values=net_margin, sectors=sectors, higher_is_better=True)
+    roe_scores = _metric_scores(roe_curve, roe_peer, values=roe, sectors=sectors, higher_is_better=True)
+    debt_scores = _metric_scores(debt_curve, debt_peer, values=debt_to_equity, sectors=sectors, higher_is_better=False)
 
     results = {}
     for t in raw_by_ticker:
@@ -752,7 +812,9 @@ def _score_momentum(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, Factor
     # Curve scores for the whole batch up front, so the active scoring mode picks
     # between curve and percentile the same way every other factor does.
     return_curve = {t: _score_from_curve(*_momentum_return(raw_values[t])[:2]) for t in raw_by_ticker}
-    return_scores = _metric_scores(return_curve, return_peer)
+    sectors = {t: d.sector_bucket for t, d in raw_by_ticker.items()}
+    return_scores = _metric_scores(return_curve, return_peer, values=returns, sectors=sectors,
+                                   higher_is_better=True)
 
     results = {}
     for t in raw_by_ticker:

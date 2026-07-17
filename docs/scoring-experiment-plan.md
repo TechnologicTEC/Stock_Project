@@ -193,6 +193,63 @@ the control already had and adds what it lacks.
 you don't take a candidate that lost on the data you tuned it on to the pristine
 window.
 
+### H2 (sector-relative percentile) — development window, 2026-07-17
+
+```
+composite IC: absolute +0.0460 | sector-relative +0.0248
+RHO = 0.903
+paired diff = -0.0212, sd 0.0412, t = -2.30 on 20 independent dates
+min detectable improvement: +0.0181
+  valuation     +0.0340 -> +0.0180
+  growth        +0.0320 -> +0.0210
+  profitability -0.0250 -> -0.0240
+  momentum      +0.0340 -> +0.0270
+```
+
+**H2: FAILS, and worse than H1.** Not merely "no improvement" — *significantly
+worse* (t=-2.30, past even the two-test Bonferroni bar of ~2.24), nearly halving
+the composite IC and degrading every factor.
+
+**The H1 diagnosis above was WRONG.** It predicted H2 would win because it restores
+the sector-awareness H1 discarded. H2 has sector-awareness *and* peer ranking, and
+it is the worst of the three. The mechanism was backwards.
+
+### What the ablation actually says
+
+| mode | composite IC | discards |
+|---|---|---|
+| **ABSOLUTE** (current) | **+0.0460** | nothing |
+| CROSS_SECTIONAL | +0.0417 | absolute levels |
+| SECTOR_RELATIVE | +0.0248 | absolute levels **and** cross-sector comparison |
+
+Monotonic in information thrown away. Two things follow, and both are findings in
+their own right:
+
+1. **Absolute levels carry signal.** A P/E of 15 being genuinely cheap matters, not
+   just "cheapest of its peers". A percentile knows only the ordering — so when a
+   whole sector is expensive it still crowns a winner, and the absolute curve is
+   right to mark that name down. Discarding the level costs IC.
+2. **Cross-sector comparison carries signal.** Ranking within sector is implicitly
+   a sector-neutral bet, and it halves the IC. A meaningful part of the Screener's
+   edge is comparing fundamentals *across* sectors — i.e. some of the +0.046 is
+   sector selection, not stock selection.
+
+**This vindicates the existing design.** The plan called absolute curves "the real
+structural weakness". They are not: absolute-with-sector-overrides beats both
+alternatives, and the reason is that it is the only one of the three that keeps
+both kinds of context.
+
+### Verdict: STOP. Holdout never touched.
+
+Both pre-registered candidates failed on the *development* window — the friendly
+data — with power to detect +0.013–+0.018 improvements. There is nothing worth
+spending the one clean 2016–2021 test on. Current scoring stands; `ABSOLUTE`
+remains the default and the shipped behaviour never changed.
+
+The honest summary: **we tried the two principled improvements, were well powered
+to see them, and neither helped — one actively hurt.** That is a real result, and a
+better one than iterating until a number moved.
+
 ---
 
 ## Phases

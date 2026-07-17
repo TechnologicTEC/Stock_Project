@@ -50,6 +50,73 @@ def test_metric_scores_picks_curve_or_percentile_by_mode():
         assert screener._metric_scores(curve, peer) == peer
 
 
+# --------------------------------------------------------------------------
+# Sector-relative percentiles (H2 / Phase 3). H1 lost precisely because ranking
+# across the whole index discards the sector-awareness the absolute curves
+# already had — this ranks a stock against its own sector instead.
+# --------------------------------------------------------------------------
+
+def _sector_values(n_tech, n_util):
+    values, sectors = {}, {}
+    for i in range(n_tech):
+        values[f"T{i}"] = float(i)          # tech: 0..n-1
+        sectors[f"T{i}"] = "Technology / Software"
+    for i in range(n_util):
+        values[f"U{i}"] = 1000.0 + i        # utilities: far higher on the raw scale
+        sectors[f"U{i}"] = "Utilities"
+    return values, sectors
+
+
+def test_sector_relative_ranks_within_sector_not_across_the_index():
+    # Utilities sit 1000x above tech on the raw metric. Universe-wide, every
+    # utility beats every tech name. Within sector, each is judged on its own
+    # terms — the whole point.
+    values, sectors = _sector_values(6, 6)
+    wide = screener._percentile_ranks(values, higher_is_better=True)
+    bysec = screener._percentile_ranks_by_sector(values, sectors, higher_is_better=True)
+
+    assert wide["T5"] < wide["U0"]                      # universe-wide: tech always loses
+    assert bysec["T5"] == 100.0 and bysec["U5"] == 100.0   # each sector's best tops its own group
+    assert bysec["T0"] == 0.0 and bysec["U0"] == 0.0       # ...and each sector's worst bottoms out
+
+
+def test_sector_relative_respects_direction():
+    values, sectors = _sector_values(6, 6)
+    lower = screener._percentile_ranks_by_sector(values, sectors, higher_is_better=False)
+    assert lower["T0"] == 100.0 and lower["T5"] == 0.0     # lower raw value is better -> inverted
+
+
+def test_thin_sectors_fall_back_to_the_universe_rank():
+    # 3 utilities ranked against each other would be handed 0/50/100 on no
+    # evidence. Below SECTOR_MIN_NAMES they must be ranked against everyone.
+    values, sectors = _sector_values(8, 3)
+    bysec = screener._percentile_ranks_by_sector(values, sectors, higher_is_better=True)
+    wide = screener._percentile_ranks(values, higher_is_better=True)
+
+    assert {bysec[f"U{i}"] for i in range(3)} == {wide[f"U{i}"] for i in range(3)}  # fell back
+    assert bysec["T7"] == 100.0            # the big sector still ranks within itself
+    assert set(bysec) == set(values)       # everyone still gets a score
+
+
+def test_sector_relative_handles_missing_values_and_unknown_sectors():
+    values = {"A": 1.0, "B": None, "C": 3.0}
+    sectors = {"A": None, "B": None, "C": None}          # all unknown -> one default bucket
+    out = screener._percentile_ranks_by_sector(values, sectors, higher_is_better=True)
+    assert set(out) == {"A", "B", "C"}
+    assert out["B"] is None                              # no value -> no rank, not a zero
+
+
+def test_metric_scores_uses_sector_relative_when_that_mode_is_active():
+    values, sectors = _sector_values(6, 6)
+    curve = {t: 50.0 for t in values}
+    peer = screener._percentile_ranks(values, higher_is_better=True)
+    with screener.using_scoring_mode(screener.SECTOR_RELATIVE):
+        got = screener._metric_scores(curve, peer, values=values, sectors=sectors,
+                                      higher_is_better=True)
+    assert got == screener._percentile_ranks_by_sector(values, sectors, higher_is_better=True)
+    assert got != curve and got != peer                  # a third, distinct behaviour
+
+
 @pytest.fixture(autouse=True)
 def _no_news_by_default():
     """_score_sentiment now calls news.analyze_ticker (FinBERT pipeline).
