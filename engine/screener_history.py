@@ -145,16 +145,16 @@ def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | 
     return metrics
 
 
-def historical_screener_score(ticker: str, as_of: date, include_news: bool = True,
-                              include_analyst: bool = True) -> dict | None:
-    """The Screener's overall score for `ticker` **as it would have scored on
-    `as_of`**, using only then-knowable data and the live scoring curves.
-    Returns None if EDGAR has nothing for the ticker; the score itself can still
-    be None if too little was filed by that date.
+def historical_raw_data(ticker: str, as_of: date,
+                        include_analyst: bool = True) -> tuple[object, str | None] | None:
+    """Everything knowable about `ticker` on `as_of`, as a `TickerRawData` plus the
+    company name — the **expensive, per-ticker** half of a reconstruction (prices,
+    EDGAR filings, profile, analyst events). None if EDGAR has nothing.
 
-    `include_news` gates the GDELT news-sentiment factor (a BigQuery query per
-    call). With it False, sentiment scores None and its weight is redistributed
-    — a fast, quota-free 5-factor reconstruction."""
+    Split out from historical_screener_score so callers can gather a WHOLE
+    UNIVERSE's raw data for one date and then score it as a batch. The scorers
+    already take `dict[str, TickerRawData]`; they just never get more than one
+    ticker today, which is why their cross-sectional percentiles are degenerate."""
     ticker = ticker.strip().upper()
     # One price fetch feeds both the as-of price (for P/E-P/B-P/S) and the
     # momentum factor's window.
@@ -185,24 +185,67 @@ def historical_screener_score(ticker: str, as_of: date, include_news: bool = Tru
         recommendation=recommendation, price_target=None, insider_mspr=None,
         sector_bucket=sector_bucket, raw_industry=raw_industry, errors=[],
     )
-    by_ticker = {ticker: raw}
+    return raw, company_name
+
+
+def score_reconstructed_batch(raw_by_ticker: dict, as_of: date, *,
+                              company_names: dict | None = None,
+                              include_news: bool = True) -> dict[str, dict]:
+    """Score a whole batch of point-in-time raw data at once — the **cheap** half.
+
+    Pass the entire universe and the factor scorers see every name on the date,
+    which is the precondition for cross-sectional (percentile / sector-relative)
+    scoring. Passing one ticker reproduces the old behaviour EXACTLY: today the
+    scorers use absolute curves, and their peer percentiles feed only the
+    explanation text, never the score (see screener._curve_reason). So batching
+    changes the *reasons*, never the numbers — which is what makes the date-major
+    rewrite verifiable against the ticker-major baseline."""
+    company_names = company_names or {}
     # Every factor uses the live scorers *except* sentiment: the live sentiment
     # scorer reads current news (look-ahead for a past date), so reconstruct it
     # point-in-time from GDELT tone instead (step 6) — but only if asked, since
     # that's a BigQuery query. Otherwise it's None and its weight redistributes.
-    factors = {name: screener.FACTOR_SCORERS[name](by_ticker)[ticker]
-               for name in screener.FACTOR_WEIGHTS if name != "sentiment"}
-    factors["sentiment"] = (
-        _historical_sentiment_factor(company_name, as_of) if include_news
-        else screener.FactorResult(score=None, reasons=["News sentiment not included in this run"])
-    )
-    overall = screener.combine_factor_scores(factors)
+    scored_factors = {name: screener.FACTOR_SCORERS[name](raw_by_ticker)
+                      for name in screener.FACTOR_WEIGHTS if name != "sentiment"}
 
-    return {
-        "ticker": ticker,
-        "as_of": as_of,
-        "overall_score": overall,
-        "recommendation": screener._recommendation_for(overall),
-        "factor_scores": {name: fr.score for name, fr in factors.items()},
-        "metrics": metrics,
-    }
+    out: dict[str, dict] = {}
+    for ticker in raw_by_ticker:
+        factors = {name: scored_factors[name][ticker] for name in scored_factors}
+        factors["sentiment"] = (
+            _historical_sentiment_factor(company_names.get(ticker), as_of) if include_news
+            else screener.FactorResult(score=None, reasons=["News sentiment not included in this run"])
+        )
+        overall = screener.combine_factor_scores(factors)
+        out[ticker] = {
+            "ticker": ticker,
+            "as_of": as_of,
+            "overall_score": overall,
+            "recommendation": screener._recommendation_for(overall),
+            "factor_scores": {name: fr.score for name, fr in factors.items()},
+            "metrics": raw_by_ticker[ticker].fundamentals,
+        }
+    return out
+
+
+def historical_screener_score(ticker: str, as_of: date, include_news: bool = True,
+                              include_analyst: bool = True) -> dict | None:
+    """The Screener's overall score for `ticker` **as it would have scored on
+    `as_of`**, using only then-knowable data and the live scoring curves.
+    Returns None if EDGAR has nothing for the ticker; the score itself can still
+    be None if too little was filed by that date.
+
+    `include_news` gates the GDELT news-sentiment factor (a BigQuery query per
+    call). With it False, sentiment scores None and its weight is redistributed
+    — a fast, quota-free 5-factor reconstruction.
+
+    Single-ticker convenience wrapper over historical_raw_data +
+    score_reconstructed_batch."""
+    ticker = ticker.strip().upper()
+    built = historical_raw_data(ticker, as_of, include_analyst=include_analyst)
+    if built is None:
+        return None
+    raw, company_name = built
+    scored = score_reconstructed_batch({ticker: raw}, as_of,
+                                       company_names={ticker: company_name},
+                                       include_news=include_news)
+    return scored[ticker]

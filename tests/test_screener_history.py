@@ -81,6 +81,77 @@ def test_pit_fundamentals_metrics_reconstructs_ratios():
 
 
 # --------------------------------------------------------------------------
+# Raw/score split (scoring experiment Phase 1). The scorers already accept a
+# batch; splitting the expensive per-ticker I/O from the cheap batch scoring is
+# what lets a caller hand them a whole universe on one date — the precondition
+# for cross-sectional scoring. See docs/scoring-experiment-plan.md.
+# --------------------------------------------------------------------------
+
+def _patched_history(company="Test Co"):
+    from contextlib import ExitStack
+    stack = ExitStack()
+    for p in (
+        patch("engine.screener_history.edgar_fundamentals.get_pit_fundamentals", return_value=_synthetic_series()),
+        patch("engine.screener_history.price_history.get_history_df", side_effect=_price_df),
+        patch("engine.screener_history._profile_bits", return_value=(screener.DEFAULT_SECTOR_BUCKET, None, company)),
+        patch("engine.screener_history.analyst_history.recommendation_as_of", return_value=None),
+        patch("engine.screener_history.gdelt_client.sentiment_as_of", return_value=None),
+    ):
+        stack.enter_context(p)
+    return stack
+
+
+def test_historical_raw_data_returns_raw_and_company_name():
+    with _patched_history():
+        built = screener_history.historical_raw_data("TEST", date(2023, 6, 1))
+    assert built is not None
+    raw, name = built
+    assert raw.ticker == "TEST" and name == "Test Co"
+    assert raw.fundamentals is not None
+
+
+def test_historical_raw_data_is_none_when_edgar_has_nothing():
+    with patch("engine.screener_history.edgar_fundamentals.get_pit_fundamentals", return_value=[]), \
+         patch("engine.screener_history.price_history.get_history_df", side_effect=_price_df):
+        assert screener_history.historical_raw_data("NOPE", date(2023, 6, 1)) is None
+
+
+def test_scoring_a_batch_is_identical_to_scoring_one_at_a_time():
+    """The invariant the whole date-major rewrite rests on.
+
+    Today the scorers use absolute curves and their peer percentiles feed only the
+    explanation text — so a batch of N must score exactly like N batches of one.
+    If this ever fails, the +0.046 baseline is no longer comparable and the
+    experiment's control has silently moved.
+    """
+    as_of = date(2023, 6, 1)
+    with _patched_history():
+        raw, name = screener_history.historical_raw_data("AAA", as_of)
+        other, _ = screener_history.historical_raw_data("BBB", as_of)
+
+        alone = screener_history.score_reconstructed_batch(
+            {"AAA": raw}, as_of, company_names={"AAA": name}, include_news=False)
+        together = screener_history.score_reconstructed_batch(
+            {"AAA": raw, "BBB": other}, as_of,
+            company_names={"AAA": name, "BBB": name}, include_news=False)
+
+    assert alone["AAA"]["overall_score"] == together["AAA"]["overall_score"]
+    assert alone["AAA"]["factor_scores"] == together["AAA"]["factor_scores"]
+
+
+def test_historical_screener_score_still_matches_the_split_path():
+    # The single-ticker wrapper must stay a pure convenience over the two halves.
+    as_of = date(2023, 6, 1)
+    with _patched_history():
+        direct = screener_history.historical_screener_score("TEST", as_of, include_news=False)
+        raw, name = screener_history.historical_raw_data("TEST", as_of)
+        viaparts = screener_history.score_reconstructed_batch(
+            {"TEST": raw}, as_of, company_names={"TEST": name}, include_news=False)["TEST"]
+    assert direct["overall_score"] == viaparts["overall_score"]
+    assert direct["factor_scores"] == viaparts["factor_scores"]
+
+
+# --------------------------------------------------------------------------
 # Full historical score (reusing the live scorers)
 # --------------------------------------------------------------------------
 

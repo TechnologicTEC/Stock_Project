@@ -326,6 +326,88 @@ def factor_information_coefficients(points: list[dict], *,
     return out
 
 
+# --------------------------------------------------------------------------
+# Date-major walk-forward (scoring experiment, Phase 1).
+#
+# The ticker-major loop above asks "for each ticker, score it on every date",
+# which hands the factor scorers a universe of ONE. That's fine for absolute
+# curves, but it makes cross-sectional scoring impossible: you cannot rank a
+# stock against its peers when you can only see the stock. This loop inverts it —
+# "for each date, gather every name's raw data, then score the batch" — which is
+# the shape the scorers already expect (`dict[str, TickerRawData]`).
+#
+# It is deliberately behaviour-identical today: the scorers use absolute curves,
+# and their peer percentiles feed only the explanation text (screener._curve_reason
+# says so outright), so a batch of 500 scores exactly like 500 batches of one. That
+# equivalence is the point — it's what lets us verify the rewrite against the
+# +0.046 baseline before changing any scoring. See docs/scoring-experiment-plan.md.
+# --------------------------------------------------------------------------
+
+def universe_walk_forward(tickers, start: date, end: date, *,
+                          step_days: int = DEFAULT_STEP_DAYS,
+                          horizon_days: int = DEFAULT_HORIZON_DAYS,
+                          include_news: bool = False, include_analyst: bool = True,
+                          on_progress=None) -> list[dict]:
+    """Walk forward over the whole universe **date by date**, scoring every name
+    together on each date. Returns the same point shape as pooled_walk_forward,
+    so summarize_pooled / summarize_universe consume it unchanged."""
+    tickers = [t.strip().upper() for t in tickers]
+    today = date.today()
+    # Same correctness bound as walk_forward: a forward return only exists once
+    # the horizon has actually elapsed.
+    last_scorable = min(end, today - timedelta(days=horizon_days))
+
+    # Pre-warm each ticker's price window once for the whole span, rather than
+    # re-deriving it per date. Best effort — gaps still get filled lazily.
+    for ticker in tickers:
+        try:
+            price_history.ensure_cached(ticker, start - timedelta(days=_PRICE_WARMUP_DAYS),
+                                        min(end, today))
+        except Exception:
+            pass
+
+    dates: list[date] = []
+    current = start
+    while current <= last_scorable:
+        dates.append(current)
+        current += timedelta(days=step_days)
+
+    points: list[dict] = []
+    for i, as_of in enumerate(dates, start=1):
+        raw_by_ticker, names = {}, {}
+        for ticker in tickers:
+            try:
+                built = screener_history.historical_raw_data(ticker, as_of,
+                                                             include_analyst=include_analyst)
+            except Exception:
+                built = None
+            if built is not None:
+                raw_by_ticker[ticker], names[ticker] = built
+        if not raw_by_ticker:
+            continue
+
+        scored_by_ticker = screener_history.score_reconstructed_batch(
+            raw_by_ticker, as_of, company_names=names, include_news=include_news)
+
+        for ticker, scored in scored_by_ticker.items():
+            if scored["overall_score"] is None:
+                continue
+            fwd = forward_return_pct(ticker, as_of, horizon_days)
+            if fwd is None:
+                continue
+            points.append({
+                "date": as_of,
+                "ticker": ticker,
+                "score": scored["overall_score"],
+                "recommendation": scored["recommendation"],
+                "forward_return_pct": round(fwd, 2),
+                "factors": scored.get("factor_scores"),
+            })
+        if on_progress is not None:
+            on_progress(i, len(dates), as_of.isoformat())
+    return points
+
+
 # A reconstructed ticker is expensive (SEC + prices + a scoring pass per date) but
 # perfectly deterministic for a fixed window — so it's worth caching whole. This is
 # what makes a 500-name batch job *resumable*: the first run's 3 hours aren't lost

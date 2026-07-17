@@ -235,6 +235,85 @@ def test_a_consistently_zero_ic_is_not_significant():
 
 
 # --------------------------------------------------------------------------
+# Date-major walk-forward (scoring experiment Phase 1). Must be behaviour-
+# identical to the ticker-major loop while the scorers still use absolute curves
+# — that equivalence is the control the whole experiment is measured against.
+# --------------------------------------------------------------------------
+
+def _fake_universe_reconstruction():
+    """Deterministic raw/score stubs: score depends only on (ticker, date), so
+    both loop orders must agree exactly."""
+    def raw(ticker, as_of, include_analyst=True):
+        if ticker == "DEAD":
+            return None                      # nothing in EDGAR -> contributes nothing
+        return (f"raw::{ticker}::{as_of}", f"{ticker} Inc")
+
+    def score(raw_by_ticker, as_of, company_names=None, include_news=True):
+        return {t: {"ticker": t, "as_of": as_of,
+                    "overall_score": 50.0 + len(t) + as_of.month,
+                    "recommendation": "Hold",
+                    "factor_scores": {"momentum": 40.0 + as_of.month}}
+                for t in raw_by_ticker}
+    return raw, score
+
+
+def test_universe_walk_forward_matches_the_ticker_major_loop_point_for_point():
+    raw, score = _fake_universe_reconstruction()
+
+    def single(ticker, as_of, include_news=True, include_analyst=True):
+        built = raw(ticker, as_of, include_analyst)
+        return None if built is None else score({ticker: built[0]}, as_of)[ticker]
+
+    tickers = ["AAA", "BB", "CCCC"]
+    start, end = date(2022, 1, 1), date(2022, 6, 1)
+    with patch("engine.screener_validation.price_history.ensure_cached"), \
+         patch("engine.screener_validation.forward_return_pct", return_value=3.0), \
+         patch("engine.screener_history.historical_raw_data", side_effect=raw), \
+         patch("engine.screener_history.score_reconstructed_batch", side_effect=score), \
+         patch("engine.screener_validation.screener_history.historical_screener_score", side_effect=single):
+        old = sv.pooled_walk_forward(tickers, start, end, step_days=30, horizon_days=30)
+        new = sv.universe_walk_forward(tickers, start, end, step_days=30, horizon_days=30)
+
+    assert len(new) == len(old) > 0
+    keyed_old = {(p["ticker"], p["date"]): p for p in old}
+    keyed_new = {(p["ticker"], p["date"]): p for p in new}
+    assert set(keyed_old) == set(keyed_new)
+    for k in keyed_old:
+        assert keyed_old[k]["score"] == keyed_new[k]["score"]
+        assert keyed_old[k]["factors"] == keyed_new[k]["factors"]
+
+
+def test_universe_walk_forward_drops_names_that_cannot_be_reconstructed():
+    raw, score = _fake_universe_reconstruction()
+    with patch("engine.screener_validation.price_history.ensure_cached"), \
+         patch("engine.screener_validation.forward_return_pct", return_value=1.0), \
+         patch("engine.screener_history.historical_raw_data", side_effect=raw), \
+         patch("engine.screener_history.score_reconstructed_batch", side_effect=score):
+        pts = sv.universe_walk_forward(["AAA", "DEAD"], date(2022, 1, 1), date(2022, 4, 1),
+                                       step_days=30, horizon_days=30)
+    assert {p["ticker"] for p in pts} == {"AAA"}          # DEAD contributes nothing, no error
+
+
+def test_universe_walk_forward_scores_every_name_on_a_date_in_ONE_batch():
+    # The whole point: the scorers must see the universe, not one ticker — that's
+    # the precondition for ranking a stock against its peers.
+    seen_batch_sizes = []
+    raw, score = _fake_universe_reconstruction()
+
+    def spy(raw_by_ticker, as_of, company_names=None, include_news=True):
+        seen_batch_sizes.append(len(raw_by_ticker))
+        return score(raw_by_ticker, as_of, company_names, include_news)
+
+    with patch("engine.screener_validation.price_history.ensure_cached"), \
+         patch("engine.screener_validation.forward_return_pct", return_value=1.0), \
+         patch("engine.screener_history.historical_raw_data", side_effect=raw), \
+         patch("engine.screener_history.score_reconstructed_batch", side_effect=spy):
+        sv.universe_walk_forward(["AAA", "BB", "CCCC"], date(2022, 1, 1), date(2022, 4, 1),
+                                 step_days=30, horizon_days=30)
+    assert seen_batch_sizes and all(n == 3 for n in seen_batch_sizes)   # one call per date, all names
+
+
+# --------------------------------------------------------------------------
 # Batch-job survivability. A 503-ticker run timed out at 3h having done 175 and
 # lost all of it; the analyst fetch (Yahoo, blocked from datacenter IPs) hung
 # rather than failing fast and was most of the cost.
