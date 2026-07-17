@@ -157,6 +157,44 @@ The gate passes — conditionally on that ρ check.
 
 ---
 
+## Results log
+
+Recorded as they happen — pre-registration only means anything if the misses get
+written down too.
+
+### ρ gate + H1 (universe-wide percentile) — development window, 2026-07-17
+
+Full universe, 2021-04-14 → 2026-04-13, control vs candidate, paired per date:
+
+```
+composite IC: absolute +0.0460 | cross-sectional +0.0417
+RHO between per-date ICs = 0.959          (gate: >= 0.80)  -> PASS
+paired mean diff = -0.0043, sd 0.0303, t = -0.64 on 20 independent dates
+min detectable improvement with this pairing: +0.0133
+```
+
+**Gate: PASS.** ρ=0.959 makes the pairing excellent — floor +0.0133, better than
+the +0.019 assumed at ρ=0.9. The test is well powered.
+
+**H1: FAILS.** Universe-wide percentile scoring is *slightly worse* (−0.0043),
+comfortably inside noise (t=−0.64) — but the test could have seen a +0.0133
+improvement and there isn't one. A well-powered null, on the **development** data,
+i.e. the friendly case.
+
+**Diagnosis — H1 was not a fair test.** The absolute control is *already
+sector-aware*: `SECTOR_CURVE_OVERRIDES` supplies sector-specific P/E, P/B, P/S and
+gross-margin curves across ~10 sector buckets. Ranking percentiles across the whole
+index discards that — it ranks a utility's P/E against a semiconductor's. H1 didn't
+*add* context, it **traded sector-awareness for cross-sectional context** and lost
+slightly. That makes H2 (rank *within sector*) the real candidate: it keeps what
+the control already had and adds what it lacks.
+
+**Holdout: NOT touched.** Nothing here is worth spending the one clean test on —
+you don't take a candidate that lost on the data you tuned it on to the pristine
+window.
+
+---
+
 ## Phases
 
 | # | Phase | Done when |
