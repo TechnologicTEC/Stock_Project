@@ -1,5 +1,6 @@
 import json
 from datetime import date, timedelta
+import pytest
 from unittest.mock import MagicMock, patch
 
 from engine import screener_validation as sv
@@ -281,6 +282,16 @@ def test_universe_walk_forward_matches_the_ticker_major_loop_point_for_point():
     for k in keyed_old:
         assert keyed_old[k]["score"] == keyed_new[k]["score"]
         assert keyed_old[k]["factors"] == keyed_new[k]["factors"]
+
+
+def test_pooled_walk_forward_refuses_cross_sectional_instead_of_returning_nothing():
+    # Scoring one ticker at a time under CROSS_SECTIONAL gives each name a peer
+    # group of itself -> every score None -> an EMPTY result that looks like
+    # "no data". That silent zero is worse than a crash; it must raise.
+    from engine import screener
+    with screener.using_scoring_mode(screener.CROSS_SECTIONAL):
+        with pytest.raises(RuntimeError, match="universe_walk_forward"):
+            sv.pooled_walk_forward(["AAA"], date(2022, 1, 1), date(2022, 6, 1))
 
 
 def test_universe_walk_forward_drops_names_that_cannot_be_reconstructed():

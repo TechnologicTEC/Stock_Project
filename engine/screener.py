@@ -62,7 +62,10 @@ than retried per ticker.
 """
 from __future__ import annotations
 
+import contextvars
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -330,6 +333,77 @@ class ScreenerResult:
 # Normalization helper - percentile rank WITHIN the comparison set
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Scoring mode — the cross-sectional experiment. See docs/scoring-experiment-plan.md.
+#
+# ABSOLUTE (default, shipped): every metric maps through a fixed curve. A P/E of
+# 15 is worth 80 points today, next year, and (bar a sector override) in every
+# sector.
+#
+# CROSS_SECTIONAL (experiment): a metric scores as its PERCENTILE among the names
+# scored on that date. The reasoning: the information coefficient only ever asks
+# "did we rank these stocks against each other correctly", and an absolute curve
+# throws away the context that decides it — a P/E of 20 is cheap for a
+# semiconductor and dear for a utility, and on a date when everything is expensive
+# an absolute curve marks every name down and stops discriminating between them.
+#
+# This is NOT a curve tweak, and the distinction is the whole reason the
+# experiment exists. Remapping a curve monotonically cannot change a factor's IC
+# *at all* — proven on real data, identical to four decimals across three curve
+# shapes — because IC is a RANK correlation and a monotonic remap preserves the
+# order. Only reordering the stocks can move it, which is exactly what ranking
+# against peers does.
+#
+# Stays ABSOLUTE by default until a pre-registered holdout earns the change.
+# --------------------------------------------------------------------------
+
+ABSOLUTE = "absolute"
+CROSS_SECTIONAL = "cross_sectional"
+SCORING_MODES = (ABSOLUTE, CROSS_SECTIONAL)
+
+_scoring_mode: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "screener_scoring_mode", default=ABSOLUTE
+)
+
+
+def scoring_mode() -> str:
+    return _scoring_mode.get()
+
+
+@contextmanager
+def using_scoring_mode(mode: str) -> Iterator[None]:
+    """Scope a block of work to a scoring mode (mirrors db.session.using_user).
+
+    A context manager rather than an env var because the experiment has to score
+    the SAME batch both ways inside one process: the paired per-date test is the
+    only design with the power to answer the question at all (an unpaired
+    comparison could only detect a +0.059 IC change — larger than the entire
+    +0.046 effect being studied).
+    """
+    if mode not in SCORING_MODES:
+        raise ValueError(f"unknown scoring mode {mode!r}; expected one of {SCORING_MODES}")
+    token = _scoring_mode.set(mode)
+    try:
+        yield
+    finally:
+        _scoring_mode.reset(token)
+
+
+def _metric_scores(curve_scores: dict[str, float | None],
+                   peer_ranks: dict[str, float | None]) -> dict[str, float | None]:
+    """The 0-100 sub-score for one raw metric under the active scoring mode.
+
+    Both inputs already exist at every call site — the curve score, and the peer
+    percentile that until now only decorated the explanation text. Choosing between
+    them is the entire experiment.
+
+    Deliberately no winsorising: a percentile is a RANK, so an absurd P/E of 900
+    simply lands last in the ordering and can't drag the result around the way it
+    would inside a mean. Clipping outliers here would be dead code.
+    """
+    return peer_ranks if scoring_mode() == CROSS_SECTIONAL else curve_scores
+
+
 def _percentile_ranks(values: dict[str, float | None], higher_is_better: bool) -> dict[str, float | None]:
     """0-100 percentile rank of each ticker's value among the others in
     `values`. Needs at least 2 non-None values to mean anything; returns
@@ -501,15 +575,19 @@ def _score_valuation(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, Facto
 
     # Each ticker can be in a different sector bucket, so curve selection
     # happens per-ticker rather than once for the whole batch.
-    pe_scores = {t: _score_from_curve(pe[t], _curve_for("pe", raw_by_ticker[t].sector_bucket, PE_CURVE)) for t in raw_by_ticker}
-    pb_scores = {t: _score_from_curve(pb[t], _curve_for("pb", raw_by_ticker[t].sector_bucket, PB_CURVE)) for t in raw_by_ticker}
-    ps_scores = {t: _score_from_curve(ps[t], _curve_for("ps", raw_by_ticker[t].sector_bucket, PS_CURVE)) for t in raw_by_ticker}
+    pe_curve = {t: _score_from_curve(pe[t], _curve_for("pe", raw_by_ticker[t].sector_bucket, PE_CURVE)) for t in raw_by_ticker}
+    pb_curve = {t: _score_from_curve(pb[t], _curve_for("pb", raw_by_ticker[t].sector_bucket, PB_CURVE)) for t in raw_by_ticker}
+    ps_curve = {t: _score_from_curve(ps[t], _curve_for("ps", raw_by_ticker[t].sector_bucket, PS_CURVE)) for t in raw_by_ticker}
 
-    # Peer percentile is bonus context only (see module docstring) - it
-    # does not drive the score, computed here purely for the explanation text.
+    # Peer percentile: explanation-text context under ABSOLUTE scoring, and the
+    # score itself under CROSS_SECTIONAL (see _metric_scores).
     pe_peer = _percentile_ranks(pe, higher_is_better=False)
     pb_peer = _percentile_ranks(pb, higher_is_better=False)
     ps_peer = _percentile_ranks(ps, higher_is_better=False)
+
+    pe_scores = _metric_scores(pe_curve, pe_peer)
+    pb_scores = _metric_scores(pb_curve, pb_peer)
+    ps_scores = _metric_scores(ps_curve, ps_peer)
 
     results = {}
     for t in raw_by_ticker:
@@ -541,11 +619,14 @@ def _score_growth(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, FactorRe
     revenue_growth = {t: _extract_metric(d.fundamentals, "revenue_growth") for t, d in raw_by_ticker.items()}
     eps_growth = {t: _extract_metric(d.fundamentals, "eps_growth") for t, d in raw_by_ticker.items()}
 
-    rev_scores = {t: _score_from_curve(v, REVENUE_GROWTH_CURVE) for t, v in revenue_growth.items()}
-    eps_scores = {t: _score_from_curve(v, EPS_GROWTH_CURVE) for t, v in eps_growth.items()}
+    rev_curve = {t: _score_from_curve(v, REVENUE_GROWTH_CURVE) for t, v in revenue_growth.items()}
+    eps_curve = {t: _score_from_curve(v, EPS_GROWTH_CURVE) for t, v in eps_growth.items()}
 
     rev_peer = _percentile_ranks(revenue_growth, higher_is_better=True)
     eps_peer = _percentile_ranks(eps_growth, higher_is_better=True)
+
+    rev_scores = _metric_scores(rev_curve, rev_peer)
+    eps_scores = _metric_scores(eps_curve, eps_peer)
 
     results = {}
     for t in raw_by_ticker:
@@ -576,18 +657,23 @@ def _score_profitability(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, F
     # alarming for a software company) - sector-aware, like P/E/P/B/P/S
     # above. Net margin, ROE, and debt/equity use the generic curve for
     # every sector for now (see SECTOR_CURVE_OVERRIDES's docstring).
-    gross_scores = {
+    gross_curve = {
         t: _score_from_curve(gross_margin[t], _curve_for("gross_margin", raw_by_ticker[t].sector_bucket, GROSS_MARGIN_CURVE))
         for t in raw_by_ticker
     }
-    net_scores = {t: _score_from_curve(v, NET_MARGIN_CURVE) for t, v in net_margin.items()}
-    roe_scores = {t: _score_from_curve(v, ROE_CURVE) for t, v in roe.items()}
-    debt_scores = {t: _score_from_curve(v, DEBT_TO_EQUITY_CURVE) for t, v in debt_to_equity.items()}
+    net_curve = {t: _score_from_curve(v, NET_MARGIN_CURVE) for t, v in net_margin.items()}
+    roe_curve = {t: _score_from_curve(v, ROE_CURVE) for t, v in roe.items()}
+    debt_curve = {t: _score_from_curve(v, DEBT_TO_EQUITY_CURVE) for t, v in debt_to_equity.items()}
 
     gross_peer = _percentile_ranks(gross_margin, higher_is_better=True)
     net_peer = _percentile_ranks(net_margin, higher_is_better=True)
     roe_peer = _percentile_ranks(roe, higher_is_better=True)
     debt_peer = _percentile_ranks(debt_to_equity, higher_is_better=False)  # lower debt is better
+
+    gross_scores = _metric_scores(gross_curve, gross_peer)
+    net_scores = _metric_scores(net_curve, net_peer)
+    roe_scores = _metric_scores(roe_curve, roe_peer)
+    debt_scores = _metric_scores(debt_curve, debt_peer)
 
     results = {}
     for t in raw_by_ticker:
@@ -663,6 +749,10 @@ def _score_momentum(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, Factor
     raw_values = {t: _compute_momentum_raw(d.price_df) for t, d in raw_by_ticker.items()}
     returns = {t: _momentum_return(rv)[0] for t, rv in raw_values.items()}
     return_peer = _percentile_ranks(returns, higher_is_better=True)
+    # Curve scores for the whole batch up front, so the active scoring mode picks
+    # between curve and percentile the same way every other factor does.
+    return_curve = {t: _score_from_curve(*_momentum_return(raw_values[t])[:2]) for t in raw_by_ticker}
+    return_scores = _metric_scores(return_curve, return_peer)
 
     results = {}
     for t in raw_by_ticker:
@@ -671,7 +761,7 @@ def _score_momentum(raw_by_ticker: dict[str, TickerRawData]) -> dict[str, Factor
         # The factor score is the intermediate-term (12-1) return ALONE. RSI and
         # moving-average position are short-term signals that don't add
         # cross-sectional predictive power, so they're shown as context only.
-        return_score = _score_from_curve(value, curve)
+        return_score = return_scores[t]
 
         reasons = []
         reason = _curve_reason(label.capitalize(), value, return_score, return_peer[t],

@@ -470,6 +470,20 @@ def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_day
     `use_cache` memoizes each ticker's points (see _cached_walk_forward) so a long
     batch run survives being killed and resumes cheaply. Off by default: the page's
     interactive run should reflect fresh data."""
+    from engine import screener
+
+    # This loop scores one ticker at a time. Under CROSS_SECTIONAL that means
+    # ranking each name against a peer group of itself, so _percentile_ranks
+    # returns None for everyone, every score is None, and you get back an EMPTY
+    # list with no error — a silent zero that looks exactly like "no data". Fail
+    # loudly instead; the date-major loop is the one that can do this.
+    if screener.scoring_mode() == screener.CROSS_SECTIONAL:
+        raise RuntimeError(
+            "pooled_walk_forward scores tickers one at a time, so cross-sectional "
+            "scoring has no peer group and would silently return nothing. Use "
+            "universe_walk_forward() for CROSS_SECTIONAL runs."
+        )
+
     points: list[dict] = []
     total = len(tickers)
     run = _cached_walk_forward if use_cache else None

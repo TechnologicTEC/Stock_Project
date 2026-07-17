@@ -5,7 +5,49 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import pytest
+
 from engine import screener
+
+
+# --------------------------------------------------------------------------
+# Scoring mode (cross-sectional experiment — docs/scoring-experiment-plan.md).
+# The default must stay ABSOLUTE: the shipped app and the +0.046 baseline both
+# depend on it, and the new mode is only earned by a pre-registered holdout.
+# --------------------------------------------------------------------------
+
+def test_scoring_mode_defaults_to_absolute():
+    assert screener.scoring_mode() == screener.ABSOLUTE
+
+
+def test_using_scoring_mode_scopes_and_restores():
+    with screener.using_scoring_mode(screener.CROSS_SECTIONAL):
+        assert screener.scoring_mode() == screener.CROSS_SECTIONAL
+        with screener.using_scoring_mode(screener.ABSOLUTE):
+            assert screener.scoring_mode() == screener.ABSOLUTE   # nests
+        assert screener.scoring_mode() == screener.CROSS_SECTIONAL
+    assert screener.scoring_mode() == screener.ABSOLUTE            # always restored
+
+
+def test_using_scoring_mode_restores_even_when_the_block_raises():
+    with pytest.raises(ValueError):
+        with screener.using_scoring_mode(screener.CROSS_SECTIONAL):
+            raise ValueError("boom")
+    assert screener.scoring_mode() == screener.ABSOLUTE
+
+
+def test_unknown_scoring_mode_is_rejected_loudly():
+    with pytest.raises(ValueError, match="unknown scoring mode"):
+        with screener.using_scoring_mode("vibes"):
+            pass
+
+
+def test_metric_scores_picks_curve_or_percentile_by_mode():
+    curve = {"A": 80.0, "B": 20.0}
+    peer = {"A": 100.0, "B": 0.0}
+    assert screener._metric_scores(curve, peer) == curve            # absolute by default
+    with screener.using_scoring_mode(screener.CROSS_SECTIONAL):
+        assert screener._metric_scores(curve, peer) == peer
 
 
 @pytest.fixture(autouse=True)
