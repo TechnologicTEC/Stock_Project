@@ -160,6 +160,26 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     assert any("AAA" in str(df.value.to_dict()) for df in at.dataframe)
 
 
+def test_leaderboard_shows_the_company_name_beside_the_ticker():
+    lb = screener.build_leaderboard([
+        screener.ScreenerResult("AAPL", 88.0, "Strong Buy",
+                                {"valuation": screener.FactorResult(90.0, [])}, [],
+                                company_name="Apple Inc"),
+        screener.ScreenerResult("ZZZZ", 55.0, "Hold",
+                                {"valuation": screener.FactorResult(50.0, [])}, []),
+    ])
+    screener.save_leaderboard(lb)
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+
+    tables = [str(df.value.to_dict()) for df in at.dataframe]
+    assert any("Apple Inc" in t for t in tables)
+    # A missing profile must degrade to a dash, not a blank or a crash.
+    assert any("—" in t for t in tables)
+
+
 def test_leaderboard_flags_stale_scores_instead_of_showing_them_as_current():
     # The job is weekly and the cache holds 3 weeks, so a missed run would leave
     # old scores looking exactly like fresh ones — the trap that hid an 11-day-old

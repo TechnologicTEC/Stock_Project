@@ -651,13 +651,37 @@ def test_save_and_retrieve_score_history():
 # screener_scores table.
 # --------------------------------------------------------------------------
 
-def _sr(ticker, score, factors=None):
+def _sr(ticker, score, factors=None, name=None):
     return screener.ScreenerResult(
         ticker=ticker, overall_score=score,
         recommendation=screener._recommendation_for(score) if score is not None else "No data",
         factors={k: screener.FactorResult(score=v, reasons=[]) for k, v in (factors or {}).items()},
-        data_errors=[],
+        data_errors=[], company_name=name,
     )
+
+
+def test_leaderboard_carries_the_company_name():
+    lb = screener.build_leaderboard([
+        _sr("AAPL", 80.0, name="Apple Inc"),
+        _sr("ZZZZ", 60.0),                       # profile fetch failed -> no name
+    ])
+    assert lb["rows"][0]["name"] == "Apple Inc"
+    assert lb["rows"][1]["name"] is None         # absent, not an empty string or the ticker
+
+
+def test_gather_raw_data_keeps_the_name_from_the_profile_it_already_fetches():
+    # The name is free: _gather_raw_data already pulls profile:{ticker} for sector
+    # classification and was discarding everything but "sector".
+    profile = {"name": "Apple Inc", "sector": "Technology"}
+    with patch("engine.screener.finnhub_client.get_company_profile", return_value=profile), \
+         patch("engine.screener.finnhub_client.get_basic_financials", return_value={"metric": {}}), \
+         patch("engine.screener.finnhub_client.get_recommendation_trends", return_value=[]), \
+         patch("engine.screener.finnhub_client.get_price_target", return_value=None), \
+         patch("engine.screener.finnhub_client.get_insider_sentiment", return_value={"data": []}), \
+         patch("engine.screener.price_history.get_history_df", return_value=pd.DataFrame()):
+        raw = screener._gather_raw_data("AAPL")
+    assert raw.company_name == "Apple Inc"
+    assert raw.sector_bucket == "Technology / Software"   # sector still classified as before
 
 
 def test_build_leaderboard_ranks_and_keeps_only_scored_names():

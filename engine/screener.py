@@ -318,6 +318,10 @@ class TickerRawData:
     sector_bucket: str          # one of SECTOR_KEYWORDS's keys, or DEFAULT_SECTOR_BUCKET
     raw_industry: str | None    # Finnhub's finnhubIndustry string as-is, for display/debugging
     errors: list[str]
+    # Display only — never scored. Comes free from the profile already fetched for
+    # sector classification. Defaulted so the historical reconstruction path (which
+    # builds this without a name) keeps working unchanged.
+    company_name: str | None = None
 
 
 @dataclass
@@ -327,6 +331,7 @@ class ScreenerResult:
     recommendation: str
     factors: dict[str, FactorResult]
     data_errors: list[str]
+    company_name: str | None = None    # display only; defaulted so existing callers are unaffected
 
 
 # --------------------------------------------------------------------------
@@ -598,19 +603,20 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
     except Exception as exc:
         errors.append(f"insider sentiment: {exc}")
 
-    raw_industry = None
+    raw_industry = company_name = None
     try:
         profile = cache.get_or_fetch(
             f"profile:{ticker}", PROFILE_TTL_SECONDS, lambda: finnhub_client.get_company_profile(ticker)
         )
         raw_industry = (profile or {}).get("sector")  # finnhub_client maps finnhubIndustry -> "sector"
+        company_name = (profile or {}).get("name")    # free — same profile call, for display
     except Exception as exc:
         errors.append(f"company profile (for sector classification): {exc}")
     sector_bucket = classify_sector_bucket(raw_industry)
 
     return TickerRawData(
         ticker, fundamentals, price_df, recommendation, price_target, insider_mspr,
-        sector_bucket, raw_industry, errors,
+        sector_bucket, raw_industry, errors, company_name,
     )
 
 
@@ -1022,6 +1028,7 @@ def screen_tickers(tickers: list[str]) -> list[ScreenerResult]:
                 recommendation=_recommendation_for(overall),
                 factors=factors,
                 data_errors=raw_by_ticker[t].errors,
+                company_name=raw_by_ticker[t].company_name,
             )
         )
 
@@ -1128,6 +1135,7 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
         {
             "rank": i,
             "ticker": r.ticker,
+            "name": r.company_name,          # display only; None if the profile fetch failed
             "score": round(r.overall_score, 1),
             "recommendation": r.recommendation,
             "factor_scores": {name: (round(fr.score, 1) if fr.score is not None else None)

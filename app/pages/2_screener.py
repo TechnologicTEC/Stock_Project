@@ -99,8 +99,8 @@ def _render_leaderboard() -> None:
         factor_labels = screener.FACTOR_LABELS
         table = []
         for r in show:
-            row = {"#": r["rank"], "Ticker": r["ticker"], "Score": r["score"],
-                   "Rating": r["recommendation"]}
+            row = {"#": r["rank"], "Ticker": r["ticker"], "Name": r.get("name") or "—",
+                   "Score": r["score"], "Rating": r["recommendation"]}
             for fname, flabel in factor_labels.items():
                 row[flabel] = (r.get("factor_scores") or {}).get(fname)
             table.append(row)
