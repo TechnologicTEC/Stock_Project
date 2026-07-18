@@ -1,4 +1,4 @@
-name: S&P 500 leaderboard (live screen, Mon/Wed/Fri NZ)
+name: S&P 500 leaderboard (live screen, weekly)
 
 # Runs the LIVE screener across the whole S&P 500 and caches the ranked result,
 # so the Screener page can show "highest-scoring names right now" without a
@@ -13,17 +13,24 @@ name: S&P 500 leaderboard (live screen, Mon/Wed/Fri NZ)
 
 on:
   schedule:
-    # 13:10 UTC on Sun/Tue/Thu -> lands NZ Mon/Wed/Fri at 01:10 (NZST) / 02:10
-    # (NZDT). The run takes 1.5-3h, so it finishes ~04:00-05:00 NZ — done before
-    # the owner (NZ) wakes, which is the whole point of this slot.
+    # WEEKLY: 13:10 UTC every Sunday -> NZ Monday 01:10 (NZST) / 02:10 (NZDT).
+    # The run takes 1.5-3h, so it finishes ~04:00-05:00 NZ — ready before the
+    # owner (NZ) wakes, at the start of their week.
     #
-    # Why it can't be "after today's US close" AND ready overnight in NZ: the 4pm
-    # ET close is ~08:00 NZ, i.e. NZ *morning*. During NZ night the freshest
-    # COMPLETED close is always the previous session's, so this run picks up
-    # Fri/Mon/Wed closes respectively — the freshest data that exists at that hour,
-    # not stale data. (Verified against Pacific/Auckland + America/New_York for
-    # both NZST and NZDT.)
-    - cron: "10 13 * * 0,2,4"
+    # Weekly, not daily, on purpose: the ranking barely moves day to day
+    # (fundamentals update quarterly; only price and news shift), and each run
+    # costs ~2h of Actions minutes — 3x/week was ~24h/month against a 2,000-minute
+    # free-tier budget already shared with warm-cache and creator-signals.
+    #
+    # Sunday specifically: it lands NZ Monday morning on FRIDAY's close, and over
+    # the weekend no newer close exists — so the weekly slot costs no freshness at
+    # all. (Running it midweek would give fresher data but land on a day you're
+    # less likely to be planning from.)
+    #
+    # Note it can't both follow *today's* US close and be ready overnight in NZ:
+    # the 4pm ET close is ~08:00 NZ, i.e. NZ morning. Verified against
+    # Pacific/Auckland + America/New_York for both NZ offsets.
+    - cron: "10 13 * * 0"
   workflow_dispatch:
     inputs:
       universe_every:

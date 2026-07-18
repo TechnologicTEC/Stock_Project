@@ -1104,7 +1104,11 @@ def get_score_history(ticker: str) -> list[dict]:
 # --------------------------------------------------------------------------
 
 LEADERBOARD_CACHE_KEY = "leaderboard:sp500"
-LEADERBOARD_TTL_SECONDS = 7 * 24 * 60 * 60      # a daily job refreshes it; a week's grace if it stalls
+# 21 days, not 7. The job runs WEEKLY, so a 7-day TTL would leave zero slack: one
+# skipped or failed run and the leaderboard silently disappears from the page. Three
+# weeks means a couple of misses degrade to "this is getting old" (the page shows
+# generated_at) rather than to nothing at all.
+LEADERBOARD_TTL_SECONDS = 21 * 24 * 60 * 60
 
 
 def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500") -> dict:

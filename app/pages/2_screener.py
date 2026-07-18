@@ -3,6 +3,7 @@ Investment Screener (Section 6.1). Streamlit only — all the scoring logic
 lives in engine/screener.py; this file is forms, tables, and charts.
 """
 import sys
+from datetime import date
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -28,8 +29,8 @@ st.caption(
 )
 
 # --------------------------------------------------------------------------
-# S&P 500 leaderboard — today's live screen of the whole index, ranked. Produced
-# by the daily batch job (scripts/screen_universe.py); this only reads it. The
+# S&P 500 leaderboard — a live screen of the whole index, ranked. Produced by the
+# weekly batch job (scripts/screen_universe.py); this only reads it. The
 # honest framing is the whole point: this ranking is exactly what the
 # cross-sectional validation measured, so its measured IC sits right beside it.
 # --------------------------------------------------------------------------
@@ -47,7 +48,27 @@ def _render_leaderboard() -> None:
             return
 
         rows = lb.get("rows", [])
-        st.caption(f"Live screen of {lb.get('n_scored', len(rows))} S&P 500 names · run {lb.get('generated_at', '—')}")
+        # Show the AGE, not just the date. The job is weekly and the cache holds
+        # for three weeks, so a missed run can leave stale scores on screen looking
+        # exactly like fresh ones — the same trap that hid an 11-day-old FX rate.
+        generated = lb.get("generated_at")
+        age_days = None
+        if generated:
+            try:
+                age_days = (date.today() - date.fromisoformat(generated)).days
+            except (TypeError, ValueError):
+                age_days = None
+        age_txt = "" if age_days is None else (
+            " · today" if age_days == 0 else f" · {age_days} day{'s' if age_days != 1 else ''} ago")
+        st.caption(f"Live screen of {lb.get('n_scored', len(rows))} S&P 500 names · "
+                   f"run {generated or '—'}{age_txt} (refreshes weekly)")
+        if age_days is not None and age_days > 10:
+            st.warning(
+                f"**These scores are {age_days} days old** — the weekly refresh looks like it hasn't run. "
+                "Prices and news have moved since; re-run the **S&P 500 leaderboard** Action for a current "
+                "ranking.",
+                icon="🕒",
+            )
 
         # The measured track record of THIS ranking, pulled from the universe
         # validation. Shown up front so "highest-scoring" can't be misread as

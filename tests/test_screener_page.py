@@ -3,6 +3,7 @@ Exercises app/pages/2_screener.py itself via Streamlit's AppTest framework.
 engine/screener.py's scoring math already has thorough coverage in
 test_screener.py; what these tests catch is UI-wiring mistakes.
 """
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -157,6 +158,41 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     assert "not a prediction" in blob.lower()     # ...with the honest framing
     # the ranked names reached a dataframe on the page
     assert any("AAA" in str(df.value.to_dict()) for df in at.dataframe)
+
+
+def test_leaderboard_flags_stale_scores_instead_of_showing_them_as_current():
+    # The job is weekly and the cache holds 3 weeks, so a missed run would leave
+    # old scores looking exactly like fresh ones — the trap that hid an 11-day-old
+    # FX rate. The page must call the age out.
+    lb = screener.build_leaderboard([
+        screener.ScreenerResult("AAA", 70.0, "Buy",
+                                {"valuation": screener.FactorResult(70.0, [])}, []),
+    ])
+    lb["generated_at"] = (date.today() - timedelta(days=17)).isoformat()
+    screener.save_leaderboard(lb)
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    blob = " ".join(getattr(w, "value", "") for w in at.warning)
+    assert "17 days old" in blob
+    assert any("17 days ago" in c.value for c in at.caption)
+
+
+def test_leaderboard_does_not_cry_stale_for_a_fresh_run():
+    lb = screener.build_leaderboard([
+        screener.ScreenerResult("AAA", 70.0, "Buy",
+                                {"valuation": screener.FactorResult(70.0, [])}, []),
+    ])
+    lb["generated_at"] = (date.today() - timedelta(days=2)).isoformat()
+    screener.save_leaderboard(lb)
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    blob = " ".join(getattr(w, "value", "") for w in at.warning)
+    assert "days old" not in blob                 # 2 days is normal for a weekly job
+    assert any("2 days ago" in c.value for c in at.caption)
 
 
 def test_screener_page_shows_known_limitations_banner():
