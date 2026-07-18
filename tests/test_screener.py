@@ -5,8 +5,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pytest
-
 from engine import screener
 
 
@@ -646,6 +644,58 @@ def test_save_and_retrieve_score_history():
     assert history[0]["overall_score"] == 82.5
     assert history[0]["recommendation"] == "Strong Buy"
     assert history[0]["sub_scores"]["valuation"]["score"] == 90.0
+
+
+# --------------------------------------------------------------------------
+# Universe leaderboard — global (shared-cache) ranked screen, not the user-scoped
+# screener_scores table.
+# --------------------------------------------------------------------------
+
+def _sr(ticker, score, factors=None):
+    return screener.ScreenerResult(
+        ticker=ticker, overall_score=score,
+        recommendation=screener._recommendation_for(score) if score is not None else "No data",
+        factors={k: screener.FactorResult(score=v, reasons=[]) for k, v in (factors or {}).items()},
+        data_errors=[],
+    )
+
+
+def test_build_leaderboard_ranks_and_keeps_only_scored_names():
+    # Deliberately NOT pre-sorted — chunked batch jobs concatenate out of order,
+    # so build_leaderboard must sort best-first itself.
+    results = [
+        _sr("BBB", 61.0, {"valuation": 55.0, "sentiment": None}),
+        _sr("ZZZ", None),                          # unscoreable -> dropped, not ranked
+        _sr("AAA", 88.0, {"valuation": 90.0, "sentiment": 70.0}),
+    ]
+    lb = screener.build_leaderboard(results)
+    assert lb["universe"] == "sp500"
+    assert lb["n_requested"] == 3 and lb["n_scored"] == 2
+    assert [r["ticker"] for r in lb["rows"]] == ["AAA", "BBB"]   # sorted, ZZZ dropped
+    assert [r["rank"] for r in lb["rows"]] == [1, 2]
+    top = lb["rows"][0]
+    assert top["score"] == 88.0 and top["recommendation"] == "Strong Buy"
+    assert top["factor_scores"]["valuation"] == 90.0
+    assert lb["rows"][1]["factor_scores"]["sentiment"] is None   # missing factor stays None, not 0
+
+
+def test_build_leaderboard_from_chunks_matches_one_big_call():
+    # The property the chunked batch job relies on: order of arrival can't change
+    # the ranking (true under ABSOLUTE scoring, where scores are independent).
+    everyone = [_sr(f"T{i}", float(i)) for i in range(20)]
+    one_call = screener.build_leaderboard(everyone)
+    chunked = screener.build_leaderboard(everyone[13:] + everyone[:13])   # shuffled into "chunks"
+    assert [r["ticker"] for r in one_call["rows"]] == [r["ticker"] for r in chunked["rows"]]
+
+
+def test_leaderboard_round_trips_through_the_shared_cache():
+    payload = screener.build_leaderboard([_sr("AAA", 75.0), _sr("BBB", 40.0)])
+    assert screener.load_leaderboard() is None                  # nothing stored yet
+    screener.save_leaderboard(payload)
+    back = screener.load_leaderboard()
+    assert back == payload
+    import json
+    json.dumps(back)                                            # must stay JSON-serialisable
 
 
 def test_save_results_skips_tickers_with_no_score():

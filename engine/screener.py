@@ -1085,3 +1085,64 @@ def get_score_history(ticker: str) -> list[dict]:
             }
             for r in rows
         ]
+
+
+# --------------------------------------------------------------------------
+# Universe leaderboard — today's live screen of a broad universe, ranked.
+#
+# save_results (above) writes to screener_scores, which is USER-SCOPED: each
+# user only sees their own rows. A leaderboard of the S&P 500 is the SAME for
+# everyone, so it lives in the shared cache as one blob instead — like
+# screener_validation's universe result. Produced by a batch job
+# (scripts/screen_universe.py); the page only reads it.
+#
+# Honesty, carried in the payload so the UI can't quietly drop it: this ranking
+# is exactly what the cross-sectional IC measured (~+0.05). The top of the list
+# is where the screener is *most positive right now*, NOT a prediction those
+# names will outperform. Two of the six factors (sentiment, analyst) are live-only
+# and were never validated historically, so they ride on top of a 4-factor core.
+# --------------------------------------------------------------------------
+
+LEADERBOARD_CACHE_KEY = "leaderboard:sp500"
+LEADERBOARD_TTL_SECONDS = 7 * 24 * 60 * 60      # a daily job refreshes it; a week's grace if it stalls
+
+
+def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500") -> dict:
+    """A compact, JSON-friendly ranked payload from live screen results.
+
+    Keeps only what a leaderboard shows (ticker, score, recommendation, per-factor
+    scores) — not the full reasons text, which would bloat 500 rows. Unscoreable
+    names are dropped rather than shown with an empty score.
+
+    Sorts best-first itself rather than trusting the input order, so a batch job
+    can screen in chunks and concatenate — under ABSOLUTE scoring each ticker's
+    score is independent of the others, so chunked results rank identically to one
+    big call."""
+    scored = sorted((r for r in results if r.overall_score is not None),
+                    key=lambda r: -r.overall_score)
+    ranked = [
+        {
+            "rank": i,
+            "ticker": r.ticker,
+            "score": round(r.overall_score, 1),
+            "recommendation": r.recommendation,
+            "factor_scores": {name: (round(fr.score, 1) if fr.score is not None else None)
+                              for name, fr in r.factors.items()},
+        }
+        for i, r in enumerate(scored, start=1)
+    ]
+    return {
+        "universe": universe,
+        "generated_at": date.today().isoformat(),
+        "n_scored": len(ranked),
+        "n_requested": len(results),
+        "rows": ranked,
+    }
+
+
+def save_leaderboard(payload: dict) -> None:
+    cache.set_value(LEADERBOARD_CACHE_KEY, payload)
+
+
+def load_leaderboard() -> dict | None:
+    return cache.get_value(LEADERBOARD_CACHE_KEY, ttl_seconds=LEADERBOARD_TTL_SECONDS) or None

@@ -28,6 +28,76 @@ st.caption(
 )
 
 # --------------------------------------------------------------------------
+# S&P 500 leaderboard — today's live screen of the whole index, ranked. Produced
+# by the daily batch job (scripts/screen_universe.py); this only reads it. The
+# honest framing is the whole point: this ranking is exactly what the
+# cross-sectional validation measured, so its measured IC sits right beside it.
+# --------------------------------------------------------------------------
+
+def _render_leaderboard() -> None:
+    lb = screener.load_leaderboard()
+    with st.expander("🏆 S&P 500 leaderboard — highest-scoring names right now", expanded=False):
+        if not lb:
+            st.info(
+                "No leaderboard yet. Run the **S&P 500 leaderboard** GitHub Action (or "
+                "`python scripts/screen_universe.py`) and the ranking appears here. It live-screens all "
+                "~500 names — including news sentiment and analyst consensus, which the historical "
+                "validation can't reconstruct — so it takes ~an hour and runs as a scheduled job."
+            )
+            return
+
+        rows = lb.get("rows", [])
+        st.caption(f"Live screen of {lb.get('n_scored', len(rows))} S&P 500 names · run {lb.get('generated_at', '—')}")
+
+        # The measured track record of THIS ranking, pulled from the universe
+        # validation. Shown up front so "highest-scoring" can't be misread as
+        # "will go up".
+        uni = screener_validation.load_universe_result()
+        ic = (uni or {}).get("overall", {}).get("mean_ic") if uni else None
+        if ic is not None:
+            o = uni["overall"]
+            sig = "distinguishable from zero" if o.get("significant") else "**not** statistically distinguishable from zero"
+            st.warning(
+                f"**What this ranking is worth.** Across the S&P 500 this exact score has a cross-sectional "
+                f"information coefficient of **{ic:+.3f}** (t={o.get('t_stat')}, hit rate "
+                f"{o.get('hit_rate')}) — a *faint tilt*, {sig}. The top of the list is where the screener "
+                "is **most positive right now**, not a prediction these names will outperform. Not financial "
+                "advice.",
+                icon="📉",
+            )
+        else:
+            st.warning(
+                "**Not a buy list.** These are the names the screener rates highest right now — a ranking, "
+                "not a prediction. Run the S&P 500 validation to see how predictive this ordering has "
+                "actually been. Not financial advice.",
+                icon="📉",
+            )
+
+        top_n = st.radio("Show", [10, 20, 50], horizontal=True, index=1, key="lb_top_n")
+        show = rows[:top_n]
+        factor_labels = screener.FACTOR_LABELS
+        table = []
+        for r in show:
+            row = {"#": r["rank"], "Ticker": r["ticker"], "Score": r["score"],
+                   "Rating": r["recommendation"]}
+            for fname, flabel in factor_labels.items():
+                row[flabel] = (r.get("factor_scores") or {}).get(fname)
+            table.append(row)
+        st.dataframe(
+            pd.DataFrame(table).style.format({"Score": "{:.1f}", **{v: "{:.0f}" for v in factor_labels.values()}},
+                                             na_rep="—"),
+            width="stretch", hide_index=True,
+        )
+        st.caption(
+            "Sentiment and Analyst are **live-only** factors — they're not in the historical IC above, which "
+            "covers the fundamentals-plus-momentum core. Add a name to your watchlist above to screen it in "
+            "full with its factor reasons."
+        )
+
+
+_render_leaderboard()
+
+# --------------------------------------------------------------------------
 # Candidate list management
 # --------------------------------------------------------------------------
 

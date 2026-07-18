@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from engine import cache, screener, watchlist
+from engine import cache, screener, screener_validation, watchlist
 
 
 @pytest.fixture(autouse=True)
@@ -124,6 +124,39 @@ def test_screener_page_shows_validation_track_record_when_available():
         next(b for b in at2.button if "Run screener" in b.label).click()
         at2.run(timeout=30)
     assert any("Not validated yet" in c.value for c in at2.caption)
+
+
+def test_leaderboard_shows_empty_prompt_when_no_run_stored():
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    assert any("No leaderboard yet" in el.value for el in at.info)
+
+
+def test_leaderboard_renders_ranking_with_the_measured_ic():
+    # Store a leaderboard AND its validation record; the page must show the ranking
+    # and staple the IC to it so it can't read as a buy list.
+    lb = screener.build_leaderboard([
+        screener.ScreenerResult("AAA", 88.0, "Strong Buy",
+                                {"valuation": screener.FactorResult(90.0, [])}, []),
+        screener.ScreenerResult("BBB", 55.0, "Hold",
+                                {"valuation": screener.FactorResult(50.0, [])}, []),
+    ])
+    screener.save_leaderboard(lb)
+    screener_validation.save_universe_result({
+        "overall": {"mean_ic": 0.046, "t_stat": 2.17, "hit_rate": 0.69, "significant": False},
+        "factor_ic": {}, "n_tickers": 499, "horizon_days": 91,
+    })
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+
+    blob = " ".join(w.value for w in at.markdown) + " ".join(getattr(w, "value", "") for w in at.warning)
+    assert "+0.046" in blob                       # the measured IC is shown...
+    assert "not a prediction" in blob.lower()     # ...with the honest framing
+    # the ranked names reached a dataframe on the page
+    assert any("AAA" in str(df.value.to_dict()) for df in at.dataframe)
 
 
 def test_screener_page_shows_known_limitations_banner():

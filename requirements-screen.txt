@@ -1,0 +1,19 @@
+# Deps for the daily universe leaderboard (scripts/screen_universe.py) in CI.
+# Not the full requirements.txt — no Streamlit UI stack — but this job runs the
+# LIVE screener across ~500 names, so it needs the whole scoring stack: the
+# technicals for momentum, SEC/news parsing, AND FinBERT for the sentiment factor
+# (the warm-cache job's torch/transformers, which validate-universe didn't need).
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pandas>=2.2
+numpy>=2.0
+pandas-ta-classic>=0.6   # screener technicals — momentum factor (engine/screener.py)
+python-dotenv>=1.0
+requests>=2.31
+beautifulsoup4>=4.12     # Google News RSS + SEC parsing
+lxml>=5.0                # the parser BeautifulSoup(..., "xml") requires
+finnhub-python>=2.4      # fundamentals + analyst consensus + company news
+yfinance>=0.2            # price_history imports the client at module load
+alpaca-py>=0.30          # the pinned price source (PRICE_HISTORY_SOURCE=alpaca)
+transformers>=4.40       # FinBERT news sentiment
+torch>=2.0               # FinBERT backend (CPU wheel installed by the workflow)

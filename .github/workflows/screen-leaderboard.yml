@@ -1,0 +1,70 @@
+name: S&P 500 leaderboard (live screen, Mon/Wed/Fri NZ)
+
+# Runs the LIVE screener across the whole S&P 500 and caches the ranked result,
+# so the Screener page can show "highest-scoring names right now" without a
+# 500-stock screen on a page request. All six factors, including FinBERT news
+# sentiment and Finnhub analyst consensus (both work from a datacenter — it's
+# only their HISTORICAL sources that are blocked, which is validate-universe's
+# problem, not this one). See scripts/screen_universe.py.
+#
+# The page shows this ranking's measured cross-sectional IC (~+0.05) right beside
+# it, so it reads as a faint tilt rather than a buy list — the honesty lives in
+# the UI, not here.
+
+on:
+  schedule:
+    # 13:10 UTC on Sun/Tue/Thu -> lands NZ Mon/Wed/Fri at 01:10 (NZST) / 02:10
+    # (NZDT). The run takes 1.5-3h, so it finishes ~04:00-05:00 NZ — done before
+    # the owner (NZ) wakes, which is the whole point of this slot.
+    #
+    # Why it can't be "after today's US close" AND ready overnight in NZ: the 4pm
+    # ET close is ~08:00 NZ, i.e. NZ *morning*. During NZ night the freshest
+    # COMPLETED close is always the previous session's, so this run picks up
+    # Fri/Mon/Wed closes respectively — the freshest data that exists at that hour,
+    # not stale data. (Verified against Pacific/Auckland + America/New_York for
+    # both NZST and NZDT.)
+    - cron: "10 13 * * 0,2,4"
+  workflow_dispatch:
+    inputs:
+      universe_every:
+        description: "Take every Nth name (1 = all ~500, 5 = a ~100-name sample for a quick test)"
+        required: false
+        default: "1"
+
+concurrency: screen-leaderboard   # never overlap runs
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    # Measured, not guessed: _gather_raw_data is ~3s/ticker but the SENTIMENT
+    # factor (news fetch + FinBERT inference) dominates at ~10-13s/ticker, so 500
+    # names is ~1.5-3h depending on how warm news_cache is. 300 keeps headroom
+    # under GitHub's 360-minute ceiling. If it does time out, just re-run: headlines
+    # and their FinBERT scores are cached per ticker, so the second pass is far
+    # faster even though screen_tickers itself isn't resumable.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      # FinBERT weights (~400 MB) — cache so only the first run downloads them.
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-finbert-prosusai
+      # CPU-only torch, before requirements so its torch>=2.0 line is satisfied.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-screen.txt
+      - name: Screen the S&P 500 + cache the leaderboard
+        env:
+          DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}   # BYPASSRLS role; leaderboard is a shared blob
+          PRICE_HISTORY_SOURCE: "alpaca"   # match the app's provider (engine/price_history.canonical_source)
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC requires an identifying UA
+          UNIVERSE_EVERY: ${{ inputs.universe_every }}
+        run: python scripts/screen_universe.py
