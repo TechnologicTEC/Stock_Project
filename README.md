@@ -15,7 +15,124 @@ DEPLOY.md. The Space must be PUBLIC with Google OIDC configured (AUTH_* secrets)
 a private Space can't serve Streamlit's static assets, and a public one without
 login would expose the owner account (use REQUIRE_LOGIN=1 as an interim). -->
 
-# Investment Platform — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 3.5 + Phase 4 + Phase 5
+# Investment Co-Pilot
+
+A personal, multi-user investment research tool — browser-based, running entirely
+on free-tier data, deployed live. It scores stocks with an explainable factor
+model, then honestly measures whether that score has actually predicted anything.
+
+**It now has an answer: a small, marginally-significant edge — and a documented
+list of things that didn't work.**
+
+> Personal, educational tool. **Not financial advice**, and nothing here places
+> trades with real money.
+
+`Python 3.11` · `Streamlit` · `SQLAlchemy 2.0 + Alembic` · `Postgres/Supabase`
+· `Hugging Face Spaces (Docker + Google OIDC)` · 10 pages · ~9,700 LOC of engine
+code · **649 tests** · 4 scheduled GitHub Actions
+
+---
+
+## The 30-second version
+
+**What it does**
+
+| Page | What it's for |
+|---|---|
+| **Portfolio** | Holdings, valuation, allocation, cash, transactions, CSV import, value-over-time, USD/NZD |
+| **Screener** | Explainable 6-factor score (valuation, growth, profitability, momentum, sentiment, analyst) → Strong Buy…Strong Sell, with per-factor reasons and sector-adjusted thresholds — plus a weekly ranked **S&P 500 leaderboard** |
+| **Validation** | Walk-forward backtest that reconstructs each past score point-in-time and measures its information coefficient — with error bars, effective sample size, and multiple-comparison correction |
+| **Health** | Beta, Sharpe, drawdown, concentration, rule-based flags |
+| **Projections** | Monte Carlo ranges — explicitly not forecasts |
+| **Backtest** | Vectorised, no-look-ahead technical backtester vs buy-&-hold and SPY |
+| **Paper Trading** | Alpaca paper account — positions, order ticket, cancels |
+| **News & Earnings** | FinBERT headline sentiment; SEC 8-K press-release key-figure extraction |
+| **AI Assistant** | Deterministic intent router (17 tools), with Gemini as an optional free-form layer |
+| **Creator Signals** | Auto-scans a YouTuber's uploads → transcript → LLM ticker extraction → screener → repeat-mention leaderboard + email digest |
+
+**Where the data comes from** (all free tier): Finnhub · yfinance/Alpaca · SEC
+EDGAR XBRL · FRED · ECB · Google News RSS · GDELT via BigQuery · YouTube Data API
++ Supadata. ML: FinBERT (sentiment), Gemini (chat + ticker extraction).
+
+**Multi-user**: owner/friend/guest roles, Postgres RLS + ORM-level user scoping, a
+least-privilege `NOBYPASSRLS` runtime role, and a Fernet-encrypted per-user
+API-key vault.
+
+## What it found
+
+Across **499 S&P 500 names over five years** (30,096 point-in-time
+reconstructions), the composite score has a cross-sectional information
+coefficient of **+0.046 (t = 2.17)**, positive on 69% of dates. Real, but faint —
+roughly what professional equity factor models achieve, and nothing like a stock
+picker. About **two-thirds is genuine stock selection**; the rest is sector tilt.
+
+Two findings that changed the roadmap:
+
+- **The composite works; none of its four measurable factors does** (all inside
+  the noise band). It's an ensemble of weak signals — so factor reweighting was
+  **rejected on evidence** rather than opinion.
+- **Two pre-registered scoring changes were tested and both failed**, one
+  significantly worse. Absolute, sector-aware curves beat both cross-sectional and
+  sector-relative percentile scoring. The 2016–2021 holdout was never spent.
+  Full write-up: [`docs/scoring-experiment-plan.md`](docs/scoring-experiment-plan.md).
+
+## What's actually hard about it
+
+1. **Free-tier data is a minefield, and every hole is silent.** Finnhub free
+   returns no past EPS actuals, so beat/miss is permanently empty (fell back to
+   8-K press-release sentiment). FRED's FX lagged 11 days and quietly made NZD
+   totals ~1% wrong. ETFs and non-US filers have no SEC XBRL, so whole factors go
+   blank.
+2. **Point-in-time correctness.** Validating honestly means reconstructing what
+   you'd have known *on that date* — SEC facts by filed date, prices as-of, no
+   restated figures. That's the difference between a backtest and a lie, and no
+   free vendor sells it, so it's rebuilt from raw XBRL.
+3. **Cloud IPs are second-class citizens.** YouTube blocks its caption endpoint
+   from every major cloud — 15/15 videos blocked from a GitHub runner, all working
+   from a laptop. Yahoo blocks datacenter IPs too, which silently cost an
+   entire factor in CI until it was measured.
+4. **Multi-tenancy.** Supabase auto-enables RLS on new tables; with no policy the
+   app role could neither read nor write — and the *read* failure was completely
+   silent. The page would have stayed empty forever with no error.
+5. **LLM quota economics.** Gemini free tier is 20 requests/day and each chat
+   question spends 2–3. Every headline feature therefore works without the LLM,
+   with the LLM as a bonus.
+6. **Honesty engineering.** A tool that says "Buy" invites false confidence on
+   data that doesn't deserve it. Projections are ranges; news is "context, not
+   cause"; creator mentions are "attention, not endorsement"; and the screener's
+   rating carries its own measured track record — including, bluntly, "this score
+   has worked against you for this ticker."
+7. **Measuring your own tool without fooling yourself** — harder than the
+   engineering, and every trap got walked into first. Rank correlation is
+   invariant to monotonic rescaling, so "tuning the 0–100 curves" is provably a
+   no-op. Overlapping return windows made the sample ~3.5× smaller than it looked.
+   Testing six factors at once carries a ~26% chance of a false positive — and one
+   duly appeared. The obvious experiment (compare two ICs) could only have
+   detected an effect *larger than the entire effect being studied*.
+8. **The recurring lesson: degrade gracefully, but never silently** — and never
+   let a number look more certain than it is. The nastiest bugs all wore
+   disguises: a swallowed exception made a bad API key look like an IP block; a
+   company-name mismatch made news sentiment blank with no error; a leaked `.env`
+   broke 33 tests while every "did it crash?" assertion passed.
+
+## Read more
+
+Everything below is the long version — design decisions, methodology, and the
+bugs worth knowing about.
+
+- [Running it](#running-it) · [Automated tests](#running-the-automated-tests-no-api-keys-needed) · [Accounts, logins & per-user keys](#accounts-logins--per-user-keys-see-multiuserplanmd)
+- [How the screener actually scores things](#how-the-screener-actually-scores-things-revised-twice-now-both-times-from-real-world-testing) — the factor curves, and why they were revised twice from real-world testing
+- [Validating the screener, point-in-time](#validating-the-screener-point-in-time-edgar-reconstruction) — the EDGAR reconstruction
+- [How portfolio health is computed](#how-portfolio-health-is-computed-section-64) · [Projections, and why they're a range](#how-forward-looking-projections-work-section-611--and-why-theyre-a-range-not-a-prediction) · [Backtesting, honestly](#backtesting-honestly-phase-5-section-67)
+- [News & Earnings Analyzer](#news--earnings-analyzer-sections-62--65-phase-4) · [Sell support, transactions & the wallet](#sell-support-transaction-consistency-and-the-wallet-section-610-phase-35)
+- War stories: [a units bug](#a-units-bug-worth-knowing-about) · [an endpoint that vanished mid-build](#a-free-tier-endpoint-that-disappeared-mid-build) · [why a factor shows "no data"](#if-a-factor-keeps-showing-no-data-available)
+- [The one rule everything follows](#the-one-rule-everything-above-follows)
+
+Deployment steps and required secrets: [`DEPLOY.md`](DEPLOY.md).
+
+---
+
+## Build history
 
 Phase 0 (Section 7): data plumbing. Phase 1: Portfolio Dashboard. Phase 2:
 the Investment Screener — explainable weighted-factor scoring. Phase 3:
@@ -28,7 +145,10 @@ FinBERT sentiment, plus SEC 8-K earnings press releases and Finnhub
 beat/miss numbers. Phase 5 (Section 6.7): the Backtesting Engine — a
 vectorized, no-look-ahead pandas backtester for technical strategies,
 benchmarked against buy-&-hold and SPY (see the honesty note below on why
-it doesn't backtest the fundamental screener).
+it doesn't backtest the fundamental screener). Phases 6–7: Paper Trading
+and the AI Chat Assistant. Since then, off-blueprint: multi-user auth +
+Supabase, deployment to Hugging Face, Creator Signals, the S&P 500
+leaderboard, and the cross-sectional validation work described above.
 
 ## What's here
 
@@ -47,7 +167,9 @@ investment-platform/
 │       ├── 6_validation.py      # Screener Validation (point-in-time walk-forward)
 │       ├── 7_paper_trading.py   # Paper Trading via Alpaca (Section 6.8)
 │       ├── 8_chat.py            # AI Chat Assistant (Section 6.6)
-│       └── 9_settings.py        # Per-user API keys (multi-user, Phase C)
+│       ├── 9_settings.py        # Per-user API keys (multi-user, Phase C)
+│       └── 10_creator_signals.py # Creator Signals — YouTube → transcript →
+│                                #   ticker extraction → screener
 ├── db/
 │   ├── models.py        # SQLAlchemy models — the Section 8 schema, plus
 │   │                    #   ApiCache (generic TTL cache), an `asset_type`
@@ -916,8 +1038,20 @@ done, as is **Phase 6** (Paper Trading via Alpaca — the paper account, positio
 order ticket, and cancels) and **Phase 7** (the AI Chat Assistant — the
 tool-calling layer, the template responder, *and* the optional Gemini LLM path
 over the same tools). **That completes the blueprint's build order (Phases 0–7),
-including the chat's LLM stage 2.** The one remaining extension is **deployment**
-(below).
+including the chat's LLM stage 2.**
+
+**Since then (all off-blueprint):** multi-user auth with Google OIDC, the move to
+Supabase Postgres with RLS, **deployment to Hugging Face Spaces** (done — the note
+below is kept for the reasoning), **Creator Signals**, the weekly **S&P 500
+leaderboard**, and the **cross-sectional validation** work — which is where the
+project stopped adding features and started measuring whether the ones it has
+actually work. The honest answer (IC +0.046, no single factor significant, two
+scoring "improvements" that failed) is summarised at the top and written up in
+[`docs/scoring-experiment-plan.md`](docs/scoring-experiment-plan.md).
+
+The next genuinely useful step isn't another feature — it's **replication**: the
++0.046 is marginal (t = 2.17) and deserves a test on a period or universe that
+hasn't been looked at yet.
 
 **Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
 which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target
