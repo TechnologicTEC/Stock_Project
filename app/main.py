@@ -23,21 +23,23 @@ _theme.apply()
 init_db()
 gate("main")  # resolve the signed-in user and scope the DB to them (Phase B)
 
-st.title("📊 Investment Co-Pilot")
-
-st.info(
-    "**This is a personal, educational tool — not financial advice.** "
-    "It runs on free-tier data, which can be delayed, incomplete, or occasionally "
-    "wrong. Don't make real trading decisions based solely on what it shows you.",
-    icon="⚠️",
-)
-
 
 def _money(value) -> str:
     return f"${value:,.2f}" if value is not None else "—"
 
 
 holdings = portfolio.list_holdings()
+
+_theme.page_header(
+    "Your portfolio at a glance",
+    eyebrow="Dashboard",
+    sub=(f"{len(holdings)} holding{'s' if len(holdings) != 1 else ''} tracked" if holdings
+         else "No holdings yet — start on the Holdings page"),
+)
+_theme.advice(
+    "<b>Personal, educational tool — not financial advice.</b> It runs on free-tier data "
+    "that can be delayed, incomplete, or occasionally wrong — don't trade on it alone."
+)
 
 # --------------------------------------------------------------------------
 # Getting started (no holdings yet)

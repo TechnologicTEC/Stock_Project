@@ -17,7 +17,10 @@ def test_main_page_boots_without_exception():
     at = AppTest.from_file(_MAIN)
     at.run(timeout=30)
     assert not at.exception, at.exception
-    assert any("Investment Co-Pilot" in t.value for t in at.title)
+    # Brand now lives in the terminal top bar (markdown), not a giant st.title.
+    body = " ".join(m.value for m in at.markdown)
+    assert "Investment Co-Pilot" in body
+    assert "Dashboard" in body                       # the page-header eyebrow rendered
 
 
 def _summary(total=9461.78, gl=-410.73, pct=-4.82, day=-155.42):
