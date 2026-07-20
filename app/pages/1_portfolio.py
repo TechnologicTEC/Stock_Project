@@ -19,11 +19,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app import _cache
+from app import _theme
 from app._auth import gate
 from db.session import current_user_id, init_db
 from engine import currency, portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()  # safe to call every run - no-op if the schema's already current
 gate("portfolio")  # resolve the signed-in user and scope the DB to them (Phase B)
 portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load

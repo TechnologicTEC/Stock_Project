@@ -11,6 +11,7 @@ from datetime import date
 import streamlit as st
 
 from app import _cache
+from app import _theme
 from app._auth import gate
 from db.session import current_user_id, init_db
 from engine import creator_signals, portfolio
@@ -18,6 +19,7 @@ from engine import creator_signals, portfolio
 _EARNINGS_HOUR = {"bmo": "before open", "amc": "after close"}
 
 st.set_page_config(page_title="Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("main")  # resolve the signed-in user and scope the DB to them (Phase B)
 

@@ -1,0 +1,14 @@
+# "Honest terminal" theme — dark blue-ink ground with a single amber accent
+# (terminal heritage, deliberately not the near-black + acid-green cliché).
+# This sets Streamlit's base tokens; app/_theme.py layers the rest via CSS
+# (monospace data, panel-style metric cards, sidebar nav, badges, etc).
+[theme]
+base = "dark"
+primaryColor = "#e8b24a"              # amber — the one bold hue (buttons, focus, accents)
+backgroundColor = "#0a0e14"           # deep cool ink, not pure black
+secondaryBackgroundColor = "#121924"  # panels, sidebar, inputs
+textColor = "#d1dbe7"                 # cool light grey
+linkColor = "#e8b24a"
+borderColor = "#202b39"               # hairline
+baseRadius = "0.45rem"
+font = "sans-serif"                   # system UI sans; data is forced to monospace in CSS

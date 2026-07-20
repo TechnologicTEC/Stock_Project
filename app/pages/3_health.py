@@ -14,11 +14,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app import _cache
+from app import _theme
 from app._auth import gate
 from db.session import current_user_id, init_db
 from engine import health, news, portfolio, projections
 
 st.set_page_config(page_title="Health — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("health")  # guest-accessible (Phase B) — sets the current user scope
 

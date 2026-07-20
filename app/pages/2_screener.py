@@ -14,11 +14,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app import _theme
 from app._auth import gate
 from db.session import init_db
 from engine import portfolio, screener, screener_validation, watchlist
 
 st.set_page_config(page_title="Screener — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("screener")  # restricted: guests are stopped here (Phase B)
 

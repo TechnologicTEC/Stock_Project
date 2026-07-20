@@ -16,11 +16,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 
+from app import _theme
 from app._auth import gate
 from db.session import init_db
 from engine import chat, chat_llm
 
 st.set_page_config(page_title="Assistant — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("chat")  # guest-accessible (Phase B) — sets the current user scope
 

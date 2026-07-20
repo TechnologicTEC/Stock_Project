@@ -16,11 +16,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from app import _theme
 from app._auth import gate
 from db.session import init_db
 from engine import portfolio, projections, screener_validation as validation, watchlist
 
 st.set_page_config(page_title="Screener Validation — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("validation")  # restricted: guests are stopped here (Phase B)
 

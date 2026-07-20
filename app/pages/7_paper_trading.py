@@ -15,11 +15,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app import _theme
 from app._auth import gate
 from db.session import init_db
 from engine import paper_trading, portfolio, watchlist
 
 st.set_page_config(page_title="Paper Trading — Investment Co-Pilot", page_icon="📊", layout="wide")
+_theme.apply()
 init_db()
 gate("paper_trading")  # restricted: guests are stopped here (Phase B)
 
