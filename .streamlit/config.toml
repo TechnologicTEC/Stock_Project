@@ -3,15 +3,16 @@
 # This sets Streamlit's base tokens; app/_theme.py layers the rest via CSS
 # (monospace data, panel-style metric cards, sidebar nav, badges, etc).
 [theme]
-base = "dark"
-primaryColor = "#e8b24a"              # amber — the one bold hue (buttons, focus, accents)
-# Grey-blue, not near-black: the first cut (#0a0e14) read as harsh and pushed
-# muted text to a 3.65 contrast ratio, under the WCAG AA floor of 4.5. Every tone
-# clears AA on this ground — see the note in app/_theme.py.
-backgroundColor = "#161b26"
-secondaryBackgroundColor = "#1e2531"  # panels, sidebar, inputs
-textColor = "#dde5ef"
-linkColor = "#e8b24a"
-borderColor = "#2c3546"               # hairline
+# LIGHT canvas with a DARK shell: the body is light (long reading sessions on a
+# dark ground are tiring), while the sidebar and top bar stay dark and frame it —
+# app/_theme.py restates those in shell tokens, because Streamlit paints the
+# sidebar with secondaryBackgroundColor and that has to stay light for inputs.
+base = "light"
+primaryColor = "#e8b24a"              # amber fill; carries dark ink, never white (9.61 vs 1.93)
+backgroundColor = "#f6f7f9"
+secondaryBackgroundColor = "#eef1f5"  # inputs, code, table headers
+textColor = "#18202b"
+linkColor = "#8a5f0f"                 # amber darkened until it passes AA on white
+borderColor = "#e3e7ed"
 baseRadius = "0.45rem"
 font = "sans-serif"                   # system UI sans; data is forced to monospace in CSS
