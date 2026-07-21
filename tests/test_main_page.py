@@ -55,10 +55,13 @@ def test_dashboard_shows_snapshot_movers_and_creator_signals():
 
     assert not at.exception
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["Total value"] == "$9,461.78"
-    assert any("BBAI" in lbl for lbl in metrics) and any("NVDA" in lbl for lbl in metrics)  # worst + best
+    # KPI row is holdings-value led (invested_value = total - wallet), not "Total value".
+    assert metrics["Holdings value"] == "$8,115.72"
+    assert "Cash / wallet" in metrics and "In NZD" in metrics
     md = " ".join(m.value for m in at.markdown)
-    assert "PLTR" in md and "3×" in md                 # creator repeat mention
+    assert "Your holdings" in md                        # the holdings panel rendered
+    assert "NVDA" in md and "BBAI" in md                # ...with the positions in it
+    assert "PLTR" in md and "3×" in md                  # creator repeat mention
 
 
 def test_dashboard_shows_upcoming_earnings():
@@ -73,11 +76,14 @@ def test_dashboard_shows_upcoming_earnings():
         at = AppTest.from_file(_MAIN)
         at.run(timeout=30)
     assert not at.exception
-    body = " ".join(m.value for m in at.markdown) + " ".join(s.value for s in at.subheader)
-    assert "Reporting soon" in body and "AAPL" in body and "2 days" in body
+    body = " ".join(m.value for m in at.markdown)
+    assert "Reporting soon" in body and "AAPL" in body
+    assert "2d" in body                                 # days-until, terminal-style
 
 
-def test_dashboard_handles_no_movers_and_no_creator_signals():
+def test_dashboard_handles_missing_prices_and_no_creator_signals():
+    # No live price change and nothing repeated by a creator: the panels must
+    # render their empty states rather than blowing up or showing a bare zero.
     flat = [{"ticker": "NVDA", "day_change_pct": None, "day_change_value": None}]
     with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
          patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
@@ -86,5 +92,22 @@ def test_dashboard_handles_no_movers_and_no_creator_signals():
         at = AppTest.from_file(_MAIN)
         at.run(timeout=30)
     assert not at.exception
-    captions = " ".join(c.value for c in at.caption)
-    assert "No live price changes" in captions and "Nothing a creator has repeated" in captions
+    md = " ".join(m.value for m in at.markdown)
+    assert "Nothing a creator has repeated" in md
+    assert "Your holdings" in md and "NVDA" in md       # still listed, just without a move
+
+
+def test_dashboard_screener_read_is_opt_in():
+    # screen_tickers runs FinBERT + per-ticker analyst calls, so it must NOT fire
+    # on a plain dashboard load — the card offers a button instead.
+    with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
+         patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
+         patch("engine.portfolio.get_live_valuation", return_value=[]), \
+         patch("engine.creator_signals.mention_leaderboard", return_value=[]), \
+         patch("app._cache.screener_ratings") as rate:
+        at = AppTest.from_file(_MAIN)
+        at.run(timeout=30)
+    assert not at.exception
+    assert not rate.called                              # the expensive call was skipped
+    assert {m.label for m in at.metric} >= {"Screener read"}
+    assert any("Rate holdings" in b.label for b in at.button)

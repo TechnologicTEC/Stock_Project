@@ -74,7 +74,7 @@ _CSS = f"""
    sidebar-collapse control lives here and stays clickable. */
 [data-testid="stHeader"] {{ background: transparent; height: 0; }}
 [data-testid="stMainBlockContainer"], .block-container {{
-  padding-top: 1.1rem; padding-bottom: 4rem; max-width: 1240px;
+  padding-top: 3.9rem; padding-bottom: 4rem; max-width: 1240px;
 }}
 
 /* ---------- typography ---------- */
@@ -91,14 +91,17 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
   color: var(--cp-muted); font-weight: 700;
 }}
 
-/* ---------- top status bar ---------- */
+/* ---------- top status bar: full-bleed across the whole viewport ---------- */
 .cp-topbar {{
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
   display: flex; align-items: center; gap: 14px;
-  margin: 0 0 18px; padding: 9px 14px;
-  border: 1px solid var(--cp-line); border-radius: 8px;
+  margin: 0; padding: 10px 18px;
+  border: 0; border-bottom: 1px solid var(--cp-line); border-radius: 0;
   background: linear-gradient(180deg, #0e141d, #0b1017);
   font-size: 12px;
 }}
+/* clear the fixed bar (it spans over the sidebar too, as in the mockup) */
+[data-testid="stSidebar"] {{ padding-top: 44px; }}
 .cp-topbar .brand {{ display:flex; align-items:center; gap:8px; font-weight:700; letter-spacing:.01em; color:var(--cp-text); }}
 .cp-topbar .brand .glyph {{ color: var(--cp-accent); font-size: 15px; }}
 .cp-topbar .brand small {{ color:var(--cp-muted); font-weight:500; letter-spacing:.14em; font-size:9.5px; text-transform:uppercase; }}
@@ -198,6 +201,64 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-badge.s  {{ color:#f3b3a5; background: rgba(239,97,71,.10); border-color: rgba(239,97,71,.24); }}
 .cp-badge.faint {{ color: var(--cp-accent); background: rgba(232,178,74,.05); border: 1px dashed var(--cp-accent-dim); }}
 
+/* ---------- panels (the mockup's body sections) ---------- */
+.cp-panel {{
+  background: linear-gradient(180deg, var(--cp-panel), var(--cp-panel-2));
+  border: 1px solid var(--cp-line); border-radius: 8px; padding: 15px 16px; margin-bottom: 14px;
+}}
+.cp-panel > .ph {{ display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }}
+.cp-panel > .ph .tag {{ font-family: var(--cp-mono); font-size: 10.5px; color: var(--cp-muted); }}
+
+/* ---------- terminal table ---------- */
+.cp-table {{ width: 100%; border-collapse: collapse; }}
+.cp-table thead th {{
+  text-align: right; font-size: 10px; letter-spacing:.1em; text-transform: uppercase;
+  color: var(--cp-muted); font-weight: 600; padding: 0 0 9px; border-bottom: 1px solid var(--cp-line);
+}}
+.cp-table thead th:first-child, .cp-table tbody td:first-child {{ text-align: left; }}
+.cp-table tbody td {{
+  padding: 9px 0; border-bottom: 1px solid var(--cp-line-soft); font-size: 13px; text-align: right;
+  color: var(--cp-text);
+}}
+.cp-table tbody tr:last-child td {{ border-bottom: none; }}
+.cp-table tbody tr:hover td {{ background: rgba(255,255,255,.015); }}
+.cp-table .tick {{ font-family: var(--cp-mono); font-weight: 600; letter-spacing:.02em; }}
+.cp-table .co {{ color: var(--cp-dim); font-size: 12px; }}
+.cp-table .val {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; }}
+.cp-table .up {{ color: var(--cp-up); }} .cp-table .down {{ color: var(--cp-down); }}
+.cp-wbar {{ height: 5px; border-radius: 3px; background: var(--cp-line); overflow: hidden; min-width: 46px; display:inline-block; vertical-align: middle; }}
+.cp-wbar > i {{ display:block; height:100%; background: linear-gradient(90deg, var(--cp-accent-dim), var(--cp-accent)); }}
+
+/* ---------- signal confidence (uncertainty rendered as faintness) ---------- */
+.cp-conf .ic {{ display:flex; align-items:baseline; gap:10px; }}
+.cp-conf .ic b {{ font-family: var(--cp-mono); font-size: 32px; font-weight: 600; letter-spacing:-.02em; color: var(--cp-accent); }}
+.cp-conf .ic .t {{ font-family: var(--cp-mono); font-size: 11.5px; color: var(--cp-dim); }}
+.cp-meter {{
+  margin: 13px 0 6px; height: 10px; border-radius: 5px; position: relative; overflow: hidden;
+  background: repeating-linear-gradient(90deg, var(--cp-line) 0 1px, transparent 1px 26px), var(--cp-panel-2);
+  border: 1px solid var(--cp-line);
+}}
+.cp-meter > i {{ position:absolute; inset:0 auto 0 0; background: linear-gradient(90deg, rgba(232,178,74,.25), var(--cp-accent)); border-radius: 5px 0 0 5px; }}
+.cp-verdict {{
+  display:inline-flex; align-items:center; gap:8px; margin-top: 4px;
+  font-size: 10.5px; font-family: var(--cp-mono); letter-spacing:.04em; text-transform: uppercase;
+  color: var(--cp-accent); border:1px dashed var(--cp-accent-dim); border-radius:5px; padding: 4px 9px;
+  background: rgba(232,178,74,.05);
+}}
+.cp-note {{ color: var(--cp-dim); font-size: 12px; line-height:1.55; margin: 11px 0 0; }}
+.cp-note b {{ color: var(--cp-text); }}
+.cp-foot {{ margin-top: 11px; padding-top: 10px; border-top:1px dashed var(--cp-line); color: var(--cp-muted); font-size: 11.5px; line-height:1.5; }}
+.cp-foot b {{ color: var(--cp-dim); }}
+
+/* ---------- per-factor IC strip ---------- */
+.cp-frow {{ display:grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items:center; padding: 7px 0; border-bottom: 1px solid var(--cp-line-soft); }}
+.cp-frow .fname {{ font-size: 12.5px; color: var(--cp-dim); }}
+.cp-frow .fic {{ font-family: var(--cp-mono); font-size: 12.5px; width: 58px; text-align:right; }}
+.cp-frow .fic.pos {{ color: var(--cp-up); }} .cp-frow .fic.neg {{ color: var(--cp-down); }} .cp-frow .fic.na {{ color: var(--cp-muted); }}
+.cp-fbar {{ width: 92px; height: 4px; background: var(--cp-line); border-radius:2px; position: relative; }}
+.cp-fbar .mid {{ position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background: var(--cp-muted); }}
+.cp-fbar > i {{ position:absolute; top:0; bottom:0; border-radius:2px; opacity:.55; }}  /* dim = not significant */
+
 /* strip default chrome (keep sidebar collapse + page nav we render ourselves) */
 #MainMenu, [data-testid="stToolbar"], [data-testid="stDecoration"], footer {{ display: none; }}
 </style>
@@ -277,6 +338,18 @@ def advice(html: str) -> None:
 
 def eyebrow(text: str) -> None:
     st.markdown(f'<div class="cp-eyebrow">{text}</div>', unsafe_allow_html=True)
+
+
+def panel(title: str, body_html: str, tag: str | None = None, extra_class: str = "") -> None:
+    """A titled body section — the mockup's panel. `body_html` is rendered as-is,
+    so callers build tables/meters with the .cp-* classes above."""
+    tag_html = f'<span class="tag">{tag}</span>' if tag else ""
+    st.markdown(
+        f'<div class="cp-panel {extra_class}">'
+        f'<div class="ph"><span class="cp-eyebrow">{title}</span>{tag_html}</div>'
+        f"{body_html}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def badge_html(label: str, kind: str | None = None) -> str:
