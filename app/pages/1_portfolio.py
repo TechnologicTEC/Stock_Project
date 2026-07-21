@@ -344,61 +344,61 @@ st.divider()
 # Value over time
 # --------------------------------------------------------------------------
 
-with _theme.section("Value over time"):
-    st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
+st.subheader("Value over time")
+st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
 
-    activity = portfolio.list_activity()  # also drives the Transaction history section below
+activity = portfolio.list_activity()  # also drives the Transaction history section below
 
-    range_choice = st.radio(
-        "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
+range_choice = st.radio(
+    "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
+)
+show_markers = st.checkbox(
+    "Show event markers (buys, sells, deposits, withdrawals)", value=True, key="show_value_markers"
+)
+today = date.today()
+range_starts = {
+    "1M": today - timedelta(days=30),
+    "3M": today - timedelta(days=90),
+    "6M": today - timedelta(days=182),
+    "YTD": date(today.year, 1, 1),
+    "1Y": today - timedelta(days=365),
+}
+start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date() or (today - timedelta(days=365))
+
+try:
+    with st.spinner("Loading price history..."):
+        history = _cache.value_history(current_user_id(), start_date, today)
+except Exception as exc:
+    history = []
+    st.error(f"Couldn't load historical prices right now: {exc}")
+
+if history:
+    history_df = pd.DataFrame(history)
+    history_df["value"] = history_df["value"] * fx_rate
+    fig = px.line(
+        history_df, x="date", y="value",
+        labels={"date": "", "value": f"Portfolio value ({active_currency})"},
     )
-    show_markers = st.checkbox(
-        "Show event markers (buys, sells, deposits, withdrawals)", value=True, key="show_value_markers"
+    fig.update_traces(line_color="#2563eb", showlegend=False)  # keep the line out of the legend
+
+    marker_traces = []
+    if show_markers:
+        markers = portfolio.value_history_markers(activity, history)
+        marker_traces = event_marker_traces(markers)
+        for trace in marker_traces:
+            fig.add_trace(trace)
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=10),
+        hovermode="x unified",
+        showlegend=bool(marker_traces),
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
     )
-    today = date.today()
-    range_starts = {
-        "1M": today - timedelta(days=30),
-        "3M": today - timedelta(days=90),
-        "6M": today - timedelta(days=182),
-        "YTD": date(today.year, 1, 1),
-        "1Y": today - timedelta(days=365),
-    }
-    start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date() or (today - timedelta(days=365))
-
-    try:
-        with st.spinner("Loading price history..."):
-            history = _cache.value_history(current_user_id(), start_date, today)
-    except Exception as exc:
-        history = []
-        st.error(f"Couldn't load historical prices right now: {exc}")
-
-    if history:
-        history_df = pd.DataFrame(history)
-        history_df["value"] = history_df["value"] * fx_rate
-        fig = px.line(
-            history_df, x="date", y="value",
-            labels={"date": "", "value": f"Portfolio value ({active_currency})"},
-        )
-        fig.update_traces(line_color="#2563eb", showlegend=False)  # keep the line out of the legend
-
-        marker_traces = []
-        if show_markers:
-            markers = portfolio.value_history_markers(activity, history)
-            marker_traces = event_marker_traces(markers)
-            for trace in marker_traces:
-                fig.add_trace(trace)
-
-        fig.update_layout(
-            margin=dict(l=0, r=0, t=10, b=10),
-            hovermode="x unified",
-            showlegend=bool(marker_traces),
-            legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
-        )
-        st.plotly_chart(fig, width="stretch", key="value_history_chart", theme=None)
-        if show_markers and not marker_traces:
-            st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
-    else:
-        st.caption("No historical value to show for this range yet.")
+    st.plotly_chart(fig, width="stretch", key="value_history_chart", theme=None)
+    if show_markers and not marker_traces:
+        st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
+else:
+    st.caption("No historical value to show for this range yet.")
 
 st.divider()
 
@@ -472,58 +472,58 @@ st.divider()
 # Allocation
 # --------------------------------------------------------------------------
 
-with _theme.section("Allocation", tag="share of holdings"):
+st.subheader("Allocation")
 
-    a1, a2 = st.columns(2)
-    a3, a4, a5 = st.columns(3)
+a1, a2 = st.columns(2)
+a3, a4, a5 = st.columns(3)
 
-    with a1:
-        st.caption("By ticker")
-        by_ticker = portfolio.get_allocation_by_ticker()
-        if by_ticker:
-            st.plotly_chart(
-                px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
-                width="stretch", key="alloc_ticker", theme=None,
-            )
+with a1:
+    st.caption("By ticker")
+    by_ticker = portfolio.get_allocation_by_ticker()
+    if by_ticker:
+        st.plotly_chart(
+            px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_ticker", theme=None,
+        )
 
-    with a2:
-        st.caption("By asset type")
-        by_type = portfolio.get_allocation_by_asset_type()
-        if by_type:
-            st.plotly_chart(
-                px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
-                width="stretch", key="alloc_asset_type", theme=None,
-            )
+with a2:
+    st.caption("By asset type")
+    by_type = portfolio.get_allocation_by_asset_type()
+    if by_type:
+        st.plotly_chart(
+            px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_asset_type", theme=None,
+        )
 
-    with a3:
-        st.caption("By sector")
-        with st.spinner("Looking up sectors..."):
-            by_sector = portfolio.get_allocation_by_sector()
-        if by_sector:
-            st.plotly_chart(
-                px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
-                width="stretch", key="alloc_sector", theme=None,
-            )
+with a3:
+    st.caption("By sector")
+    with st.spinner("Looking up sectors..."):
+        by_sector = portfolio.get_allocation_by_sector()
+    if by_sector:
+        st.plotly_chart(
+            px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_sector", theme=None,
+        )
 
-    with a4:
-        st.caption("By country")
-        with st.spinner("Looking up countries..."):
-            by_country = portfolio.get_allocation_by_country()
-        if by_country:
-            st.plotly_chart(
-                px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
-                width="stretch", key="alloc_country", theme=None,
-            )
+with a4:
+    st.caption("By country")
+    with st.spinner("Looking up countries..."):
+        by_country = portfolio.get_allocation_by_country()
+    if by_country:
+        st.plotly_chart(
+            px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_country", theme=None,
+        )
 
-    with a5:
-        st.caption("By market cap")
-        with st.spinner("Looking up market caps..."):
-            by_market_cap = portfolio.get_allocation_by_market_cap()
-        if by_market_cap:
-            st.plotly_chart(
-                px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
-                width="stretch", key="alloc_market_cap", theme=None,
-            )
+with a5:
+    st.caption("By market cap")
+    with st.spinner("Looking up market caps..."):
+        by_market_cap = portfolio.get_allocation_by_market_cap()
+    if by_market_cap:
+        st.plotly_chart(
+            px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
+            width="stretch", key="alloc_market_cap", theme=None,
+        )
 
 st.divider()
 
