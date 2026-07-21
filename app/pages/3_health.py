@@ -84,85 +84,80 @@ if report.mid_window_contributions:
 
 MIN_DATA_NOTE = f"Needs at least {health.MIN_DATA_POINTS} trading days of overlapping history; not enough yet."
 
-m1, m2, m3, m4 = st.columns(4)
+with _theme.section("Risk metrics", tag="from daily value changes"):
+    m1, m2, m3, m4 = st.columns(4)
 
-with m1:
-    st.metric("Beta vs. S&P 500", f"{report.beta:.2f}" if report.beta is not None else "—")
-    st.caption(f"{report.beta_data_points} trading days" if report.beta is not None else MIN_DATA_NOTE)
+    with m1:
+        st.metric("Beta vs. S&P 500", f"{report.beta:.2f}" if report.beta is not None else "—")
+        st.caption(f"{report.beta_data_points} trading days" if report.beta is not None else MIN_DATA_NOTE)
 
-with m2:
-    st.metric("Sharpe ratio", f"{report.sharpe_ratio:.2f}" if report.sharpe_ratio is not None else "—")
-    st.caption(f"{report.sharpe_data_points} trading days" if report.sharpe_ratio is not None else MIN_DATA_NOTE)
+    with m2:
+        st.metric("Sharpe ratio", f"{report.sharpe_ratio:.2f}" if report.sharpe_ratio is not None else "—")
+        st.caption(f"{report.sharpe_data_points} trading days" if report.sharpe_ratio is not None else MIN_DATA_NOTE)
 
-with m3:
-    st.metric(
-        "Trailing annualized return",
-        f"{report.expected_return_annualized_pct:+.1f}%" if report.expected_return_annualized_pct is not None else "—",
+    with m3:
+        st.metric(
+            "Trailing annualized return",
+            f"{report.expected_return_annualized_pct:+.1f}%" if report.expected_return_annualized_pct is not None else "—",
+        )
+        st.caption("Historical average, not a forecast" if report.expected_return_annualized_pct is not None else MIN_DATA_NOTE)
+
+    with m4:
+        st.metric("Max drawdown", f"{report.max_drawdown_pct:.1f}%" if report.max_drawdown_pct is not None else "—")
+        st.caption(f"{report.max_drawdown_data_points} trading days" if report.max_drawdown_pct is not None else MIN_DATA_NOTE)
+
+    st.caption(
+        "These four numbers come from your portfolio's day-to-day value changes and don't account for when "
+        "you bought or sold — adding or removing a holding partway through the lookback window will show up "
+        "as a price swing in these calculations, not just as your own contribution. They're most accurate "
+        "over a window where your holdings didn't change."
     )
-    st.caption("Historical average, not a forecast" if report.expected_return_annualized_pct is not None else MIN_DATA_NOTE)
-
-with m4:
-    st.metric("Max drawdown", f"{report.max_drawdown_pct:.1f}%" if report.max_drawdown_pct is not None else "—")
-    st.caption(f"{report.max_drawdown_data_points} trading days" if report.max_drawdown_pct is not None else MIN_DATA_NOTE)
-
-st.caption(
-    "These four numbers come from your portfolio's day-to-day value changes and don't account for when "
-    "you bought or sold — adding or removing a holding partway through the lookback window will show up "
-    "as a price swing in these calculations, not just as your own contribution. They're most accurate "
-    "over a window where your holdings didn't change."
-)
-
-st.divider()
 
 # --------------------------------------------------------------------------
 # Flags
 # --------------------------------------------------------------------------
 
-st.subheader("Flags")
-
-_SEVERITY_RENDER = {"warning": st.warning, "info": st.info, "good": st.success}
-for flag in report.flags:
-    _SEVERITY_RENDER.get(flag.severity, st.info)(flag.message)
-
-st.divider()
+with _theme.section("Flags", tag=f"{len(report.flags)} check(s)"):
+    _SEVERITY_RENDER = {"warning": st.warning, "info": st.info, "good": st.success}
+    for flag in report.flags:
+        _SEVERITY_RENDER.get(flag.severity, st.info)(flag.message)
+    if not report.flags:
+        st.caption("Nothing flagged on this portfolio right now.")
 
 # --------------------------------------------------------------------------
 # Concentration table
 # --------------------------------------------------------------------------
 
-st.subheader("Concentration")
-
-if report.concentration:
-    breakdown_display = {
-        "ticker": "Single holding", "sector": "Sector", "asset_type": "Asset type",
-        "country": "Country", "market_cap": "Market cap",
-    }
-    rows = [
-        {
-            "Breakdown": breakdown_display.get(c.breakdown, c.breakdown),
-            "Largest": c.top_label,
-            "% of portfolio": c.top_pct,
-            "Threshold": c.threshold,
-            "Flagged": "🚩" if c.flagged else "",
+with _theme.section("Concentration", tag="fixed thresholds"):
+    if report.concentration:
+        breakdown_display = {
+            "ticker": "Single holding", "sector": "Sector", "asset_type": "Asset type",
+            "country": "Country", "market_cap": "Market cap",
         }
-        for c in report.concentration
-    ]
-    df = pd.DataFrame(rows)
-    st.dataframe(
-        df.style.format({"% of portfolio": "{:.1f}%", "Threshold": "{:.0f}%"}),
-        width="stretch", hide_index=True,
+        rows = "".join(
+            f'<tr><td>{breakdown_display.get(c.breakdown, c.breakdown)}</td>'
+            f'<td class="co">{c.top_label}</td>'
+            f'<td class="num">{c.top_pct:.1f}%</td>'
+            f'<td class="num dim">{c.threshold:.0f}%</td>'
+            f'<td>{_theme.badge_html("OVER", "s") if c.flagged else _theme.badge_html("OK", "h")}</td></tr>'
+            for c in report.concentration
+        )
+        st.markdown(
+            '<table class="cp-table"><thead><tr><th>Breakdown</th><th>Largest</th>'
+            '<th class="num">% of portfolio</th><th class="num">Threshold</th>'
+            '<th>Status</th></tr></thead>'
+            f"<tbody>{rows}</tbody></table>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("Not enough data to compute concentration yet.")
+
+    st.caption(
+        "**OVER** means the largest item in that breakdown exceeds the threshold shown — simple, fixed "
+        "cutoffs (documented in `engine/health.py`), not a judgment that concentration is necessarily bad. "
+        "A row showing **Unknown** as the largest item means sector/country/market-cap data couldn't be "
+        "looked up for those holdings — that's a data gap, never flagged as concentration."
     )
-else:
-    st.caption("Not enough data to compute concentration yet.")
-
-st.caption(
-    "“Flagged” means the largest item in that breakdown exceeds the threshold shown — these are simple, "
-    "fixed cutoffs (documented in `engine/health.py`), not a judgment that concentration is necessarily bad. "
-    "A row showing **Unknown** as the largest item means sector/country/market-cap data couldn't be looked "
-    "up for those holdings (e.g. a Finnhub access issue) — that's a data gap, never flagged as concentration."
-)
-
-st.divider()
 
 # --------------------------------------------------------------------------
 # Forward-Looking Projections (Section 6.11). A STATISTICAL PROJECTION, NOT A

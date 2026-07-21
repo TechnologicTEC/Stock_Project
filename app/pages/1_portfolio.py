@@ -537,13 +537,16 @@ st.subheader("Holdings")
 def _pct_color(value) -> str:
     """Green for gains, red for losses, intensity scaled to magnitude
     (capped at +-5%) - the 'heat map' look from Section 6.3, done as a
-    styled table rather than a separate go.Heatmap."""
+    styled table rather than a separate go.Heatmap.
+
+    Uses the theme's semantic up/down (which are the light-canvas variants), and a
+    lighter alpha ramp than the dark original: these tint a WHITE cell now, so the
+    old 0.12-0.47 range buried the dark text sitting on top of it."""
     if value is None or pd.isna(value):
         return ""
     intensity = min(abs(value) / 5.0, 1.0)
-    return f"background-color: rgba(34, 197, 94, {0.12 + 0.35 * intensity})" if value >= 0 else (
-        f"background-color: rgba(239, 68, 68, {0.12 + 0.35 * intensity})"
-    )
+    rgb = _theme.UP_RGB if value >= 0 else _theme.DOWN_RGB
+    return f"background-color: rgba({rgb}, {0.08 + 0.22 * intensity})"
 
 
 def _reco_color(text) -> str:
@@ -551,9 +554,9 @@ def _reco_color(text) -> str:
     if not isinstance(text, str):
         return ""
     if "Buy" in text:
-        return "background-color: rgba(34, 197, 94, 0.20)"
+        return f"background-color: rgba({_theme.UP_RGB}, 0.15)"
     if "Sell" in text:
-        return "background-color: rgba(239, 68, 68, 0.20)"
+        return f"background-color: rgba({_theme.DOWN_RGB}, 0.15)"
     return ""
 
 

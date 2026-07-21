@@ -24,6 +24,7 @@ each page script, so each must re-inject.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -55,6 +56,10 @@ TEXT, TEXT_DIM, MUTED = "#18202b", "#4d5866", "#636e7b"
 ACCENT_INK = "#8a5f0f"                            # amber for text/links on light
 UP, DOWN = "#157f3d", "#c0391c"                   # semantics, darkened for light
 INK_ON_ACCENT = "#17130a"                         # text on an amber fill (9.61)
+
+# Same semantics as rgb triples, for callers building rgba() washes (the
+# Portfolio heat-map tints cells at varying alpha).
+UP_RGB, DOWN_RGB = "21, 127, 61", "192, 57, 28"
 
 _MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace'
 
@@ -254,6 +259,25 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-badge.h  {{ color: var(--cp-dim); background: rgba(99,110,123,.09); border-color: var(--cp-line); }}
 .cp-badge.s  {{ color: var(--cp-down); background: rgba(192,57,28,.08); border-color: rgba(192,57,28,.24); }}
 .cp-badge.faint {{ color: var(--cp-accent-ink); background: rgba(232,178,74,.10); border: 1px dashed rgba(138,95,15,.45); }}
+
+/* ---------- native-widget panels (see _theme.section) ----------
+   Streamlit's own bordered container, restyled to match .cp-panel so charts and
+   sortable dataframes can sit in a box too.
+
+   In Streamlit 1.58 `st.container(border=True)` is a [data-testid="stVerticalBlock"]
+   that already carries a border — NOT the stVerticalBlockBorderWrapper older
+   versions used. Scoped by :has() to blocks whose FIRST element is one of our
+   section heads (section() always renders it first), so the rule can't box every
+   vertical block on the page. */
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"]:first-child .cp-sec-head) {{
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-line) !important;
+  border-radius: 8px !important; padding: 15px 16px; margin-bottom: 14px;
+}}
+.cp-sec-head {{
+  display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px;
+}}
+.cp-sec-head .tag {{ font-family: var(--cp-mono); font-size: 10.5px; color: var(--cp-muted); }}
 
 /* ---------- panels (the mockup's body sections) ---------- */
 .cp-panel {{
@@ -479,6 +503,28 @@ def advice(html: str) -> None:
 
 def eyebrow(text: str) -> None:
     st.markdown(f'<div class="cp-eyebrow">{text}</div>', unsafe_allow_html=True)
+
+
+@contextmanager
+def section(title: str, tag: str | None = None):
+    """A panel that can hold *native* widgets — charts, dataframes, metrics.
+
+    `panel()` renders an HTML string, so it can't wrap a Plotly chart or a
+    sortable st.dataframe. This uses Streamlit's own bordered container and
+    restyles it to match, giving the same boxed look around content that has to
+    stay interactive.
+
+        with _theme.section("Allocation", tag="by ticker"):
+            st.plotly_chart(fig)
+    """
+    box = st.container(border=True)
+    with box:
+        tag_html = f'<span class="tag">{tag}</span>' if tag else ""
+        st.markdown(
+            f'<div class="cp-sec-head"><span class="cp-eyebrow">{title}</span>{tag_html}</div>',
+            unsafe_allow_html=True,
+        )
+        yield box
 
 
 def panel(title: str, body_html: str, tag: str | None = None, extra_class: str = "") -> None:
