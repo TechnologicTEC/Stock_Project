@@ -177,21 +177,58 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
                 icon="📉",
             )
 
-        def _verdict(f):
+        def _verdict_badge(f):
+            """Significance as a pill. A factor that clears 1.96 but not the
+            multiple-comparison bar is called MARGINAL in the faint amber style —
+            that's precisely what a false positive looks like, so it must not read
+            like a win."""
             if f["significant"]:
-                return "yes"
-            return "no (marginal)" if f.get("significant_uncorrected") else "no"
+                return _theme.badge_html("YES", "sb")
+            if f.get("significant_uncorrected"):
+                return _theme.badge_html("MARGINAL", "faint")
+            return _theme.badge_html("NO", "h")
 
-        rows = [{"Factor": f["label"], "Mean IC": f["mean_ic"], "t-stat": f["t_stat"],
-                 "IC-IR": f["ic_ir"], "Hit rate": f["hit_rate"],
-                 "Distinguishable from zero?": _verdict(f),
-                 "Dates": f["n_dates"]}
-                for f in uni["factor_ic"].values()]
-        uni_df = pd.DataFrame(rows).sort_values("Mean IC", ascending=False, na_position="last")
-        st.dataframe(
-            uni_df.style.format({"Mean IC": "{:+.3f}", "t-stat": "{:+.2f}",
-                                 "IC-IR": "{:+.2f}", "Hit rate": "{:.0%}"}, na_rep="—"),
-            width="stretch", hide_index=True,
+        def _ic_bar(ic, significant):
+            """A centred bar: direction by side, magnitude by width, and — the
+            point — *dimmed* unless the factor is actually distinguishable from
+            zero. An insignificant IC should never look solid."""
+            if ic is None:
+                return '<span class="cp-fbar"><span class="mid"></span></span>'
+            half = min(abs(ic) * 180, 50)
+            side = f"left:50%;width:{half:.0f}%" if ic >= 0 else f"right:50%;width:{half:.0f}%"
+            colour = "var(--cp-up)" if ic >= 0 else "var(--cp-down)"
+            opacity = "1" if significant else ".4"
+            return ('<span class="cp-fbar"><span class="mid"></span>'
+                    f'<i style="{side};background:{colour};opacity:{opacity}"></i></span>')
+
+        ordered = sorted(uni["factor_ic"].values(),
+                         key=lambda f: (f["mean_ic"] is None, -(f["mean_ic"] or 0)))
+        body = []
+        for f in ordered:
+            ic, sig = f["mean_ic"], f["significant"]
+            ic_cls = "dim" if ic is None else ("up" if ic >= 0 else "down")
+            fmt = lambda v, spec: (format(v, spec) if v is not None else "—")
+            # Precomputed: Python 3.11 can't nest a same-quoted f-string inside
+            # an f-string expression (that only lands in 3.12).
+            hit = fmt(f["hit_rate"], ".0%")
+            body.append(
+                f'<tr><td>{f["label"]}</td>'
+                f'<td>{_ic_bar(ic, sig)}</td>'
+                f'<td class="num {ic_cls}">{fmt(ic, "+.3f")}</td>'
+                f'<td class="num">{fmt(f["t_stat"], "+.2f")}</td>'
+                f'<td class="num">{fmt(f["ic_ir"], "+.2f")}</td>'
+                f'<td class="num">{hit}</td>'
+                f'<td>{_verdict_badge(f)}</td>'
+                f'<td class="num dim">{f["n_dates"]}</td></tr>'
+            )
+        _theme.panel(
+            "Per-factor information coefficient",
+            '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+            '<th>Factor</th><th></th><th class="num">Mean IC</th><th class="num">t</th>'
+            '<th class="num">IC-IR</th><th class="num">Hit</th>'
+            '<th>Beats zero?</th><th class="num">Dates</th></tr></thead>'
+            f"<tbody>{''.join(body)}</tbody></table></div>",
+            tag=f"bar |t| > {uni.get('t_threshold', 1.96)}",
         )
         thr, n_tests = uni.get("t_threshold"), uni.get("n_tests")
         if thr:
@@ -318,17 +355,42 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                     icon="📉",
                 )
 
-            factor_rows = [
-                {"Factor": v["label"], "IC": v["ic"],
-                 "95% interval": (f"±{v['ci95']:.3f}" if v.get("ci95") is not None else "—"),
-                 "Distinguishable from zero?": ("yes" if v.get("significant") else "no"),
-                 "Observations": v["n"], "Independent": v.get("n_eff")}
-                for v in s["factor_ic"].values()
-            ]
-            factor_df = pd.DataFrame(factor_rows).sort_values("IC", ascending=False, na_position="last")
-            st.dataframe(
-                factor_df.style.format({"IC": "{:+.3f}"}, na_rep="—"),
-                width="stretch", hide_index=True,
+            # Same faintness rule as the universe table: an IC whose interval
+            # straddles zero is drawn dim, so it can't be mistaken for evidence.
+            def _pooled_bar(ic, significant):
+                if ic is None:
+                    return '<span class="cp-fbar"><span class="mid"></span></span>'
+                half = min(abs(ic) * 180, 50)
+                side = f"left:50%;width:{half:.0f}%" if ic >= 0 else f"right:50%;width:{half:.0f}%"
+                colour = "var(--cp-up)" if ic >= 0 else "var(--cp-down)"
+                return ('<span class="cp-fbar"><span class="mid"></span>'
+                        f'<i style="{side};background:{colour};'
+                        f'opacity:{"1" if significant else ".4"}"></i></span>')
+
+            ordered = sorted(s["factor_ic"].values(),
+                             key=lambda v: (v["ic"] is None, -(v["ic"] or 0)))
+            body = []
+            for v in ordered:
+                ic, sig = v["ic"], bool(v.get("significant"))
+                ci = f"±{v['ci95']:.3f}" if v.get("ci95") is not None else "—"
+                cls = "dim" if ic is None else ("up" if ic >= 0 else "down")
+                body.append(
+                    f'<tr><td>{v["label"]}</td>'
+                    f'<td>{_pooled_bar(ic, sig)}</td>'
+                    f'<td class="num {cls}">{format(ic, "+.3f") if ic is not None else "—"}</td>'
+                    f'<td class="num dim">{ci}</td>'
+                    f'<td>{_theme.badge_html("YES", "sb") if sig else _theme.badge_html("NO", "h")}</td>'
+                    f'<td class="num dim">{v["n"]}</td>'
+                    f'<td class="num">{v.get("n_eff", "—")}</td></tr>'
+                )
+            _theme.panel(
+                "Per-factor IC — your holdings",
+                '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+                '<th>Factor</th><th></th><th class="num">IC</th><th class="num">95% CI</th>'
+                '<th>Beats zero?</th><th class="num">Obs</th>'
+                '<th class="num">Indep.</th></tr></thead>'
+                f"<tbody>{''.join(body)}</tbody></table></div>",
+                tag=f"{n_eff} independent obs",
             )
             rho = s.get("avg_ticker_correlation")
             st.caption(

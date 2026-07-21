@@ -97,9 +97,13 @@ def test_validation_page_pooled_per_factor_ic():
     run.assert_called_once()
     labels = {m.label for m in at.metric}
     assert "Pooled overall IC" in labels and "Tickers pooled" in labels
-    # the per-factor IC table renders with the factor labels
-    dfs = [d.value for d in at.dataframe if "Factor" in list(d.value.columns)]
-    assert dfs and "Momentum / Technical" in dfs[0]["Factor"].tolist()
+    # The per-factor IC is now a terminal table (markdown), not a dataframe.
+    body = " ".join(m.value for m in at.markdown)
+    assert "Per-factor IC" in body
+    assert "Momentum / Technical" in body and "Valuation" in body
+    # Neither factor is significant here, so both must be flagged as not beating
+    # zero — the faintness rule the panel exists to enforce.
+    assert "NO" in body and "YES" not in body
 
 
 def test_validation_page_news_toggle_opts_into_gdelt():
