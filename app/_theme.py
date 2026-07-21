@@ -91,9 +91,13 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
   color: var(--cp-muted); font-weight: 700;
 }}
 
-/* ---------- top status bar: full-bleed across the whole viewport ---------- */
+/* ---------- top status bar: full-bleed across the whole viewport ----------
+   z-index 999992 is picked, not arbitrary: Streamlit's sidebar sits at 999991
+   (it was painting over the bar's left end), while its dropdown/modal portal is
+   at 1000110. Sitting between the two puts the bar above the sidebar — as in the
+   mockup — without ever covering a menu, tooltip or dialog. */
 .cp-topbar {{
-  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 999992;
   display: flex; align-items: center; gap: 14px;
   margin: 0; padding: 10px 18px;
   border: 0; border-bottom: 1px solid var(--cp-line); border-radius: 0;
