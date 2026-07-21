@@ -394,7 +394,7 @@ if history:
         showlegend=bool(marker_traces),
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
     )
-    st.plotly_chart(fig, width="stretch", key="value_history_chart")
+    st.plotly_chart(fig, width="stretch", key="value_history_chart", theme=None)
     if show_markers and not marker_traces:
         st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
 else:
@@ -483,7 +483,7 @@ with a1:
     if by_ticker:
         st.plotly_chart(
             px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_ticker",
+            width="stretch", key="alloc_ticker", theme=None,
         )
 
 with a2:
@@ -492,7 +492,7 @@ with a2:
     if by_type:
         st.plotly_chart(
             px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_asset_type",
+            width="stretch", key="alloc_asset_type", theme=None,
         )
 
 with a3:
@@ -502,7 +502,7 @@ with a3:
     if by_sector:
         st.plotly_chart(
             px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_sector",
+            width="stretch", key="alloc_sector", theme=None,
         )
 
 with a4:
@@ -512,7 +512,7 @@ with a4:
     if by_country:
         st.plotly_chart(
             px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_country",
+            width="stretch", key="alloc_country", theme=None,
         )
 
 with a5:
@@ -522,7 +522,7 @@ with a5:
     if by_market_cap:
         st.plotly_chart(
             px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_market_cap",
+            width="stretch", key="alloc_market_cap", theme=None,
         )
 
 st.divider()

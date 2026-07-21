@@ -231,7 +231,7 @@ with chart_col:
         fig = px.bar(scored.sort_values("Score"), x="Score", y="Ticker", orientation="h", range_x=[0, 100])
         fig.update_traces(marker_color="#2563eb")
         fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=max(220, 32 * len(scored)))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 with table_col:
     st.dataframe(
         results_df.style.format({"Score": "{:.1f}"}, na_rep="—"),

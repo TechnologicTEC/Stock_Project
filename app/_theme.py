@@ -23,6 +23,7 @@ each page script, so each must re-inject.
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -363,11 +364,63 @@ def _sidebar_nav() -> None:
                                 unsafe_allow_html=True)
 
 
+# Categorical sequence for pies/multi-series charts. Anchored on the amber accent,
+# then hues chosen to stay distinguishable on a dark ground while deliberately
+# avoiding the semantic up/down greens and reds — a slice of an allocation pie
+# means "Technology", not "gaining", and shouldn't borrow that vocabulary.
+_COLORWAY = ["#e8b24a", "#5ab5c4", "#7b93e0", "#c98bd8",
+             "#7fc98a", "#e0855f", "#a0a9b8", "#d4c05a"]
+
+_PLOTLY_READY = False
+
+
+def _register_plotly_template() -> None:
+    """Register + default a Plotly template matching the terminal palette.
+
+    Streamlit does theme charts, but from its OWN stock dark palette, not this
+    app's — measured on the running page, gridlines came out #31333F (a
+    purple-grey) against our blue-slate #2c3546, and ticks #E6EAF1 against our
+    #dde5ef. Close enough to look accidental. Charts therefore pass
+    `theme=None` to st.plotly_chart so this template wins.
+
+    Only runs when plotly is already imported (pages import it at module level,
+    before apply() is called), so chart-free pages like Settings and Assistant
+    pay nothing for it. Idempotent — the flag survives Streamlit's reruns."""
+    global _PLOTLY_READY
+    if _PLOTLY_READY or not any(m.startswith("plotly") for m in sys.modules):
+        return
+    try:
+        import plotly.graph_objects as go
+        import plotly.io as pio
+
+        pio.templates["copilot"] = go.layout.Template(layout=dict(
+            paper_bgcolor="rgba(0,0,0,0)",     # let the panel/ground show through
+            plot_bgcolor="rgba(0,0,0,0)",
+            colorway=_COLORWAY,
+            font=dict(color=TEXT_DIM, size=12,
+                      family='-apple-system, "Segoe UI", Roboto, sans-serif'),
+            xaxis=dict(gridcolor=LINE_SOFT, zerolinecolor=LINE, linecolor=LINE,
+                       tickfont=dict(color=MUTED, size=11)),
+            yaxis=dict(gridcolor=LINE_SOFT, zerolinecolor=LINE, linecolor=LINE,
+                       tickfont=dict(color=MUTED, size=11)),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM, size=11)),
+            hoverlabel=dict(bgcolor=PANEL, bordercolor=LINE,
+                            font=dict(color=TEXT, size=12)),
+            margin=dict(l=0, r=0, t=10, b=0),
+        ))
+        pio.templates.default = "copilot"
+        _PLOTLY_READY = True
+    except Exception:
+        # A charting theme is never worth breaking a page over.
+        _PLOTLY_READY = True
+
+
 def apply() -> None:
     """Inject the terminal stylesheet and render the sidebar nav. Call once per
     page, right after set_page_config(). The top bar is rendered separately by
     `_auth.gate()`, which is where the signed-in identity becomes known."""
     st.markdown(_CSS, unsafe_allow_html=True)
+    _register_plotly_template()
     _sidebar_nav()
 
 

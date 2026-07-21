@@ -267,7 +267,7 @@ else:
         legend=dict(orientation="h", yanchor="top", y=-0.12, x=0),
         hovermode="x unified",
     )
-    st.plotly_chart(fig, width="stretch", key="projection_fan")
+    st.plotly_chart(fig, width="stretch", key="projection_fan", theme=None)
 
     # ---- Outlook tilt explanation (only when the Screener outlook is applied).
     if projection.outlook_applied:

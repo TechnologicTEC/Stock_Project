@@ -463,7 +463,7 @@ if trend:
     ))
 
 fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="top", y=-0.15, x=0))
-st.plotly_chart(fig, width="stretch", key="validation_scatter")
+st.plotly_chart(fig, width="stretch", key="validation_scatter", theme=None)
 
 if trend:
     r_txt = f"{trend['pearson_r']:+.2f}" if trend["pearson_r"] is not None else "—"

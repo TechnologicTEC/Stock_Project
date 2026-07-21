@@ -145,7 +145,7 @@ if result is not None and not result.error:
                       labels={"value": "Portfolio value ($)", "date": "", "series": ""})
         fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified",
                           legend=dict(orientation="h", yanchor="top", y=-0.12, x=0))
-        st.plotly_chart(fig, width="stretch", key="backtest_equity_chart")
+        st.plotly_chart(fig, width="stretch", key="backtest_equity_chart", theme=None)
 
     if st.button("💾 Save this run"):
         backtest.save_backtest_run(result)

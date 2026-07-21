@@ -126,7 +126,7 @@ if symbol:
         hist_df = pd.DataFrame(snap.history)
         fig = px.line(hist_df, x="date", y="close", labels={"date": "", "close": "Close (USD)"})
         fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=240)
-        st.plotly_chart(fig, width="stretch", key="pt_price_chart")
+        st.plotly_chart(fig, width="stretch", key="pt_price_chart", theme=None)
     st.caption(
         "Last price is real-time-*ish* (Alpaca IEX). **Bid/ask are the 15-min-delayed consolidated quote** "
         "(free SIP feed — the same NBBO Alpaca's platform shows); the free IEX-only quote is a single venue and "
