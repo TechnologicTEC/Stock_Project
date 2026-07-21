@@ -188,24 +188,11 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
                 return _theme.badge_html("MARGINAL", "faint")
             return _theme.badge_html("NO", "h")
 
-        def _ic_bar(ic, significant):
-            """A centred bar: direction by side, magnitude by width, and — the
-            point — *dimmed* unless the factor is actually distinguishable from
-            zero. An insignificant IC should never look solid."""
-            if ic is None:
-                return '<span class="cp-fbar"><span class="mid"></span></span>'
-            half = min(abs(ic) * 180, 50)
-            side = f"left:50%;width:{half:.0f}%" if ic >= 0 else f"right:50%;width:{half:.0f}%"
-            colour = "var(--cp-up)" if ic >= 0 else "var(--cp-down)"
-            opacity = "1" if significant else ".4"
-            return ('<span class="cp-fbar"><span class="mid"></span>'
-                    f'<i style="{side};background:{colour};opacity:{opacity}"></i></span>')
-
         ordered = sorted(uni["factor_ic"].values(),
                          key=lambda f: (f["mean_ic"] is None, -(f["mean_ic"] or 0)))
         body = []
         for f in ordered:
-            ic, sig = f["mean_ic"], f["significant"]
+            ic = f["mean_ic"]
             ic_cls = "dim" if ic is None else ("up" if ic >= 0 else "down")
             fmt = lambda v, spec: (format(v, spec) if v is not None else "—")
             # Precomputed: Python 3.11 can't nest a same-quoted f-string inside
@@ -213,7 +200,6 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
             hit = fmt(f["hit_rate"], ".0%")
             body.append(
                 f'<tr><td>{f["label"]}</td>'
-                f'<td>{_ic_bar(ic, sig)}</td>'
                 f'<td class="num {ic_cls}">{fmt(ic, "+.3f")}</td>'
                 f'<td class="num">{fmt(f["t_stat"], "+.2f")}</td>'
                 f'<td class="num">{fmt(f["ic_ir"], "+.2f")}</td>'
@@ -224,7 +210,7 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
         _theme.panel(
             "Per-factor information coefficient",
             '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-            '<th>Factor</th><th></th><th class="num">Mean IC</th><th class="num">t</th>'
+            '<th>Factor</th><th class="num">Mean IC</th><th class="num">t</th>'
             '<th class="num">IC-IR</th><th class="num">Hit</th>'
             '<th>Beats zero?</th><th class="num">Dates</th></tr></thead>'
             f"<tbody>{''.join(body)}</tbody></table></div>",
@@ -355,18 +341,6 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                     icon="📉",
                 )
 
-            # Same faintness rule as the universe table: an IC whose interval
-            # straddles zero is drawn dim, so it can't be mistaken for evidence.
-            def _pooled_bar(ic, significant):
-                if ic is None:
-                    return '<span class="cp-fbar"><span class="mid"></span></span>'
-                half = min(abs(ic) * 180, 50)
-                side = f"left:50%;width:{half:.0f}%" if ic >= 0 else f"right:50%;width:{half:.0f}%"
-                colour = "var(--cp-up)" if ic >= 0 else "var(--cp-down)"
-                return ('<span class="cp-fbar"><span class="mid"></span>'
-                        f'<i style="{side};background:{colour};'
-                        f'opacity:{"1" if significant else ".4"}"></i></span>')
-
             ordered = sorted(s["factor_ic"].values(),
                              key=lambda v: (v["ic"] is None, -(v["ic"] or 0)))
             body = []
@@ -376,7 +350,6 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
                 cls = "dim" if ic is None else ("up" if ic >= 0 else "down")
                 body.append(
                     f'<tr><td>{v["label"]}</td>'
-                    f'<td>{_pooled_bar(ic, sig)}</td>'
                     f'<td class="num {cls}">{format(ic, "+.3f") if ic is not None else "—"}</td>'
                     f'<td class="num dim">{ci}</td>'
                     f'<td>{_theme.badge_html("YES", "sb") if sig else _theme.badge_html("NO", "h")}</td>'
@@ -386,7 +359,7 @@ with st.expander("📊 Validate across ALL your tickers — which factors predic
             _theme.panel(
                 "Per-factor IC — your holdings",
                 '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-                '<th>Factor</th><th></th><th class="num">IC</th><th class="num">95% CI</th>'
+                '<th>Factor</th><th class="num">IC</th><th class="num">95% CI</th>'
                 '<th>Beats zero?</th><th class="num">Obs</th>'
                 '<th class="num">Indep.</th></tr></thead>'
                 f"<tbody>{''.join(body)}</tbody></table></div>",

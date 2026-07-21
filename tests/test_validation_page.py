@@ -102,8 +102,10 @@ def test_validation_page_pooled_per_factor_ic():
     assert "Per-factor IC" in body
     assert "Momentum / Technical" in body and "Valuation" in body
     # Neither factor is significant here, so both must be flagged as not beating
-    # zero — the faintness rule the panel exists to enforce.
-    assert "NO" in body and "YES" not in body
+    # zero. Matched on the rendered badge markup, not the bare words: the injected
+    # stylesheet is itself a markdown element, so its comments are in `body` too.
+    assert body.count(">NO<") >= 2
+    assert ">YES<" not in body
 
 
 def test_validation_page_news_toggle_opts_into_gdelt():

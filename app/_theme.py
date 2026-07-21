@@ -229,23 +229,34 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-panel > .ph {{ display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }}
 .cp-panel > .ph .tag {{ font-family: var(--cp-mono); font-size: 10.5px; color: var(--cp-muted); }}
 
-/* ---------- terminal table ---------- */
+/* ---------- terminal table ----------
+   Everything is LEFT-aligned with generous right padding: right-aligned columns
+   pushed each value hard against the next column's edge, which made the numbers
+   tiring to read. Monospace + tabular-nums keeps digits lining up regardless of
+   alignment, so nothing is lost by aligning left. Vertical rules are explicitly
+   removed — Streamlit's own markdown-table CSS was drawing them. */
 .cp-table {{ width: 100%; border-collapse: collapse; }}
+.cp-table th, .cp-table td {{
+  border-left: 0 !important; border-right: 0 !important; text-align: left;
+}}
 .cp-table thead th {{
-  text-align: right; font-size: 10px; letter-spacing:.1em; text-transform: uppercase;
-  color: var(--cp-muted); font-weight: 600; padding: 0 0 9px; border-bottom: 1px solid var(--cp-line);
+  font-size: 10px; letter-spacing:.1em; text-transform: uppercase;
+  color: var(--cp-muted); font-weight: 600;
+  padding: 0 22px 9px 0; border-bottom: 1px solid var(--cp-line); white-space: nowrap;
 }}
-.cp-table thead th:first-child, .cp-table tbody td:first-child {{ text-align: left; }}
 .cp-table tbody td {{
-  padding: 9px 0; border-bottom: 1px solid var(--cp-line-soft); font-size: 13px; text-align: right;
-  color: var(--cp-text);
+  padding: 10px 22px 10px 0; border-bottom: 1px solid var(--cp-line-soft);
+  font-size: 13px; color: var(--cp-text);
 }}
+.cp-table th:last-child, .cp-table td:last-child {{ padding-right: 0; }}
 .cp-table tbody tr:last-child td {{ border-bottom: none; }}
 .cp-table tbody tr:hover td {{ background: rgba(255,255,255,.015); }}
 .cp-table .tick {{ font-family: var(--cp-mono); font-weight: 600; letter-spacing:.02em; }}
 .cp-table .co {{ color: var(--cp-dim); font-size: 12px; }}
 .cp-table .val {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; }}
 .cp-table .up {{ color: var(--cp-up); }} .cp-table .down {{ color: var(--cp-down); }}
+/* keep the mono/tabular figures, but don't re-introduce right alignment */
+.cp-table td.num, .cp-table th.num {{ text-align: left; }}
 /* wide tables scroll inside their own panel — never the page body */
 .cp-scroll {{ overflow-x: auto; }}
 .cp-table td.num, .cp-table th.num {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }}
@@ -274,14 +285,11 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-foot {{ margin-top: 11px; padding-top: 10px; border-top:1px dashed var(--cp-line); color: var(--cp-muted); font-size: 11.5px; line-height:1.5; }}
 .cp-foot b {{ color: var(--cp-dim); }}
 
-/* ---------- per-factor IC strip ---------- */
-.cp-frow {{ display:grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items:center; padding: 7px 0; border-bottom: 1px solid var(--cp-line-soft); }}
-.cp-frow .fname {{ font-size: 12.5px; color: var(--cp-dim); }}
-.cp-frow .fic {{ font-family: var(--cp-mono); font-size: 12.5px; width: 58px; text-align:right; }}
-.cp-frow .fic.pos {{ color: var(--cp-up); }} .cp-frow .fic.neg {{ color: var(--cp-down); }} .cp-frow .fic.na {{ color: var(--cp-muted); }}
-.cp-fbar {{ width: 92px; height: 4px; background: var(--cp-line); border-radius:2px; position: relative; }}
-.cp-fbar .mid {{ position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background: var(--cp-muted); }}
-.cp-fbar > i {{ position:absolute; top:0; bottom:0; border-radius:2px; opacity:.55; }}  /* dim = not significant */
+/* NB: the per-factor micro-bar (.cp-fbar) was removed rather than kept as dead
+   CSS. At real IC magnitudes (~0.03) it rendered ~5px wide at 40% opacity, so all
+   that showed was its centre tick — a headerless column of stray dashes. Direction
+   is already carried by the green/red IC value and significance by the YES/NO
+   badge, so the column encoded nothing the row didn't already say. */
 
 /* strip default chrome (keep sidebar collapse + page nav we render ourselves) */
 #MainMenu, [data-testid="stToolbar"], [data-testid="stDecoration"], footer {{ display: none; }}
