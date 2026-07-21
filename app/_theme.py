@@ -226,8 +226,11 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
   background: linear-gradient(180deg, var(--cp-panel), var(--cp-panel-2));
   border: 1px solid var(--cp-line); border-radius: 8px; padding: 15px 16px; margin-bottom: 14px;
 }}
-.cp-panel > .ph {{ display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }}
+.cp-panel > .ph {{ display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; }}
 .cp-panel > .ph .tag {{ font-family: var(--cp-mono); font-size: 10.5px; color: var(--cp-muted); }}
+/* Whatever ends a panel — table, note, footnote — must not contribute its own
+   trailing margin, so every panel's bottom gap equals its top and sides. */
+.cp-panel > *:last-child, .cp-panel > *:last-child > *:last-child {{ margin-bottom: 0; }}
 
 /* ---------- terminal table ----------
    Everything is LEFT-aligned with generous right padding: right-aligned columns
@@ -235,14 +238,17 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
    tiring to read. Monospace + tabular-nums keeps digits lining up regardless of
    alignment, so nothing is lost by aligning left. Vertical rules are explicitly
    removed — Streamlit's own markdown-table CSS was drawing them. */
-.cp-table {{ width: 100%; border-collapse: collapse; }}
+/* margin-bottom:0 — Streamlit's markdown CSS gives every <table> a 16px bottom
+   margin, which stacked on the panel's own padding and left a dead band under
+   the last row. Zeroing it makes the panel's bottom gap match its top. */
+.cp-table {{ width: 100%; border-collapse: collapse; margin-bottom: 0; }}
 .cp-table th, .cp-table td {{
   border-left: 0 !important; border-right: 0 !important; text-align: left;
 }}
 .cp-table thead th {{
   font-size: 10px; letter-spacing:.1em; text-transform: uppercase;
   color: var(--cp-muted); font-weight: 600;
-  padding: 0 22px 9px 0; border-bottom: 1px solid var(--cp-line); white-space: nowrap;
+  padding: 12px 22px 10px 0; border-bottom: 1px solid var(--cp-line); white-space: nowrap;
 }}
 .cp-table tbody td {{
   padding: 10px 22px 10px 0; border-bottom: 1px solid var(--cp-line-soft);
