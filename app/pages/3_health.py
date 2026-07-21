@@ -240,7 +240,8 @@ else:
     # trace must immediately follow the upper edge it fills down to.
     fan = pd.DataFrame(projection.fan)
     dates = fan["date"]
-    band_color = "70, 130, 180"  # steel blue
+    band_color = "74, 104, 196"  # theme periwinkle, in place of raw steel blue
+    st.caption(f"Projected **{unit}** in USD — the axis below is the actual dollar scale.")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=dates, y=fan["p95"], line=dict(width=0), name="95th pct", hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(
@@ -258,7 +259,11 @@ else:
     ))
     fig.update_layout(
         margin=dict(l=0, r=0, t=10, b=0),
-        yaxis_title=f"Projected {unit} (USD)",
+        # No rotated axis title: it read as sideways clutter and — with l=0 — the
+        # actual tick VALUES were being clipped, so the fan projected to a scale
+        # you couldn't read. Currency-prefixed ticks state the unit far more
+        # legibly than a vertical label, and the section header carries the rest.
+        yaxis=dict(tickprefix="$", tickformat=",.0f", automargin=True),
         legend=dict(orientation="h", yanchor="top", y=-0.12, x=0),
         hovermode="x unified",
     )

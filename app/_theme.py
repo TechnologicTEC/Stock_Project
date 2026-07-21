@@ -57,9 +57,13 @@ ACCENT_INK = "#8a5f0f"                            # amber for text/links on ligh
 UP, DOWN = "#157f3d", "#c0391c"                   # semantics, darkened for light
 INK_ON_ACCENT = "#17130a"                         # text on an amber fill (9.61)
 
-# Same semantics as rgb triples, for callers building rgba() washes (the
-# Portfolio heat-map tints cells at varying alpha).
-UP_RGB, DOWN_RGB = "21, 127, 61", "192, 57, 28"
+# VIVID semantics — for FILLS only (heat-map washes, badge tints, chart series).
+# A saturated green can't also be AA-legible as text on white (#16a34a is 3.4:1),
+# so the roles are split: UP/DOWN above stay the text colours, these carry the
+# punch. Safe because they tint a white cell that dark text sits on — measured at
+# 0.42 alpha the text still reads 10.08 (green) / 8.55 (red).
+UP_VIVID, DOWN_VIVID = "#16a34a", "#e03131"
+UP_RGB, DOWN_RGB = "22, 163, 74", "224, 49, 49"
 
 _MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace'
 
@@ -254,10 +258,10 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 }}
 /* Badges on the light canvas: dark ink on a tinted wash, not the pale-on-dark
    inversion — the light-mode green/red are the AA-passing UP/DOWN tokens. */
-.cp-badge.sb {{ color:#0f6b31; background: rgba(21,127,61,.12); border-color: rgba(21,127,61,.30); }}
-.cp-badge.b  {{ color: var(--cp-up); background: rgba(21,127,61,.07); border-color: rgba(21,127,61,.20); }}
-.cp-badge.h  {{ color: var(--cp-dim); background: rgba(99,110,123,.09); border-color: var(--cp-line); }}
-.cp-badge.s  {{ color: var(--cp-down); background: rgba(192,57,28,.08); border-color: rgba(192,57,28,.24); }}
+.cp-badge.sb {{ color:#0b5c29; background: rgba(22,163,74,.22); border-color: rgba(22,163,74,.45); }}
+.cp-badge.b  {{ color: var(--cp-up); background: rgba(22,163,74,.13); border-color: rgba(22,163,74,.32); }}
+.cp-badge.h  {{ color: var(--cp-dim); background: rgba(99,110,123,.10); border-color: var(--cp-line); }}
+.cp-badge.s  {{ color:#9c2415; background: rgba(224,49,49,.15); border-color: rgba(224,49,49,.38); }}
 .cp-badge.faint {{ color: var(--cp-accent-ink); background: rgba(232,178,74,.10); border: 1px dashed rgba(138,95,15,.45); }}
 
 /* ---------- native-widget panels (see _theme.section) ----------
@@ -458,10 +462,15 @@ def _register_plotly_template() -> None:
             colorway=_COLORWAY,
             font=dict(color=TEXT_DIM, size=12,
                       family='-apple-system, "Segoe UI", Roboto, sans-serif'),
+            # automargin is load-bearing, not cosmetic: several charts set
+            # margin(l=0), which left no room for the y tick labels — Plotly
+            # clipped them entirely, so a projection chart showed a fan with no
+            # readable scale. automargin makes the axis claim the space it needs
+            # regardless of the requested margin.
             xaxis=dict(gridcolor=LINE_SOFT, zerolinecolor=LINE, linecolor=LINE,
-                       tickfont=dict(color=MUTED, size=11)),
+                       tickfont=dict(color=MUTED, size=11), automargin=True),
             yaxis=dict(gridcolor=LINE_SOFT, zerolinecolor=LINE, linecolor=LINE,
-                       tickfont=dict(color=MUTED, size=11)),
+                       tickfont=dict(color=MUTED, size=11), automargin=True),
             legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM, size=11)),
             hoverlabel=dict(bgcolor=PANEL, bordercolor=LINE,
                             font=dict(color=TEXT, size=12)),

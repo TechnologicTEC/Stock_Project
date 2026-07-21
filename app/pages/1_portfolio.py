@@ -344,61 +344,61 @@ st.divider()
 # Value over time
 # --------------------------------------------------------------------------
 
-st.subheader("Value over time")
-st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
+with _theme.section("Value over time"):
+    st.caption("Holdings (current and previously sold) plus cash — sold positions live on as a flat cash pile.")
 
-activity = portfolio.list_activity()  # also drives the Transaction history section below
+    activity = portfolio.list_activity()  # also drives the Transaction history section below
 
-range_choice = st.radio(
-    "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
-)
-show_markers = st.checkbox(
-    "Show event markers (buys, sells, deposits, withdrawals)", value=True, key="show_value_markers"
-)
-today = date.today()
-range_starts = {
-    "1M": today - timedelta(days=30),
-    "3M": today - timedelta(days=90),
-    "6M": today - timedelta(days=182),
-    "YTD": date(today.year, 1, 1),
-    "1Y": today - timedelta(days=365),
-}
-start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date() or (today - timedelta(days=365))
-
-try:
-    with st.spinner("Loading price history..."):
-        history = _cache.value_history(current_user_id(), start_date, today)
-except Exception as exc:
-    history = []
-    st.error(f"Couldn't load historical prices right now: {exc}")
-
-if history:
-    history_df = pd.DataFrame(history)
-    history_df["value"] = history_df["value"] * fx_rate
-    fig = px.line(
-        history_df, x="date", y="value",
-        labels={"date": "", "value": f"Portfolio value ({active_currency})"},
+    range_choice = st.radio(
+        "Range", ["1M", "3M", "6M", "YTD", "1Y", "All"], index=2, horizontal=True, label_visibility="collapsed"
     )
-    fig.update_traces(line_color="#2563eb", showlegend=False)  # keep the line out of the legend
-
-    marker_traces = []
-    if show_markers:
-        markers = portfolio.value_history_markers(activity, history)
-        marker_traces = event_marker_traces(markers)
-        for trace in marker_traces:
-            fig.add_trace(trace)
-
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=10, b=10),
-        hovermode="x unified",
-        showlegend=bool(marker_traces),
-        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
+    show_markers = st.checkbox(
+        "Show event markers (buys, sells, deposits, withdrawals)", value=True, key="show_value_markers"
     )
-    st.plotly_chart(fig, width="stretch", key="value_history_chart", theme=None)
-    if show_markers and not marker_traces:
-        st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
-else:
-    st.caption("No historical value to show for this range yet.")
+    today = date.today()
+    range_starts = {
+        "1M": today - timedelta(days=30),
+        "3M": today - timedelta(days=90),
+        "6M": today - timedelta(days=182),
+        "YTD": date(today.year, 1, 1),
+        "1Y": today - timedelta(days=365),
+    }
+    start_date = range_starts.get(range_choice) or portfolio.earliest_activity_date() or (today - timedelta(days=365))
+
+    try:
+        with st.spinner("Loading price history..."):
+            history = _cache.value_history(current_user_id(), start_date, today)
+    except Exception as exc:
+        history = []
+        st.error(f"Couldn't load historical prices right now: {exc}")
+
+    if history:
+        history_df = pd.DataFrame(history)
+        history_df["value"] = history_df["value"] * fx_rate
+        fig = px.line(
+            history_df, x="date", y="value",
+            labels={"date": "", "value": f"Portfolio value ({active_currency})"},
+        )
+        fig.update_traces(line_color="#2563eb", showlegend=False)  # keep the line out of the legend
+
+        marker_traces = []
+        if show_markers:
+            markers = portfolio.value_history_markers(activity, history)
+            marker_traces = event_marker_traces(markers)
+            for trace in marker_traces:
+                fig.add_trace(trace)
+
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=10, b=10),
+            hovermode="x unified",
+            showlegend=bool(marker_traces),
+            legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, title_text=""),
+        )
+        st.plotly_chart(fig, width="stretch", key="value_history_chart", theme=None)
+        if show_markers and not marker_traces:
+            st.caption("No buys, sells, deposits, or withdrawals fall within this range yet.")
+    else:
+        st.caption("No historical value to show for this range yet.")
 
 st.divider()
 
@@ -406,65 +406,65 @@ st.divider()
 # Transaction / activity history — and undoing mistakes
 # --------------------------------------------------------------------------
 
-st.subheader("Transaction history")
-st.caption(
-    "Every buy, sell, deposit, and withdrawal. Delete an entry to undo a mistake "
-    "(wrong stock, wrong amount, ...) — your holdings, wallet, and the chart above are "
-    "restored exactly as if it never happened."
-)
-
-if not activity:  # fetched once, up by the chart
-    st.caption("No activity yet.")
-else:
-    activity_df = pd.DataFrame(
-        [
-            {
-                "Date": e["date"].isoformat(),
-                "Action": e["action"],
-                "Ticker": e["ticker"] or "—",
-                "Shares": f"{e['shares']:,.4f}" if e["shares"] is not None else "—",
-                "Price": money(e["price"]),
-                "Amount": money(e["amount"]),
-            }
-            for e in activity
-        ]
+with _theme.section("Transaction history", tag="every buy, sell and cash move"):
+    st.caption(
+        "Every buy, sell, deposit, and withdrawal. Delete an entry to undo a mistake "
+        "(wrong stock, wrong amount, ...) — your holdings, wallet, and the chart above are "
+        "restored exactly as if it never happened."
     )
-    st.dataframe(activity_df, width="stretch", hide_index=True)
 
-    with st.expander("↩️ Undo / delete an entry"):
-        def _entry_label(e):
-            if e["kind"] == "transaction":
-                base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ {money(e['price'])}"
-            else:
-                base = f"{e['date']} · {e['action']} {money(e['amount'])}"
-            return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
+    if not activity:  # fetched once, up by the chart
+        st.caption("No activity yet.")
+    else:
+        activity_df = pd.DataFrame(
+            [
+                {
+                    "Date": e["date"].isoformat(),
+                    "Action": e["action"],
+                    "Ticker": e["ticker"] or "—",
+                    "Shares": f"{e['shares']:,.4f}" if e["shares"] is not None else "—",
+                    "Price": money(e["price"]),
+                    "Amount": money(e["amount"]),
+                }
+                for e in activity
+            ]
+        )
+        st.dataframe(activity_df, width="stretch", hide_index=True)
 
-        entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
-        entry_choice = st.selectbox("Entry to remove", list(entry_options.keys()), key="activity_delete_select")
-        if st.button("Delete entry", type="secondary", key="activity_delete_btn"):
-            try:
-                portfolio.delete_activity(*entry_options[entry_choice])
-                st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+        with st.expander("↩️ Undo / delete an entry"):
+            def _entry_label(e):
+                if e["kind"] == "transaction":
+                    base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ {money(e['price'])}"
+                else:
+                    base = f"{e['date']} · {e['action']} {money(e['amount'])}"
+                return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
+
+            entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
+            entry_choice = st.selectbox("Entry to remove", list(entry_options.keys()), key="activity_delete_select")
+            if st.button("Delete entry", type="secondary", key="activity_delete_btn"):
+                try:
+                    portfolio.delete_activity(*entry_options[entry_choice])
+                    st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+                    _cache.clear()
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+        with st.expander("⚠️ Reset everything"):
+            st.caption(
+                "Permanently delete **all** holdings, transactions, deposits/withdrawals, and reset "
+                "the wallet to $0. This can't be undone."
+            )
+            reset_confirmed = st.checkbox("Yes, clear everything.", key="reset_confirm")
+            if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
+                portfolio.reset_portfolio()
+                st.success("Portfolio reset to an empty slate.")
                 _cache.clear()
                 st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
 
-    with st.expander("⚠️ Reset everything"):
-        st.caption(
-            "Permanently delete **all** holdings, transactions, deposits/withdrawals, and reset "
-            "the wallet to $0. This can't be undone."
-        )
-        reset_confirmed = st.checkbox("Yes, clear everything.", key="reset_confirm")
-        if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
-            portfolio.reset_portfolio()
-            st.success("Portfolio reset to an empty slate.")
-            _cache.clear()
-            st.rerun()
-
-if not holdings:
-    st.info("You've sold all your positions — your proceeds are sitting in the wallet. Add a holding to start investing again.")
-    st.stop()
+    if not holdings:
+        st.info("You've sold all your positions — your proceeds are sitting in the wallet. Add a holding to start investing again.")
+        st.stop()
 
 st.divider()
 
@@ -472,58 +472,58 @@ st.divider()
 # Allocation
 # --------------------------------------------------------------------------
 
-st.subheader("Allocation")
+with _theme.section("Allocation", tag="share of holdings"):
 
-a1, a2 = st.columns(2)
-a3, a4, a5 = st.columns(3)
+    a1, a2 = st.columns(2)
+    a3, a4, a5 = st.columns(3)
 
-with a1:
-    st.caption("By ticker")
-    by_ticker = portfolio.get_allocation_by_ticker()
-    if by_ticker:
-        st.plotly_chart(
-            px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_ticker", theme=None,
-        )
+    with a1:
+        st.caption("By ticker")
+        by_ticker = portfolio.get_allocation_by_ticker()
+        if by_ticker:
+            st.plotly_chart(
+                px.pie(_alloc_df(by_ticker), values="value", names="label", hole=0.35),
+                width="stretch", key="alloc_ticker", theme=None,
+            )
 
-with a2:
-    st.caption("By asset type")
-    by_type = portfolio.get_allocation_by_asset_type()
-    if by_type:
-        st.plotly_chart(
-            px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_asset_type", theme=None,
-        )
+    with a2:
+        st.caption("By asset type")
+        by_type = portfolio.get_allocation_by_asset_type()
+        if by_type:
+            st.plotly_chart(
+                px.pie(_alloc_df(by_type), values="value", names="label", hole=0.35),
+                width="stretch", key="alloc_asset_type", theme=None,
+            )
 
-with a3:
-    st.caption("By sector")
-    with st.spinner("Looking up sectors..."):
-        by_sector = portfolio.get_allocation_by_sector()
-    if by_sector:
-        st.plotly_chart(
-            px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_sector", theme=None,
-        )
+    with a3:
+        st.caption("By sector")
+        with st.spinner("Looking up sectors..."):
+            by_sector = portfolio.get_allocation_by_sector()
+        if by_sector:
+            st.plotly_chart(
+                px.pie(_alloc_df(by_sector), values="value", names="label", hole=0.35),
+                width="stretch", key="alloc_sector", theme=None,
+            )
 
-with a4:
-    st.caption("By country")
-    with st.spinner("Looking up countries..."):
-        by_country = portfolio.get_allocation_by_country()
-    if by_country:
-        st.plotly_chart(
-            px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_country", theme=None,
-        )
+    with a4:
+        st.caption("By country")
+        with st.spinner("Looking up countries..."):
+            by_country = portfolio.get_allocation_by_country()
+        if by_country:
+            st.plotly_chart(
+                px.pie(_alloc_df(by_country), values="value", names="label", hole=0.35),
+                width="stretch", key="alloc_country", theme=None,
+            )
 
-with a5:
-    st.caption("By market cap")
-    with st.spinner("Looking up market caps..."):
-        by_market_cap = portfolio.get_allocation_by_market_cap()
-    if by_market_cap:
-        st.plotly_chart(
-            px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
-            width="stretch", key="alloc_market_cap", theme=None,
-        )
+    with a5:
+        st.caption("By market cap")
+        with st.spinner("Looking up market caps..."):
+            by_market_cap = portfolio.get_allocation_by_market_cap()
+        if by_market_cap:
+            st.plotly_chart(
+                px.pie(_alloc_df(by_market_cap), values="value", names="label", hole=0.35),
+                width="stretch", key="alloc_market_cap", theme=None,
+            )
 
 st.divider()
 
@@ -546,7 +546,7 @@ def _pct_color(value) -> str:
         return ""
     intensity = min(abs(value) / 5.0, 1.0)
     rgb = _theme.UP_RGB if value >= 0 else _theme.DOWN_RGB
-    return f"background-color: rgba({rgb}, {0.08 + 0.22 * intensity})"
+    return f"background-color: rgba({rgb}, {0.10 + 0.32 * intensity})"
 
 
 def _reco_color(text) -> str:
@@ -554,9 +554,9 @@ def _reco_color(text) -> str:
     if not isinstance(text, str):
         return ""
     if "Buy" in text:
-        return f"background-color: rgba({_theme.UP_RGB}, 0.15)"
+        return f"background-color: rgba({_theme.UP_RGB}, 0.24)"
     if "Sell" in text:
-        return f"background-color: rgba({_theme.DOWN_RGB}, 0.15)"
+        return f"background-color: rgba({_theme.DOWN_RGB}, 0.24)"
     return ""
 
 
