@@ -55,7 +55,11 @@ if not ticker:
 # --------------------------------------------------------------------------
 # Cross-signal summary (review #5) — opt-in, because it runs the Screener.
 # --------------------------------------------------------------------------
-_SIGNAL_ICON = {"positive": "🟢", "negative": "🔴", "neutral": "⚪", "n/a": "·"}
+# Stance as a badge rather than a coloured circle: the label carries the meaning
+# for anyone who can't distinguish the hues, and it matches the badges used for
+# ratings elsewhere.
+_STANCE_LABEL = {"positive": "POSITIVE", "negative": "NEGATIVE", "neutral": "NEUTRAL", "n/a": "NO DATA"}
+_STANCE_CLASS = {"positive": "sb", "negative": "s", "neutral": "h", "n/a": "h"}
 
 if st.checkbox(
     "🔀 Cross-signal summary",
@@ -72,21 +76,32 @@ if st.checkbox(
         pos, neu, neg, counted = (summary["positive"], summary["neutral"],
                                   summary["negative"], summary["counted"])
         if pos > neg and pos >= 2:
-            lean = "🟢 **Signals lean positive**"
+            lean, lean_kind = "Signals lean positive", "sb"
         elif neg > pos and neg >= 2:
-            lean = "🔴 **Signals lean negative**"
+            lean, lean_kind = "Signals lean negative", "s"
         elif pos and neg:
-            lean = "🟡 **Signals are mixed**"
+            lean, lean_kind = "Signals are mixed", "faint"
         else:
-            lean = "⚪ **No clear lean**"
-        st.markdown(f"{lean} — {pos} positive · {neu} neutral · {neg} negative, of {counted} signals with data.")
-        st.dataframe(
-            pd.DataFrame([{"Signal": r.name, "": _SIGNAL_ICON[r.stance], "Read": r.detail}
-                          for r in summary["reads"]]),
-            width="stretch", hide_index=True,
+            lean, lean_kind = "No clear lean", "h"
+
+        rows = "".join(
+            f'<tr><td>{r.name}</td>'
+            f'<td>{_theme.badge_html(_STANCE_LABEL[r.stance], _STANCE_CLASS[r.stance])}</td>'
+            f'<td class="co">{r.detail}</td></tr>'
+            for r in summary["reads"]
         )
-        st.caption("Where the app's independent reads agree or disagree — **not a prediction and not a combined "
-                   "score**. Each read keeps its own caveats on its own page.")
+        _theme.panel(
+            "Cross-signal summary",
+            f'<div style="margin-bottom:12px">{_theme.badge_html(lean, lean_kind)}'
+            f'<span class="co" style="margin-left:10px">{pos} positive · {neu} neutral · '
+            f'{neg} negative, of {counted} with data</span></div>'
+            '<table class="cp-table"><thead><tr><th>Signal</th><th>Read</th>'
+            '<th>Detail</th></tr></thead>'
+            f"<tbody>{rows}</tbody></table>"
+            '<div class="cp-foot"><b>Not a prediction, and not a combined score.</b> These are the app\'s '
+            "independent reads shown side by side — each keeps its own caveats on its own page.</div>",
+            tag=ticker,
+        )
 
 view = st.radio("View", ["📰 News", "📈 Earnings"], horizontal=True, label_visibility="collapsed")
 

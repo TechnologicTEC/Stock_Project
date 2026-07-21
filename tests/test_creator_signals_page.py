@@ -77,11 +77,13 @@ def test_leaderboard_renders_repeat_mentions():
          patch("engine.watchlist.list_watchlist", return_value=[]):
         at.run(timeout=30)
     assert not at.exception
-    assert any("Mentioned more than once" in s.value for s in at.subheader)
     text = " ".join(m.value for m in at.markdown)
-    assert "NVDA" in text and "3" in text and "videos" in text
-    assert "🟢2" in text and "🔴1" in text     # stance split, not just a total
-    assert len(_add_buttons(at)) == 1          # leaderboard row gets its own add button
+    assert "Mentioned more than once" in text   # now a section head, not a subheader
+    assert "NVDA" in text and "3" in text
+    # Stance split, not just a total — and now labelled, so the meaning doesn't
+    # rest on telling a green circle from a red one.
+    assert "2 bullish" in text and "1 bearish" in text
+    assert len(_add_buttons(at)) == 1           # leaderboard row gets its own add button
 
 
 def test_leaderboard_empty_state_when_nothing_mentioned_twice():

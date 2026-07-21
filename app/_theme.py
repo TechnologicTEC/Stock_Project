@@ -251,6 +251,12 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
 [data-testid="stTable"] th {{ text-transform: uppercase; letter-spacing:.08em; font-size:10px; color: var(--cp-muted); font-weight:600; }}
 hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 
+/* ---------- inline utilities (for column grids, where a .cp-table can't be
+   used because the row contains real Streamlit widgets) ---------- */
+.cp-tick {{ font-family: var(--cp-mono); font-weight: 600; letter-spacing:.02em; color: var(--cp-text); }}
+.cp-num  {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; color: var(--cp-text); }}
+.cp-dim  {{ color: var(--cp-muted); }}
+
 /* ---------- badges ---------- */
 .cp-badge {{
   font-family: var(--cp-mono); font-size: 11px; font-weight: 600; letter-spacing:.02em;
