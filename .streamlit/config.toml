@@ -5,10 +5,13 @@
 [theme]
 base = "dark"
 primaryColor = "#e8b24a"              # amber — the one bold hue (buttons, focus, accents)
-backgroundColor = "#0a0e14"           # deep cool ink, not pure black
-secondaryBackgroundColor = "#121924"  # panels, sidebar, inputs
-textColor = "#d1dbe7"                 # cool light grey
+# Grey-blue, not near-black: the first cut (#0a0e14) read as harsh and pushed
+# muted text to a 3.65 contrast ratio, under the WCAG AA floor of 4.5. Every tone
+# clears AA on this ground — see the note in app/_theme.py.
+backgroundColor = "#161b26"
+secondaryBackgroundColor = "#1e2531"  # panels, sidebar, inputs
+textColor = "#dde5ef"
 linkColor = "#e8b24a"
-borderColor = "#202b39"               # hairline
+borderColor = "#2c3546"               # hairline
 baseRadius = "0.45rem"
 font = "sans-serif"                   # system UI sans; data is forced to monospace in CSS

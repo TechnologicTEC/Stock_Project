@@ -163,15 +163,21 @@ def _render_login_and_stop() -> None:
     st.stop()
 
 
-def _render_identity_sidebar(identity: auth.Identity) -> None:
-    with st.sidebar:
-        if identity.role == auth.GUEST:
-            st.caption("👤 Guest — demo portfolio")
+def _render_identity(identity: auth.Identity) -> None:
+    """Identity goes in the top bar (the header chip), not the sidebar — only the
+    sign-in/out control needs to stay in the sidebar, because it's a real
+    Streamlit button and the bar is static HTML."""
+    from app import _theme
+
+    if identity.role == auth.GUEST:
+        _theme.top_bar(email="Guest", role="demo portfolio")
+        with st.sidebar:
             if _login_required() and st.button("Sign in", key="_auth_signin", use_container_width=True):
                 st.session_state[_GUEST_FLAG] = False
                 st.login()
-        else:
-            st.caption(f"👤 {identity.email} · {identity.role}")
+    else:
+        _theme.top_bar(email=identity.email, role=identity.role)
+        with st.sidebar:
             if _is_logged_in() and st.button("Sign out", key="_auth_signout", use_container_width=True):
                 st.logout()
 
@@ -183,7 +189,7 @@ def gate(page_key: str) -> auth.Identity:
         _render_login_and_stop()
 
     identity = auth.apply_login(_current_email())
-    _render_identity_sidebar(identity)
+    _render_identity(identity)
 
     if not auth.can_access(identity.role, page_key):
         st.error("This page isn't available on your account — it's limited to the owner and invited friends.")

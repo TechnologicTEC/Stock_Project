@@ -28,9 +28,15 @@ from datetime import datetime, timezone
 import streamlit as st
 
 # Kept in sync with .streamlit/config.toml and the mockup.
-GROUND, PANEL, PANEL_2 = "#0a0e14", "#121924", "#0d131c"
-LINE, LINE_SOFT = "#202b39", "#18212c"
-TEXT, TEXT_DIM, MUTED = "#d1dbe7", "#93a1b1", "#5f6d7c"
+#
+# Lightened from the first cut (#0a0e14): near-black read as harsh, and — measured,
+# not guessed — MUTED sat at a 3.65 contrast ratio on it, under the WCAG AA floor
+# of 4.5 for normal text. Captions and table dims were genuinely hard to read. On
+# this grey-blue ground muted is 5.01, dim 8.35, body text 13.56, accent 8.94, so
+# every tone on the page clears AA.
+GROUND, PANEL, PANEL_2 = "#161b26", "#1e2531", "#1a202b"
+LINE, LINE_SOFT = "#2c3546", "#242c3a"
+TEXT, TEXT_DIM, MUTED = "#dde5ef", "#a9b6c4", "#7e8c9b"
 ACCENT, ACCENT_DIM = "#e8b24a", "#8a6f36"
 UP, DOWN = "#4bc16d", "#ef6147"
 
@@ -101,7 +107,7 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
   display: flex; align-items: center; gap: 14px;
   margin: 0; padding: 10px 18px;
   border: 0; border-bottom: 1px solid var(--cp-line); border-radius: 0;
-  background: linear-gradient(180deg, #0e141d, #0b1017);
+  background: linear-gradient(180deg, #212936, #1a202b);
   font-size: 12px;
 }}
 /* clear the fixed bar (it spans over the sidebar too, as in the mockup) */
@@ -122,6 +128,16 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
   color: var(--cp-accent); border:1px dashed var(--cp-accent-dim); border-radius:5px;
   padding: 3px 8px; background: rgba(232,178,74,.06);
 }}
+/* identity, in the header rather than the sidebar */
+.cp-id {{ display:inline-flex; align-items:center; gap:8px; font-size: 12px; color: var(--cp-dim); }}
+.cp-id .av {{
+  width:22px; height:22px; border-radius:50%; display:inline-grid; place-items:center;
+  background: linear-gradient(135deg,#2c3646,#1d2430); border:1px solid var(--cp-line);
+  font-size:10px; color: var(--cp-accent); font-weight:700; flex: 0 0 auto;
+}}
+.cp-id .who {{ max-width: 210px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.cp-id .role {{ color: var(--cp-muted); }}
+@media (max-width: 900px) {{ .cp-id .who, .cp-id .role {{ display:none; }} }}
 
 /* ---------- page header (eyebrow + title + sub) ---------- */
 .cp-head {{ margin: 2px 0 18px; }}
@@ -285,12 +301,26 @@ def _us_market_open(now: datetime | None = None) -> bool:
     return 13 * 60 + 30 <= minutes < 20 * 60
 
 
-def _top_bar() -> None:
+def top_bar(email: str | None = None, role: str | None = None) -> None:
+    """The fixed status bar. Rendered by `_auth.gate()` rather than by apply(),
+    because only gate() knows who's signed in — and since the bar is
+    position:fixed, where it sits in the DOM makes no difference to where it
+    paints. That's what lets the identity live in the header, as in the mockup,
+    instead of tucked at the bottom of the sidebar."""
     now = datetime.now(timezone.utc)
     is_open = _us_market_open(now)
     state = "MKT OPEN" if is_open else "MKT CLOSED"
     dot = "open" if is_open else "closed"
     stamp = now.strftime("%d %b · %H:%M UTC")
+
+    identity = ""
+    if email or role:
+        who = email or "Guest"
+        initial = (who[:1] or "?").upper()
+        suffix = f' <span class="role">· {role}</span>' if role else ""
+        identity = (f'<span class="cp-id"><span class="av">{initial}</span>'
+                    f"<span class=\"who\">{who}</span>{suffix}</span>")
+
     st.markdown(
         f'<div class="cp-topbar">'
         f'<span class="brand"><span class="glyph">◈</span> Investment Co-Pilot <small>terminal</small></span>'
@@ -298,7 +328,8 @@ def _top_bar() -> None:
         f'<span class="cp-chip">{stamp}</span>'
         f'<span class="spacer"></span>'
         f'<span class="cp-pill-advice">Not advice</span>'
-        f'</div>',
+        f"{identity}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -319,10 +350,10 @@ def _sidebar_nav() -> None:
 
 
 def apply() -> None:
-    """Inject the terminal stylesheet and render the chrome (top bar + nav).
-    Call once per page, right after set_page_config()."""
+    """Inject the terminal stylesheet and render the sidebar nav. Call once per
+    page, right after set_page_config(). The top bar is rendered separately by
+    `_auth.gate()`, which is where the signed-in identity becomes known."""
     st.markdown(_CSS, unsafe_allow_html=True)
-    _top_bar()
     _sidebar_nav()
 
 
