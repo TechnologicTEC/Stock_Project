@@ -22,7 +22,7 @@ _theme.apply()
 init_db()
 identity = gate("settings")  # owner/friend only; guests are stopped here
 
-st.title("Settings — your API keys")
+_theme.page_header("Settings", eyebrow="Execution")
 st.caption(
     "These keys are **yours** — stored encrypted and used only for your account. Nothing is shared with other "
     "users, and none of it is shown back after you save it. Leave a field blank to keep the current value. "

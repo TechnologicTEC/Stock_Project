@@ -31,7 +31,7 @@ gate("portfolio")  # resolve the signed-in user and scope the DB to them (Phase 
 portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
 portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
 
-st.title("Portfolio")
+_theme.page_header("Holdings", eyebrow="Portfolio")
 st.caption(
     "Personal, educational tool — not financial advice. Free-tier data can be delayed or incomplete."
 )

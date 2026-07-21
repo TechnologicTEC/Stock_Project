@@ -26,7 +26,7 @@ _theme.apply()
 init_db()
 gate("chat")  # guest-accessible (Phase B) — sets the current user scope
 
-st.title("Assistant")
+_theme.page_header("Assistant", eyebrow="Execution")
 if chat_llm.is_available():
     st.caption(
         "Personal, educational tool — not financial advice. **Powered by Gemini**, I answer questions about "

@@ -24,7 +24,7 @@ _theme.apply()
 init_db()
 gate("news")  # restricted: guests are stopped here (Phase B)
 
-st.title("News & Earnings")
+_theme.page_header("News & Earnings", eyebrow="Research")
 st.caption(
     "Personal, educational tool — not financial advice. Sentiment is a finance-tuned model's read of "
     "headlines/press releases (FinBERT), not a recommendation. Free-tier data can be delayed or incomplete."

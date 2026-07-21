@@ -24,7 +24,7 @@ _theme.apply()
 init_db()
 gate("screener")  # restricted: guests are stopped here (Phase B)
 
-st.title("Screener")
+_theme.page_header("Screener", eyebrow="Research")
 st.caption(
     "Personal, educational tool — not financial advice. Scores are a transparent, "
     "weighted heuristic over free-tier data, not a prediction."
@@ -99,22 +99,37 @@ def _render_leaderboard() -> None:
         top_n = st.radio("Show", [10, 20, 50], horizontal=True, index=1, key="lb_top_n")
         show = rows[:top_n]
         factor_labels = screener.FACTOR_LABELS
-        table = []
+
+        # Short column heads — six full factor names would force a horizontal
+        # scroll on every screen width.
+        short = {"valuation": "VAL", "growth": "GRW", "profitability": "PRF",
+                 "momentum": "MOM", "sentiment": "SEN", "analyst_confidence": "ANA"}
+        heads = "".join(f'<th class="num" title="{lbl}">{short.get(f, f[:3].upper())}</th>'
+                        for f, lbl in factor_labels.items())
+        body = []
         for r in show:
-            row = {"#": r["rank"], "Ticker": r["ticker"], "Name": r.get("name") or "—",
-                   "Score": r["score"], "Rating": r["recommendation"]}
-            for fname, flabel in factor_labels.items():
-                row[flabel] = (r.get("factor_scores") or {}).get(fname)
-            table.append(row)
-        st.dataframe(
-            pd.DataFrame(table).style.format({"Score": "{:.1f}", **{v: "{:.0f}" for v in factor_labels.values()}},
-                                             na_rep="—"),
-            width="stretch", hide_index=True,
-        )
-        st.caption(
-            "Sentiment and Analyst are **live-only** factors — they're not in the historical IC above, which "
-            "covers the fundamentals-plus-momentum core. Add a name to your watchlist above to screen it in "
-            "full with its factor reasons."
+            cells = []
+            for f in factor_labels:
+                v = (r.get("factor_scores") or {}).get(f)
+                cells.append(f'<td class="num">{v:.0f}</td>' if v is not None
+                             else '<td class="num dim">—</td>')
+            body.append(
+                f'<tr><td class="dim">{r["rank"]}</td>'
+                f'<td><span class="tick">{r["ticker"]}</span></td>'
+                f'<td class="co">{r.get("name") or "—"}</td>'
+                f'<td class="num">{r["score"]:.1f}</td>'
+                f'<td>{_theme.badge_html(r["recommendation"])}</td>'
+                f"{''.join(cells)}</tr>"
+            )
+        _theme.panel(
+            "Highest-scoring right now",
+            '<div class="cp-scroll"><table class="cp-table">'
+            '<thead><tr><th>#</th><th>Ticker</th><th>Name</th><th class="num">Score</th>'
+            f'<th>Rating</th>{heads}</tr></thead>'
+            f"<tbody>{''.join(body)}</tbody></table></div>"
+            '<div class="cp-foot">Sentiment (SEN) and Analyst (ANA) are <b>live-only</b> factors — not part '
+            "of the historical IC above, which covers the fundamentals-plus-momentum core.</div>",
+            tag=f"top {len(show)} of {lb.get('n_scored', len(rows))}",
         )
 
 

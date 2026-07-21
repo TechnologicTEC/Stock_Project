@@ -26,7 +26,7 @@ _theme.apply()
 init_db()
 gate("validation")  # restricted: guests are stopped here (Phase B)
 
-st.title("Screener Validation")
+_theme.page_header("Screener Validation", eyebrow="Research")
 st.caption(
     "Personal, educational tool — not financial advice. This checks whether the Screener's scores "
     "have historically preceded better returns — it is not a prediction of future performance."

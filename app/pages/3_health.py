@@ -24,7 +24,7 @@ _theme.apply()
 init_db()
 gate("health")  # guest-accessible (Phase B) — sets the current user scope
 
-st.title("Portfolio Health")
+_theme.page_header("Portfolio Health", eyebrow="Portfolio")
 st.caption(
     "Personal, educational tool — not financial advice. These are simple, explainable checks over "
     "free-tier data, not a comprehensive risk assessment."

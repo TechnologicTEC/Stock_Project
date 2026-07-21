@@ -230,6 +230,10 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-table .co {{ color: var(--cp-dim); font-size: 12px; }}
 .cp-table .val {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; }}
 .cp-table .up {{ color: var(--cp-up); }} .cp-table .down {{ color: var(--cp-down); }}
+/* wide tables scroll inside their own panel — never the page body */
+.cp-scroll {{ overflow-x: auto; }}
+.cp-table td.num, .cp-table th.num {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }}
+.cp-table .dim {{ color: var(--cp-muted); }}
 .cp-wbar {{ height: 5px; border-radius: 3px; background: var(--cp-line); overflow: hidden; min-width: 46px; display:inline-block; vertical-align: middle; }}
 .cp-wbar > i {{ display:block; height:100%; background: linear-gradient(90deg, var(--cp-accent-dim), var(--cp-accent)); }}
 

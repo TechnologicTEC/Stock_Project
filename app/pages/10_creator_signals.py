@@ -29,7 +29,7 @@ creator_signals.seed_default_creators()
 _STANCE = {"bullish": "🟢 Bullish", "bearish": "🔴 Bearish", "neutral": "⚪ Neutral", "unknown": "· —"}
 _STANCE_ICON = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪", "unknown": "·"}
 
-st.title("Creator Signals")
+_theme.page_header("Creator Signals", eyebrow="Research")
 st.caption(
     "Stocks **mentioned** in the creators' latest videos, run through the app's screener. A mention is **not** "
     "an endorsement — the creator may be bearish — and the screener score is an explainable, educational signal, "

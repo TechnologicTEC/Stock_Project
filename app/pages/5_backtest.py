@@ -25,7 +25,7 @@ _theme.apply()
 init_db()
 gate("backtest")  # guest-accessible (Phase B) — sets the current user scope
 
-st.title("Backtesting")
+_theme.page_header("Backtesting", eyebrow="Execution")
 st.caption(
     "Personal, educational tool — not financial advice. Backtests use free-tier price history, "
     "assume no trading costs or slippage, and — as always — past performance doesn't predict the future."

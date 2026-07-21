@@ -156,8 +156,8 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     blob = " ".join(w.value for w in at.markdown) + " ".join(getattr(w, "value", "") for w in at.warning)
     assert "+0.046" in blob                       # the measured IC is shown...
     assert "not a prediction" in blob.lower()     # ...with the honest framing
-    # the ranked names reached a dataframe on the page
-    assert any("AAA" in str(df.value.to_dict()) for df in at.dataframe)
+    # the ranking now renders as a terminal table, not a dataframe
+    assert "AAA" in blob and "Highest-scoring right now" in blob
 
 
 def test_leaderboard_shows_the_company_name_beside_the_ticker():
@@ -174,10 +174,10 @@ def test_leaderboard_shows_the_company_name_beside_the_ticker():
     at.run(timeout=30)
     assert not at.exception
 
-    tables = [str(df.value.to_dict()) for df in at.dataframe]
-    assert any("Apple Inc" in t for t in tables)
+    blob = " ".join(m.value for m in at.markdown)
+    assert "Apple Inc" in blob
     # A missing profile must degrade to a dash, not a blank or a crash.
-    assert any("—" in t for t in tables)
+    assert "—" in blob
 
 
 def test_leaderboard_flags_stale_scores_instead_of_showing_them_as_current():

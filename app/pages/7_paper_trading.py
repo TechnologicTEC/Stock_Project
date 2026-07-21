@@ -25,7 +25,7 @@ _theme.apply()
 init_db()
 gate("paper_trading")  # restricted: guests are stopped here (Phase B)
 
-st.title("Paper Trading")
+_theme.page_header("Paper Trading", eyebrow="Execution")
 st.caption(
     "Personal, educational tool — not financial advice. This trades **paper money** through Alpaca's paper "
     "account (no real funds), on free, real-time-*ish* IEX data. Orders are simulated; you submit them, the app "
