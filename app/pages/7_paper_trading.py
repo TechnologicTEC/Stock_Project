@@ -181,36 +181,36 @@ st.divider()
 # Positions
 # --------------------------------------------------------------------------
 
-st.subheader("Open positions")
-
 if dashboard.positions:
-    pos_df = pd.DataFrame(
-        [
-            {
-                "Symbol": p["symbol"],
-                "Qty": p["qty"],
-                "Side": p["side"],
-                "Avg entry": p["avg_entry_price"],
-                "Current": p["current_price"],
-                "Market value": p["market_value"],
-                "Unrealized P&L": p["unrealized_pl"],
-                "Unrealized %": p["unrealized_plpc"],
-            }
-            for p in dashboard.positions
-        ]
+    def _pl_cell(v, fmt):
+        if v is None:
+            return '<td class="num dim">—</td>'
+        cls = "up" if v >= 0 else "down"
+        return f'<td class="num {cls}">{fmt.format(v)}</td>'
+
+    rows = "".join(
+        f'<tr><td><span class="tick">{p["symbol"]}</span></td>'
+        f'<td class="num">{p["qty"]:g}</td>'
+        f'<td>{_theme.badge_html(p["side"].upper(), "b" if p["side"] == "long" else "s")}</td>'
+        f'<td class="num dim">${p["avg_entry_price"]:,.2f}</td>'
+        f'<td class="num">${p["current_price"]:,.2f}</td>'
+        f'<td class="num">${p["market_value"]:,.2f}</td>'
+        f'{_pl_cell(p["unrealized_pl"], "${:+,.2f}")}'
+        f'{_pl_cell(p["unrealized_plpc"], "{:+.2f}%")}</tr>'
+        for p in dashboard.positions
     )
-    st.dataframe(
-        pos_df.style.format(
-            {
-                "Qty": "{:g}", "Avg entry": "${:,.2f}", "Current": "${:,.2f}",
-                "Market value": "${:,.2f}", "Unrealized P&L": "${:,.2f}", "Unrealized %": "{:+.2f}%",
-            },
-            na_rep="—",
-        ),
-        width="stretch", hide_index=True,
+    _theme.panel(
+        "Open positions",
+        '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+        '<th>Symbol</th><th class="num">Qty</th><th>Side</th><th class="num">Avg entry</th>'
+        '<th class="num">Current</th><th class="num">Market value</th>'
+        '<th class="num">Unreal. P&L</th><th class="num">Unreal. %</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table></div>",
+        tag=f"{len(dashboard.positions)} open",
     )
 else:
-    st.caption("No open positions yet — place an order above to get started.")
+    _theme.panel("Open positions",
+                 '<p class="cp-note">No open positions yet — place an order above to get started.</p>')
 
 # --------------------------------------------------------------------------
 # Open (working) orders — each cancelable
@@ -243,32 +243,35 @@ if dashboard.open_orders:
 # Recent order history
 # --------------------------------------------------------------------------
 
-st.subheader("Recent orders")
-
 if dashboard.recent_orders:
-    hist_df = pd.DataFrame(
-        [
-            {
-                "Submitted": (o["submitted_at"] or "")[:19].replace("T", " "),
-                "Symbol": o["symbol"],
-                "Side": o["side"],
-                "Qty": o["qty"],
-                "Type": o["type"],
-                "Limit": o["limit_price"],
-                "Ext": "✓" if o.get("extended_hours") else "",
-                "Status": o["status"],
-                "Filled qty": o["filled_qty"],
-                "Filled avg": o["filled_avg_price"],
-            }
-            for o in dashboard.recent_orders
-        ]
+    def _status_badge(status: str) -> str:
+        s = (status or "").lower()
+        kind = ("sb" if s == "filled" else "s" if s in ("canceled", "cancelled", "rejected", "expired")
+                else "h")             # accepted / new / partially_filled read as neutral
+        return _theme.badge_html(status, kind)
+
+    def _money(v):
+        return f"${v:,.2f}" if v is not None else "—"
+
+    rows = "".join(
+        f'<tr><td class="co">{(o["submitted_at"] or "")[:16].replace("T", " ")}</td>'
+        f'<td><span class="tick">{o["symbol"]}</span></td>'
+        f'<td>{_theme.badge_html(o["side"].upper(), "b" if o["side"] == "buy" else "s")}</td>'
+        f'<td class="num">{o["qty"]:g}</td>'
+        f'<td class="co">{o["type"]}{" · ext" if o.get("extended_hours") else ""}</td>'
+        f'<td class="num dim">{_money(o.get("limit_price"))}</td>'
+        f'<td>{_status_badge(o["status"])}</td>'
+        f'<td class="num">{o["filled_qty"]:g} @ {_money(o.get("filled_avg_price"))}</td></tr>'
+        for o in dashboard.recent_orders
     )
-    st.dataframe(
-        hist_df.style.format(
-            {"Qty": "{:g}", "Limit": "${:,.2f}", "Filled qty": "{:g}", "Filled avg": "${:,.2f}"},
-            na_rep="—",
-        ),
-        width="stretch", hide_index=True,
+    _theme.panel(
+        "Recent orders",
+        '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+        '<th>Submitted</th><th>Symbol</th><th>Side</th><th class="num">Qty</th>'
+        '<th>Type</th><th class="num">Limit</th><th>Status</th>'
+        '<th class="num">Filled</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table></div>",
+        tag=f"{len(dashboard.recent_orders)} shown",
     )
 else:
-    st.caption("No orders yet.")
+    _theme.panel("Recent orders", '<p class="cp-note">No orders yet.</p>')

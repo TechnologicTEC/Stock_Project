@@ -92,19 +92,6 @@ def _num(v):
     return f"{v:.2f}" if v is not None else "—"
 
 
-def _row(name, m):
-    if m is None:
-        return {"": name, "Total return": "—", "Annualized": "—", "Sharpe": "—", "Max drawdown": "—", "Volatility": "—"}
-    return {
-        "": name,
-        "Total return": _pct(m.total_return_pct),
-        "Annualized": _pct(m.annualized_return_pct),
-        "Sharpe": _num(m.sharpe),
-        "Max drawdown": _pct(m.max_drawdown_pct),
-        "Volatility": _pct(m.volatility_pct),
-    }
-
-
 if result is not None and result.error:
     st.warning(result.error)
 
@@ -123,15 +110,33 @@ if result is not None and not result.error:
     m3.metric("SPY buy & hold", _pct(spy_end),
               f"{strat_end - spy_end:+.1f} pts vs strategy" if strat_end is not None and spy_end is not None else None)
 
-    table = pd.DataFrame([
-        _row(result.strategy_label, result.strategy),
-        _row(f"{result.ticker} buy & hold", result.buy_hold),
-        _row("SPY buy & hold", result.spy),
-    ])
-    st.dataframe(table, width="stretch", hide_index=True)
-    st.caption(
-        f"{result.trades} strategy trade(s) over the window · risk-free rate for Sharpe: "
-        f"{result.risk_free_rate_source}. Returns are hypothetical, in USD, and ignore trading costs."
+    def _crow(name, m, *, lead=False):
+        cells = ["—"] * 5 if m is None else [
+            _pct(m.total_return_pct), _pct(m.annualized_return_pct), _num(m.sharpe),
+            _pct(m.max_drawdown_pct), _pct(m.volatility_pct)]
+        def col(v, colour=False):
+            cls = "num"
+            if colour and isinstance(v, str) and v not in ("—",):
+                cls += " up" if v.startswith("+") else " down" if v.startswith("-") else ""
+            return f'<td class="{cls}">{v}</td>'
+        name_html = f'<span class="cp-tick">{name}</span>' if lead else f'<span class="co">{name}</span>'
+        return (f"<tr>{'<td>' + name_html + '</td>'}"
+                f"{col(cells[0], True)}{col(cells[1], True)}{col(cells[2])}"
+                f"{col(cells[3])}{col(cells[4])}</tr>")
+
+    _theme.panel(
+        "Strategy vs benchmarks",
+        '<table class="cp-table"><thead><tr><th></th><th class="num">Total</th>'
+        '<th class="num">Annualized</th><th class="num">Sharpe</th>'
+        '<th class="num">Max DD</th><th class="num">Volatility</th></tr></thead><tbody>'
+        + _crow(result.strategy_label, result.strategy, lead=True)
+        + _crow(f"{result.ticker} buy & hold", result.buy_hold)
+        + _crow("SPY buy & hold", result.spy)
+        + "</tbody></table>"
+        '<div class="cp-foot">'
+        f"{result.trades} strategy trade(s) · risk-free rate for Sharpe: {result.risk_free_rate_source}. "
+        "Returns are hypothetical, in USD, and ignore trading costs.</div>",
+        tag=f"{result.ticker}",
     )
 
     st.subheader("Growth of your starting capital")

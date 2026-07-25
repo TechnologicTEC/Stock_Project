@@ -63,7 +63,10 @@ def test_page_renders_account_and_positions():
     assert not at.exception
     labels = {m.label for m in at.metric}
     assert {"Equity", "Cash", "Buying power", "Today's P&L", "Unrealized P&L"} <= labels
-    assert any("Open positions" in str(h.value) for h in at.subheader)
+    # Open positions is now a terminal panel (markdown), not a subheader; the
+    # position's symbol renders inside it.
+    body = " ".join(m.value for m in at.markdown)
+    assert "Open positions" in body and "AAPL" in body
     assert any("Market open" in el.value for el in at.success)     # clock banner
 
 
