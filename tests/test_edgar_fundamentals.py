@@ -133,3 +133,65 @@ def test_pit_snapshot_returns_point_in_time_values():
 def test_get_pit_fundamentals_empty_for_unknown_ticker():
     with patch("engine.data_sources.edgar_fundamentals.edgar_client.get_cik_for_ticker", return_value=None):
         assert ef.get_pit_fundamentals("NOTATICKER") == {}
+
+
+# --------------------------------------------------------------------------
+# Foreign private issuers — ASML (us-gaap in EUR, 20-F, annual) and TSM
+# (ifrs-full taxonomy). Confirmed against live SEC data.
+# --------------------------------------------------------------------------
+
+def _foreign_facts(taxonomy="us-gaap", currency="EUR", revenue_tag="Revenues"):
+    """A 20-F filer: annual (not quarterly) flows, non-USD, under whichever
+    taxonomy the filer tags — us-gaap for ASML, ifrs-full for TSM."""
+    return {"facts": {taxonomy: {
+        revenue_tag: {"units": {currency: [
+            {"start": "2022-01-01", "end": "2022-12-31", "val": 100, "form": "20-F", "filed": "2023-02-15"},
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 120, "form": "20-F", "filed": "2024-02-15"},
+        ]}},
+        "StockholdersEquity" if taxonomy == "us-gaap" else "Equity": {"units": {currency: [
+            {"end": "2023-12-31", "val": 500, "form": "20-F", "filed": "2024-02-15"},
+        ]}},
+    }}}
+
+
+def test_annual_20f_filer_is_read_not_dropped():
+    # A 364-day flow on a 20-F would fail both the old 10-only form check and the
+    # old quarterly-only duration check. It must now come through.
+    series = ef.pit_series_from_facts(_foreign_facts())
+    assert [r["value"] for r in series["revenue"]] == [100.0, 120.0]
+    assert series["revenue"][0]["currency"] == "EUR"
+
+
+def test_ifrs_filer_read_via_ifrs_taxonomy():
+    series = ef.pit_series_from_facts(_foreign_facts(taxonomy="ifrs-full", currency="TWD",
+                                                     revenue_tag="Revenue"))
+    assert [r["value"] for r in series["revenue"]] == [100.0, 120.0]
+
+
+def test_us_filer_still_prefers_quarterly_and_usd():
+    # Regression guard: nothing about the domestic path changed.
+    series = ef.pit_series_from_facts(_facts())
+    assert [r["value"] for r in series["revenue"]] == [100.0, 110.0]   # two quarters, YTD dropped
+    assert series["revenue"][0]["currency"] == "USD"
+
+
+def test_get_pit_fundamentals_converts_foreign_currency_to_usd():
+    with patch("engine.data_sources.edgar_fundamentals.edgar_client.get_cik_for_ticker", return_value="0000937966"), \
+         patch("engine.data_sources.edgar_fundamentals.edgar_client.get_company_facts",
+               return_value=_foreign_facts()), \
+         patch("engine.currency.historical_usd_rate", return_value=1.10):
+        out = ef.get_pit_fundamentals("ASML")
+    # EUR values converted at 1.10; currency relabelled USD
+    assert [round(r["value"], 1) for r in out["revenue"]] == [110.0, 132.0]
+    assert out["revenue"][0]["currency"] == "USD"
+
+
+def test_unconvertible_currency_is_dropped_not_mislabelled_usd():
+    # ECB doesn't publish some currencies; a fact we can't convert must be dropped
+    # so valuation stays blank rather than mixing currencies.
+    with patch("engine.data_sources.edgar_fundamentals.edgar_client.get_cik_for_ticker", return_value="0001"), \
+         patch("engine.data_sources.edgar_fundamentals.edgar_client.get_company_facts",
+               return_value=_foreign_facts(currency="XYZ")), \
+         patch("engine.currency.historical_usd_rate", return_value=None):
+        out = ef.get_pit_fundamentals("WEIRD")
+    assert out["revenue"] == []

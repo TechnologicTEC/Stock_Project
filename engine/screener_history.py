@@ -33,11 +33,29 @@ def _visible_quarters(series: list[dict], as_of: date) -> list[dict]:
     return sorted(visible, key=lambda f: f["end"])
 
 
+def _is_annual_series(visible: list[dict]) -> bool:
+    """Whether a metric's facts are annual (a foreign 20-F filer) rather than
+    quarterly (a US 10-Q filer) — decided by the typical gap between period-ends.
+    A lone fact is treated as annual: it can't be a 4-quarter TTM sum anyway."""
+    if len(visible) < 2:
+        return True
+    gaps = sorted((date.fromisoformat(visible[i]["end"]) - date.fromisoformat(visible[i - 1]["end"])).days
+                  for i in range(1, len(visible)))
+    return gaps[len(gaps) // 2] > 200      # median ~365 = annual, ~90 = quarterly
+
+
 def _ttm_sum(series: list[dict], as_of: date, quarters_back: int = 0) -> float | None:
-    """Sum of 4 quarters ending `quarters_back` quarters ago (0 = the latest
-    four; 4 = the four before that, i.e. a year earlier). None if not enough
-    history is public yet."""
+    """Trailing-twelve-month value ending `quarters_back` quarters ago (0 = latest,
+    4 = a year earlier). For quarterly filers that's the sum of 4 quarters; for a
+    foreign filer that reports only annually, one fiscal-year fact already IS the
+    TTM, so we step back in whole years instead. None if not enough public yet."""
     visible = _visible_quarters(series, as_of)
+    if not visible:
+        return None
+    if _is_annual_series(visible):
+        years_back = quarters_back // 4          # 0 -> latest year, 4 -> the year before
+        idx = len(visible) - 1 - years_back
+        return visible[idx]["value"] if idx >= 0 else None
     if len(visible) < quarters_back + 4:
         return None
     end = len(visible) - quarters_back

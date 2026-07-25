@@ -49,6 +49,26 @@ def _fx_info() -> dict:
     return cache.get_or_fetch(_FX_CACHE_KEY, _FX_TTL_SECONDS, _fetch_usd_per_nzd)
 
 
+# Historical FX rates only ever get MORE final (ECB never revises a past fixing),
+# so a hit is cached effectively forever.
+_HIST_FX_TTL_SECONDS = 365 * 24 * 60 * 60
+
+
+def historical_usd_rate(currency: str, on_date) -> float | None:
+    """USD per 1 unit of `currency` on/before `on_date`, cached — for converting a
+    foreign filer's SEC XBRL fundamentals (e.g. ASML's EUR figures) into USD so
+    point-in-time valuation ratios line up with a USD share price. None when ECB
+    doesn't publish the currency (e.g. TWD) — the caller then leaves valuation
+    blank rather than mixing currencies."""
+    code = (currency or "").upper()
+    if code in ("", "USD"):
+        return 1.0
+    key = f"fx_hist:{code}:{on_date.isoformat()}"
+    return cache.get_or_fetch(
+        key, _HIST_FX_TTL_SECONDS, lambda: frankfurter_client.usd_per(code, on_date)
+    )
+
+
 def get_rate(currency: str) -> float:
     """Multiplier to convert a USD amount into `currency`. USD is 1.0; NZD is
     1 / (USD-per-NZD). Raises if the currency is unsupported or the FX rate can't

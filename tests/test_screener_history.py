@@ -59,6 +59,20 @@ def test_ttm_sum_respects_filing_dates():
     assert screener_history._ttm_sum(rev, date(2023, 6, 1), quarters_back=4) == 100 + 110 + 120 + 130
 
 
+def test_ttm_sum_handles_annual_filers():
+    # A foreign 20-F filer reports one fiscal-year value per year — that value IS
+    # the TTM, and a year back is the previous annual, not a 4-quarter sum.
+    annual = [
+        {"end": "2022-12-31", "filed": "2023-02-15", "value": 400.0, "currency": "USD"},
+        {"end": "2023-12-31", "filed": "2024-02-15", "value": 480.0, "currency": "USD"},
+    ]
+    assert screener_history._ttm_sum(annual, date(2024, 6, 1)) == 480.0            # latest year
+    assert screener_history._ttm_sum(annual, date(2024, 6, 1), quarters_back=4) == 400.0  # a year back
+    # Before the 2023 report is filed, only 2022 is public.
+    assert screener_history._ttm_sum(annual, date(2023, 6, 1)) == 400.0
+    assert screener_history._ttm_sum(annual, date(2023, 6, 1), quarters_back=4) is None
+
+
 # --------------------------------------------------------------------------
 # Reconstructed ratios
 # --------------------------------------------------------------------------
