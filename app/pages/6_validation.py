@@ -485,8 +485,9 @@ st.subheader("Factor breakdown per observation")
 st.caption(
     "Each score is the weighted blend of these factors (a factor with no data has its weight "
     "redistributed). A blank cell means that factor couldn't be reconstructed point-in-time for this "
-    "ticker: **Valuation / Growth / Profitability** come from SEC XBRL filings, so they're blank for ETFs "
-    "and many non-US filers; **News** is GDELT article tone over the 30 days before each date, populated "
+    "ticker: **Valuation / Growth / Profitability** come from SEC XBRL filings (US GAAP *and* IFRS, with "
+    "foreign filers' figures converted to USD), so they're blank only for ETFs and filers SEC has no XBRL "
+    "for; **News** is GDELT article tone over the 30 days before each date, populated "
     "only when *Include news sentiment* is ticked and the company has coverage (it provides tone, not "
     "individual headlines)."
 )
