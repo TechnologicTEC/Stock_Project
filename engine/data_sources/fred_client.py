@@ -9,8 +9,6 @@ import math
 import os
 from functools import lru_cache
 
-from fredapi import Fred
-
 from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
 
 
@@ -19,7 +17,16 @@ class FredConfigError(RuntimeError):
 
 
 @lru_cache(maxsize=1)
-def _client() -> Fred:
+def _client():
+    # fredapi imported here, NOT at module top: FRED is only a *fallback* FX source
+    # (currency.py prefers frankfurter), and it's not in the slim CI requirement
+    # sets (requirements-validate/screen). A module-level import made `import
+    # currency` — pulled in transitively by the EDGAR->USD conversion — raise
+    # ModuleNotFoundError on every ticker in the validation job, silently zeroing
+    # its output. `-> Fred` isn't needed as an annotation thanks to
+    # `from __future__ import annotations`.
+    from fredapi import Fred
+
     api_key = credentials.get("FRED_API_KEY")
     if not api_key:
         raise FredConfigError(
