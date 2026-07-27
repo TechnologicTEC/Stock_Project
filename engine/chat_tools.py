@@ -144,7 +144,7 @@ def get_ticker_news(ticker: str) -> dict:
         "overall_sentiment_0_100": a.overall_score,  # 50 = neutral
         "counts": {"positive": a.positive, "neutral": a.neutral, "negative": a.negative},
         "headlines": [
-            {"headline": h["headline"], "sentiment": h.get("sentiment_label"),
+            {"headline": (h["headline"] or "").replace("`", "'"), "sentiment": h.get("sentiment_label"),
              "published_at": str(h.get("published_at")), "source": h.get("source")}
             for h in a.headlines[:8]
         ],
@@ -165,7 +165,7 @@ def whats_moving_and_why(limit: int = 3) -> dict:
     out = []
     for m in picks:
         try:
-            heads = [h["headline"] for h in news.analyze_ticker(m["ticker"]).headlines[:3]]
+            heads = [(h["headline"] or "").replace("`", "'") for h in news.analyze_ticker(m["ticker"]).headlines[:3]]
         except Exception:
             heads = []
         out.append({
