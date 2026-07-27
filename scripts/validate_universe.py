@@ -114,6 +114,10 @@ def main() -> None:
         include_analyst=include_analyst,
         on_progress=on_progress,
         use_cache=True,         # resumable: a timeout loses nothing, re-runs skip done tickers
+        # Fail after ~20 consecutive empties instead of grinding through all 503:
+        # a broken environment (missing dep, bad EDGAR UA) shows up in minutes, not
+        # hours. NB a resumed run whose first 20 are cache hits won't be empty.
+        abort_on_empty_streak=validation._EMPTY_RUN_ABORT_STREAK,
     )
     if not points:
         print("\nNo points reconstructed — nothing to save. Check EDGAR_USER_AGENT / "

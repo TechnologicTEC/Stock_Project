@@ -460,16 +460,37 @@ def _cached_walk_forward(ticker: str, start: date, end: date, *, step_days: int,
     return points
 
 
+# A per-ticker failure that is really an *environment* failure — a missing
+# dependency, a coding bug — is identical for every ticker, so swallowing it
+# per-ticker turns a broken run into a silent 3-hour zero (exactly what a missing
+# fredapi did). These surface immediately instead. Note NameError/ImportError are
+# code/env problems; genuine per-ticker data errors (KeyError, ValueError, network
+# blips) stay caught below.
+_SYSTEMIC_ERRORS = (ImportError, NameError, AttributeError, SyntaxError)
+
+# If this many tickers in a row reconstruct to nothing, the failure is systemic
+# (bad EDGAR_USER_AGENT, no price credentials) — those return {} rather than
+# raising, so the guard above can't see them. Abort loudly rather than grind
+# through hundreds more names that will all be empty.
+_EMPTY_RUN_ABORT_STREAK = 20
+
+
 def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_days: int = 30,
                         include_news: bool = False, include_analyst: bool = True,
-                        on_progress=None, use_cache: bool = False) -> list[dict]:
+                        on_progress=None, use_cache: bool = False,
+                        abort_on_empty_streak: int | None = None) -> list[dict]:
     """walk_forward across many tickers, each point tagged with its ticker so the
     results can be pooled. Slow — one point-in-time reconstruction per ticker. A
     ticker that can't be reconstructed contributes nothing rather than erroring.
 
     `use_cache` memoizes each ticker's points (see _cached_walk_forward) so a long
     batch run survives being killed and resumes cheaply. Off by default: the page's
-    interactive run should reflect fresh data."""
+    interactive run should reflect fresh data.
+
+    `abort_on_empty_streak` (batch jobs pass ~20) raises if that many consecutive
+    tickers reconstruct to nothing — a systemic failure that would otherwise burn
+    the whole run silently. The interactive page leaves it None: a handful of a
+    user's holdings legitimately reconstructing to nothing is normal, not a fault."""
     from engine import screener
 
     # This loop scores one ticker at a time. Under CROSS_SECTIONAL that means
@@ -487,6 +508,7 @@ def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_day
     points: list[dict] = []
     total = len(tickers)
     run = _cached_walk_forward if use_cache else None
+    empty_streak = 0
     for i, ticker in enumerate(tickers, start=1):
         try:
             if run is not None:
@@ -496,11 +518,27 @@ def pooled_walk_forward(tickers, start, end, *, step_days: int = 30, horizon_day
                 pts = walk_forward(ticker, start, end, step_days=step_days,
                                    horizon_days=horizon_days, include_news=include_news,
                                    include_analyst=include_analyst)
+        except _SYSTEMIC_ERRORS as exc:
+            # Same for every ticker → the environment is broken. Don't limp on.
+            raise RuntimeError(
+                f"Reconstruction failed structurally on {ticker} ({type(exc).__name__}: {exc}) — "
+                "this affects every ticker, not just this one. Aborting rather than returning an "
+                "empty run. Check the job's installed dependencies."
+            ) from exc
         except Exception:
             pts = []
         for point in pts:
             point["ticker"] = ticker.strip().upper()
         points.extend(pts)
+
+        if abort_on_empty_streak:
+            empty_streak = empty_streak + 1 if not pts else 0
+            if empty_streak >= abort_on_empty_streak:
+                raise RuntimeError(
+                    f"{empty_streak} tickers in a row reconstructed to nothing (through {ticker}). "
+                    "That's a systemic failure, not thin data — likely a bad EDGAR_USER_AGENT or "
+                    "missing price-source credentials. Aborting early instead of running the rest."
+                )
         if on_progress is not None:
             on_progress(i, total, ticker)
     return points

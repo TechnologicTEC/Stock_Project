@@ -294,6 +294,43 @@ def test_pooled_walk_forward_refuses_cross_sectional_instead_of_returning_nothin
             sv.pooled_walk_forward(["AAA"], date(2022, 1, 1), date(2022, 6, 1))
 
 
+def test_pooled_walk_forward_surfaces_a_systemic_error_instead_of_swallowing_it():
+    # A missing dependency (ImportError) is the same for every ticker, so catching
+    # it per-ticker turns a broken run into a silent 3-hour zero — exactly what a
+    # missing fredapi did. It must surface on the FIRST ticker.
+    def boom(*a, **k):
+        raise ModuleNotFoundError("No module named 'fredapi'")
+
+    with patch("engine.screener_validation.walk_forward", side_effect=boom):
+        with pytest.raises(RuntimeError, match="structurally"):
+            sv.pooled_walk_forward(["AAA", "BBB", "CCC"], date(2022, 1, 1), date(2022, 6, 1))
+
+
+def test_pooled_walk_forward_aborts_on_a_long_empty_streak():
+    # A systemic *empty* (bad EDGAR UA, no price creds) returns [] rather than
+    # raising, so nothing is caught — but grinding through hundreds of empties is
+    # still a broken run. Abort once the streak passes the threshold.
+    calls = {"n": 0}
+
+    def always_empty(*a, **k):
+        calls["n"] += 1
+        return []
+
+    with patch("engine.screener_validation.walk_forward", side_effect=always_empty):
+        with pytest.raises(RuntimeError, match="systemic failure"):
+            sv.pooled_walk_forward([f"T{i}" for i in range(50)], date(2022, 1, 1), date(2022, 6, 1),
+                                   abort_on_empty_streak=20)
+    assert calls["n"] == 20        # stopped at the threshold, not after all 50
+
+
+def test_pooled_walk_forward_does_not_abort_when_streak_guard_is_off():
+    # The interactive page passes no streak guard: a user whose few holdings all
+    # reconstruct to nothing is normal, not a fault — it must return [], not raise.
+    with patch("engine.screener_validation.walk_forward", return_value=[]):
+        out = sv.pooled_walk_forward([f"T{i}" for i in range(30)], date(2022, 1, 1), date(2022, 6, 1))
+    assert out == []
+
+
 def test_universe_walk_forward_drops_names_that_cannot_be_reconstructed():
     raw, score = _fake_universe_reconstruction()
     with patch("engine.screener_validation.price_history.ensure_cached"), \
