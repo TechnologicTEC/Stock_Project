@@ -23,6 +23,20 @@ def _no_news_by_default():
     with patch("engine.news.analyze_ticker", return_value=empty):
         yield
 
+
+@pytest.fixture(autouse=True)
+def _no_watchlist_pricing():
+    """The watchlist's since-added table costs a quote + a history lookup per
+    ticker. These tests are about UI wiring, so stub the priced rows out — a
+    31-name watchlist would otherwise sit on real network calls past the
+    AppTest timeout."""
+    def unpriced(items):
+        return [dict(i, added_on=i["added_at"], days_held=0, added_price=None,
+                     current_price=None, change_pct=None) for i in items]
+
+    with patch("engine.watchlist.performance_since_added", side_effect=unpriced):
+        yield
+
 # Absolute, not relative - see test_portfolio_page.py's PAGE_PATH comment
 # for why: AppTest.from_file()'s fallback path resolution is CWD-dependent
 # and fragile, so this sidesteps it entirely.
@@ -59,8 +73,9 @@ def test_screener_page_watchlist_add_remove_round_trip():
     assert not at.exception
     assert [w["ticker"] for w in watchlist.list_watchlist()] == ["NVDA"]
 
-    remove_btn = next(b for b in at.button if b.key == "wl_remove_NVDA")
-    remove_btn.click()
+    at.multiselect(key="wl_remove_pick").set_value(["NVDA"])
+    at.run(timeout=30)
+    next(b for b in at.button if b.key == "wl_remove_btn").click()
     at.run(timeout=30)
 
     assert not at.exception
@@ -158,6 +173,82 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     assert "not a prediction" in blob.lower()     # ...with the honest framing
     # the ranking now renders as a terminal table, not a dataframe
     assert "AAA" in blob and "Highest-scoring right now" in blob
+
+
+def _two_name_leaderboard():
+    screener.save_leaderboard(screener.build_leaderboard([
+        screener.ScreenerResult("AAA", 88.0, "Strong Buy",
+                                {"valuation": screener.FactorResult(90.0, [])}, []),
+        screener.ScreenerResult("BBB", 55.0, "Hold",
+                                {"valuation": screener.FactorResult(50.0, [])}, []),
+    ]))
+
+
+def test_leaderboard_adds_picked_names_to_the_watchlist():
+    _two_name_leaderboard()
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.multiselect(key="lb_wl_add").set_value(["AAA", "BBB"])
+    at.run(timeout=30)
+    next(b for b in at.button if b.key == "lb_wl_add_btn").click()
+    at.run(timeout=30)
+
+    assert not at.exception
+    assert [w["ticker"] for w in watchlist.list_watchlist()] == ["AAA", "BBB"]
+
+
+def test_leaderboard_marks_names_already_on_the_watchlist_and_drops_them_from_the_picker():
+    _two_name_leaderboard()
+    watchlist.add_to_watchlist("AAA")
+
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+
+    assert not at.exception
+    # The star is what tells you at a glance you've already got it.
+    assert "wl-on" in " ".join(m.value for m in at.markdown)
+    # ...and re-adding it isn't offered.
+    assert at.multiselect(key="lb_wl_add").options == ["BBB"]
+
+
+def test_watchlist_shows_percentage_change_since_each_ticker_was_added():
+    watchlist.add_to_watchlist("NVDA")
+
+    priced = [{"ticker": "NVDA", "added_at": date.today() - timedelta(days=30),
+               "added_on": date.today() - timedelta(days=30), "days_held": 30,
+               "added_price": 100.0, "current_price": 125.0, "change_pct": 25.0}]
+
+    with patch("engine.watchlist.performance_since_added", return_value=priced):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+
+    assert not at.exception
+    md = " ".join(m.value for m in at.markdown)
+    assert "+25.00%" in md and "Since you added it" in md
+    assert "$100.00" in md and "$125.00" in md
+    assert 'class="num up"' in md            # a gain is coloured as one
+
+
+def test_watchlist_row_survives_a_ticker_whose_price_cannot_be_resolved():
+    watchlist.add_to_watchlist("NVDA")
+    watchlist.add_to_watchlist("BADTICKER")
+
+    priced = [
+        {"ticker": "BADTICKER", "added_at": date.today(), "added_on": date.today(),
+         "days_held": 0, "added_price": None, "current_price": None, "change_pct": None},
+        {"ticker": "NVDA", "added_at": date.today(), "added_on": date.today(),
+         "days_held": 0, "added_price": 10.0, "current_price": 9.0, "change_pct": -10.0},
+    ]
+
+    with patch("engine.watchlist.performance_since_added", return_value=priced):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+
+    assert not at.exception
+    md = " ".join(m.value for m in at.markdown)
+    assert "BADTICKER" in md and "-10.00%" in md   # the dead row doesn't blank the good one
+    assert 'class="num down"' in md
 
 
 def test_leaderboard_shows_the_company_name_beside_the_ticker():

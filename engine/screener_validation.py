@@ -49,11 +49,7 @@ def news_sentiment_available() -> bool:
 
 
 def _price_on_or_before(ticker: str, day: date) -> float | None:
-    df = price_history.get_history_df(ticker, day - timedelta(days=10), day)
-    if df.empty or "close" not in df.columns:
-        return None
-    closes = df[[d <= day for d in df.index]]["close"]
-    return float(closes.iloc[-1]) if len(closes) else None
+    return price_history.close_on_or_before(ticker, day)
 
 
 def forward_return_pct(ticker: str, as_of: date, horizon_days: int) -> float | None:

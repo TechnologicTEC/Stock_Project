@@ -13,7 +13,7 @@ and health reflect the change immediately rather than after the TTL.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import streamlit as st
 
@@ -76,6 +76,23 @@ def screener_ratings(tickers: tuple[str, ...]) -> dict:
 
     return {r.ticker: {"score": r.overall_score, "recommendation": r.recommendation}
             for r in screener.screen_tickers(list(tickers))}
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def watchlist_performance(user_id: int | None,
+                          items: tuple[tuple[str, datetime | date], ...]) -> list[dict]:
+    """Since-added price change per watchlist entry — per user.
+
+    Cached because it costs a quote plus a history lookup *per ticker* and it
+    renders inside an expander: Streamlit runs an expander's body whether or not
+    it's open, so without this a 30-name watchlist would pay that on every
+    rerun of the page, collapsed or not. `items` carries the added-dates so
+    adding or removing a ticker re-keys the cache instead of showing stale rows.
+    """
+    from engine import watchlist
+
+    return watchlist.performance_since_added(
+        [{"ticker": t, "added_at": added} for t, added in items])
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)

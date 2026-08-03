@@ -335,6 +335,9 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-scroll {{ overflow-x: auto; }}
 .cp-table td.num, .cp-table th.num {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }}
 .cp-table .dim {{ color: var(--cp-muted); }}
+/* "already on your watchlist" marker — accent-coloured so it reads as a state,
+   not as a rating. Sized down so it sits beside a ticker without shouting. */
+.cp-table .wl-on {{ color: var(--cp-accent); font-size: 11px; vertical-align: 1px; }}
 .cp-wbar {{ height: 5px; border-radius: 3px; background: var(--cp-line); overflow: hidden; min-width: 46px; display:inline-block; vertical-align: middle; }}
 .cp-wbar > i {{ display:block; height:100%; background: linear-gradient(90deg, var(--cp-accent-dim), var(--cp-accent)); }}
 

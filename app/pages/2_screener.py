@@ -14,9 +14,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app import _theme
+from app import _cache, _theme
 from app._auth import gate
-from db.session import init_db
+from db.session import current_user_id, init_db
 from engine import portfolio, screener, screener_validation, watchlist
 
 st.set_page_config(page_title="Screener — Investment Co-Pilot", page_icon="📊", layout="wide")
@@ -99,6 +99,7 @@ def _render_leaderboard() -> None:
         top_n = st.radio("Show", [10, 20, 50], horizontal=True, index=1, key="lb_top_n")
         show = rows[:top_n]
         factor_labels = screener.FACTOR_LABELS
+        watched = {w["ticker"] for w in watchlist.list_watchlist()}
 
         # Short column heads — six full factor names would force a horizontal
         # scroll on every screen width.
@@ -113,9 +114,10 @@ def _render_leaderboard() -> None:
                 v = (r.get("factor_scores") or {}).get(f)
                 cells.append(f'<td class="num">{v:.0f}</td>' if v is not None
                              else '<td class="num dim">—</td>')
+            star = ' <span class="wl-on" title="On your watchlist">★</span>' if r["ticker"] in watched else ""
             body.append(
                 f'<tr><td class="dim">{r["rank"]}</td>'
-                f'<td><span class="tick">{r["ticker"]}</span></td>'
+                f'<td><span class="tick">{r["ticker"]}</span>{star}</td>'
                 f'<td class="co">{r.get("name") or "—"}</td>'
                 f'<td class="num">{r["score"]:.1f}</td>'
                 f'<td>{_theme.badge_html(r["recommendation"])}</td>'
@@ -128,9 +130,30 @@ def _render_leaderboard() -> None:
             f'<th>Rating</th>{heads}</tr></thead>'
             f"<tbody>{''.join(body)}</tbody></table></div>"
             '<div class="cp-foot">Sentiment (SEN) and Analyst (ANA) are <b>live-only</b> factors — not part '
-            "of the historical IC above, which covers the fundamentals-plus-momentum core.</div>",
+            "of the historical IC above, which covers the fundamentals-plus-momentum core. "
+            "★ marks names already on your watchlist.</div>",
             tag=f"top {len(show)} of {lb.get('n_scored', len(rows))}",
         )
+
+        # Add straight from the ranking. A multiselect rather than a button per
+        # row: the table above is HTML (so it can carry the factor columns and
+        # the theme), and 50 individual st.buttons would both break that and
+        # force a rerun per name — here you tick several and add them in one go.
+        addable = [r["ticker"] for r in show if r["ticker"] not in watched]
+        if addable:
+            add_cols = st.columns([4, 1])
+            picked = add_cols[0].multiselect(
+                "Add to watchlist", options=addable, key="lb_wl_add",
+                placeholder="Pick tickers from the ranking above…",
+            )
+            add_cols[1].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if add_cols[1].button("★ Add", key="lb_wl_add_btn", use_container_width=True, disabled=not picked):
+                added = [t for t in picked if watchlist.add_to_watchlist(t)]
+                st.success(f"Added {', '.join(added)} to your watchlist." if added
+                           else "Those are already on your watchlist.")
+                st.rerun()
+        else:
+            st.caption("Every name shown is already on your watchlist.")
 
 
 _render_leaderboard()
@@ -151,14 +174,60 @@ with st.expander("⭐ Watchlist", expanded=False):
 
     wl_items = watchlist.list_watchlist()
     if wl_items:
-        for item in wl_items:
-            c1, c2 = st.columns([4, 1])
-            c1.write(item["ticker"])
-            if c2.button("Remove", key=f"wl_remove_{item['ticker']}"):
-                watchlist.remove_from_watchlist(item["ticker"])
-                st.rerun()
+        perf = _cache.watchlist_performance(
+            current_user_id(), tuple((w["ticker"], w["added_at"]) for w in wl_items))
+        # Worst-first: the point of tracking this is to notice the ones that got
+        # away from you, and a name you watched but never bought is exactly where
+        # that's easy to miss. Unpriced rows sink to the bottom rather than
+        # sorting as if they were zero.
+        perf.sort(key=lambda r: (r["change_pct"] is None, r["change_pct"] or 0))
+
+        def _money(v):
+            return f"${v:,.2f}" if v else '<span class="dim">—</span>'
+
+        wl_body = []
+        for r in perf:
+            pct, cls = r["change_pct"], ""
+            if pct is None:
+                pct_cell = '<td class="num dim">—</td>'
+            else:
+                cls = "up" if pct >= 0 else "down"
+                pct_cell = f'<td class="num {cls}">{pct:+.2f}%</td>'
+            held = f"{r['days_held']}d" if r["days_held"] else "today"
+            wl_body.append(
+                f'<tr><td><span class="tick">{r["ticker"]}</span></td>'
+                f'<td class="num dim">{r["added_on"]}</td>'
+                f'<td class="num dim">{held}</td>'
+                f'<td class="num">{_money(r["added_price"])}</td>'
+                f'<td class="num">{_money(r["current_price"])}</td>'
+                f"{pct_cell}</tr>"
+            )
+        _theme.panel(
+            "Since you added it",
+            '<div class="cp-scroll"><table class="cp-table">'
+            '<thead><tr><th>Ticker</th><th class="num">Added</th><th class="num">Held</th>'
+            '<th class="num">Price then</th><th class="num">Price now</th>'
+            '<th class="num">Change</th></tr></thead>'
+            f"<tbody>{''.join(wl_body)}</tbody></table></div>"
+            '<div class="cp-foot"><b>Price then</b> is the closing price on the day you added the ticker, '
+            "not the intraday price you were looking at — so a name added mid-session can read a little "
+            "off on day one. This is price movement only: no dividends, and it tracks the stock, not a "
+            "position you hold.</div>",
+            tag=f"{len(perf)} watched",
+        )
+
+        rm_cols = st.columns([4, 1])
+        to_remove = rm_cols[0].multiselect(
+            "Remove from watchlist", options=[r["ticker"] for r in perf], key="wl_remove_pick",
+            placeholder="Pick tickers to remove…",
+        )
+        rm_cols[1].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if rm_cols[1].button("Remove", key="wl_remove_btn", use_container_width=True, disabled=not to_remove):
+            for t in to_remove:
+                watchlist.remove_from_watchlist(t)
+            st.rerun()
     else:
-        st.caption("Nothing on your watchlist yet — add tickers above.")
+        st.caption("Nothing on your watchlist yet — add tickers above, or from the S&P 500 leaderboard.")
 
 st.subheader("Choose what to screen")
 

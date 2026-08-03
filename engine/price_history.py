@@ -7,7 +7,7 @@ once instead of being copy-pasted.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -129,6 +129,20 @@ def get_history_df(ticker: str, start: date, end: date, source: str | None = Non
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     df = pd.DataFrame(history).set_index("date").sort_index()
     return df
+
+
+def close_on_or_before(ticker: str, day: date, source: str | None = None) -> float | None:
+    """The last close at or before `day`, or None if there isn't one.
+
+    The 10-day lookback covers weekends, holidays and — when `day` is today —
+    the fact that today's bar doesn't exist until the close. Used anywhere a
+    price has to be pinned to a calendar date the market may not have traded on
+    (validation's forward returns, the watchlist's since-added baseline)."""
+    df = get_history_df(ticker, day - timedelta(days=10), day, source=source)
+    if df.empty or "close" not in df.columns:
+        return None
+    closes = df[[d <= day for d in df.index]]["close"]
+    return float(closes.iloc[-1]) if len(closes) else None
 
 
 def price_series(ticker: str, start: date, end: date, business_days, source: str | None = None) -> pd.Series:
