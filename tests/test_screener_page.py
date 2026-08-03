@@ -184,21 +184,23 @@ def _two_name_leaderboard():
     ]))
 
 
-def test_leaderboard_adds_picked_names_to_the_watchlist():
+def test_each_leaderboard_row_has_its_own_add_button():
     _two_name_leaderboard()
 
     at = AppTest.from_file(PAGE_PATH)
     at.run(timeout=30)
-    at.multiselect(key="lb_wl_add").set_value(["AAA", "BBB"])
-    at.run(timeout=30)
-    next(b for b in at.button if b.key == "lb_wl_add_btn").click()
+
+    assert not at.exception
+    assert {b.key for b in at.button if b.key and b.key.startswith("lb_add_")} == {"lb_add_AAA", "lb_add_BBB"}
+
+    next(b for b in at.button if b.key == "lb_add_BBB").click()
     at.run(timeout=30)
 
     assert not at.exception
-    assert [w["ticker"] for w in watchlist.list_watchlist()] == ["AAA", "BBB"]
+    assert [w["ticker"] for w in watchlist.list_watchlist()] == ["BBB"]
 
 
-def test_leaderboard_marks_names_already_on_the_watchlist_and_drops_them_from_the_picker():
+def test_a_watched_name_shows_a_tick_instead_of_another_add_button():
     _two_name_leaderboard()
     watchlist.add_to_watchlist("AAA")
 
@@ -206,10 +208,9 @@ def test_leaderboard_marks_names_already_on_the_watchlist_and_drops_them_from_th
     at.run(timeout=30)
 
     assert not at.exception
-    # The star is what tells you at a glance you've already got it.
-    assert "wl-on" in " ".join(m.value for m in at.markdown)
-    # ...and re-adding it isn't offered.
-    assert at.multiselect(key="lb_wl_add").options == ["BBB"]
+    keys = {b.key for b in at.button if b.key and b.key.startswith("lb_add_")}
+    assert keys == {"lb_add_BBB"}                       # no second Add for AAA
+    assert "✓ watching" in " ".join(m.value for m in at.markdown)
 
 
 def test_watchlist_shows_percentage_change_since_each_ticker_was_added():

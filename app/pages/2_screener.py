@@ -37,6 +37,17 @@ st.caption(
 # cross-sectional validation measured, so its measured IC sits right beside it.
 # --------------------------------------------------------------------------
 
+def _add_to_watchlist_button(column, ticker: str, watched: set[str], key: str) -> None:
+    """One-click add, matching the Creator Signals board. Already-watched names
+    show a tick instead of a button so the row still reads as "handled"."""
+    if ticker in watched:
+        column.markdown('<span class="cp-watched" title="On your watchlist">✓ watching</span>',
+                        unsafe_allow_html=True)
+    elif column.button("➕ Add", key=key, use_container_width=True):
+        watchlist.add_to_watchlist(ticker)
+        st.rerun()
+
+
 def _render_leaderboard() -> None:
     lb = screener.load_leaderboard()
     with st.expander("🏆 S&P 500 leaderboard — highest-scoring names right now", expanded=False):
@@ -105,55 +116,43 @@ def _render_leaderboard() -> None:
         # scroll on every screen width.
         short = {"valuation": "VAL", "growth": "GRW", "profitability": "PRF",
                  "momentum": "MOM", "sentiment": "SEN", "analyst_confidence": "ANA"}
-        heads = "".join(f'<th class="num" title="{lbl}">{short.get(f, f[:3].upper())}</th>'
-                        for f, lbl in factor_labels.items())
-        body = []
-        for r in show:
-            cells = []
-            for f in factor_labels:
-                v = (r.get("factor_scores") or {}).get(f)
-                cells.append(f'<td class="num">{v:.0f}</td>' if v is not None
-                             else '<td class="num dim">—</td>')
-            star = ' <span class="wl-on" title="On your watchlist">★</span>' if r["ticker"] in watched else ""
-            body.append(
-                f'<tr><td class="dim">{r["rank"]}</td>'
-                f'<td><span class="tick">{r["ticker"]}</span>{star}</td>'
-                f'<td class="co">{r.get("name") or "—"}</td>'
-                f'<td class="num">{r["score"]:.1f}</td>'
-                f'<td>{_theme.badge_html(r["recommendation"])}</td>'
-                f"{''.join(cells)}</tr>"
-            )
-        _theme.panel(
-            "Highest-scoring right now",
-            '<div class="cp-scroll"><table class="cp-table">'
-            '<thead><tr><th>#</th><th>Ticker</th><th>Name</th><th class="num">Score</th>'
-            f'<th>Rating</th>{heads}</tr></thead>'
-            f"<tbody>{''.join(body)}</tbody></table></div>"
-            '<div class="cp-foot">Sentiment (SEN) and Analyst (ANA) are <b>live-only</b> factors — not part '
-            "of the historical IC above, which covers the fundamentals-plus-momentum core. "
-            "★ marks names already on your watchlist.</div>",
-            tag=f"top {len(show)} of {lb.get('n_scored', len(rows))}",
-        )
 
-        # Add straight from the ranking. A multiselect rather than a button per
-        # row: the table above is HTML (so it can carry the factor columns and
-        # the theme), and 50 individual st.buttons would both break that and
-        # force a rerun per name — here you tick several and add them in one go.
-        addable = [r["ticker"] for r in show if r["ticker"] not in watched]
-        if addable:
-            add_cols = st.columns([4, 1])
-            picked = add_cols[0].multiselect(
-                "Add to watchlist", options=addable, key="lb_wl_add",
-                placeholder="Pick tickers from the ranking above…",
+        # A column grid rather than a .cp-table, for the same reason the creator
+        # signals board is one: each row carries a real "add to watchlist" button
+        # and Streamlit widgets can't live inside raw HTML. The factor columns are
+        # deliberately narrow — they hold two digits.
+        # Tuned against the narrowest real case (1280px window, sidebar open):
+        # the button column has to hold "➕ Add" on ONE line — at 1.0 it wrapped
+        # and every row grew to 55px — and the factor columns only ever hold two
+        # digits, so the width goes to Name and the button instead.
+        widths = [0.4, 1.0, 1.9, 0.75, 1.2] + [0.55] * len(factor_labels) + [1.45]
+        with _theme.section("Highest-scoring right now",
+                            tag=f"top {len(show)} of {lb.get('n_scored', len(rows))}"), \
+                st.container(key="lb_grid"):
+            head = st.columns(widths, vertical_alignment="bottom")
+            labels = ["#", "Ticker", "Name", "Score", "Rating"] + \
+                     [short.get(f, f[:3].upper()) for f in factor_labels] + [""]
+            for col, label in zip(head, labels):
+                col.markdown(f'<div class="cp-eyebrow">{label}</div>', unsafe_allow_html=True)
+
+            for r in show:
+                c = st.columns(widths, vertical_alignment="center")
+                c[0].markdown(f'<span class="cp-dim">{r["rank"]}</span>', unsafe_allow_html=True)
+                c[1].markdown(f'<span class="cp-tick">{r["ticker"]}</span>', unsafe_allow_html=True)
+                c[2].markdown(f'<span class="cp-co">{r.get("name") or "—"}</span>', unsafe_allow_html=True)
+                c[3].markdown(f'<span class="cp-num">{r["score"]:.1f}</span>', unsafe_allow_html=True)
+                c[4].markdown(_theme.badge_html(r["recommendation"]), unsafe_allow_html=True)
+                for i, f in enumerate(factor_labels):
+                    v = (r.get("factor_scores") or {}).get(f)
+                    c[5 + i].markdown(
+                        f'<span class="cp-num">{v:.0f}</span>' if v is not None
+                        else '<span class="cp-dim">—</span>', unsafe_allow_html=True)
+                _add_to_watchlist_button(c[-1], r["ticker"], watched, key=f"lb_add_{r['ticker']}")
+
+            st.caption(
+                "Sentiment (SEN) and Analyst (ANA) are **live-only** factors — not part of the "
+                "historical IC above, which covers the fundamentals-plus-momentum core."
             )
-            add_cols[1].markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if add_cols[1].button("★ Add", key="lb_wl_add_btn", use_container_width=True, disabled=not picked):
-                added = [t for t in picked if watchlist.add_to_watchlist(t)]
-                st.success(f"Added {', '.join(added)} to your watchlist." if added
-                           else "Those are already on your watchlist.")
-                st.rerun()
-        else:
-            st.caption("Every name shown is already on your watchlist.")
 
 
 _render_leaderboard()

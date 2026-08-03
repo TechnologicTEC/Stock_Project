@@ -256,6 +256,31 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-tick {{ font-family: var(--cp-mono); font-weight: 600; letter-spacing:.02em; color: var(--cp-text); }}
 .cp-num  {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; color: var(--cp-text); }}
 .cp-dim  {{ color: var(--cp-muted); }}
+/* company name in a column grid — the .cp-table `.co` equivalent, which is
+   scoped to the table and so can't be reused by the leaderboard's grid. */
+.cp-co   {{ color: var(--cp-dim); font-size: 12px; }}
+/* "already watching" — sits where an Add button would be, so it's sized and
+   coloured to read as a settled state rather than another thing to click. The
+   min-height matches Streamlit's button so a watched row is exactly as tall as
+   an addable one; without it those rows came out 27px against 40px and the
+   ranking looked ragged. */
+.cp-watched {{
+  color: var(--cp-up); font-size: 11.5px; white-space: nowrap;
+  display: inline-flex; align-items: center; min-height: 40px;
+}}
+/* The leaderboard's per-row Add button. Streamlit stamps the widget key as a
+   class, which is the only handle on it. Without nowrap the label broke one
+   character per line as the column narrowed and each row grew to ~108px on a
+   tablet; letting it overflow its column instead keeps the row one line high. */
+[class*="st-key-lb_add_"] button {{ white-space: nowrap; }}
+[class*="st-key-lb_add_"] button p {{ white-space: nowrap; font-size: 12.5px; }}
+/* The leaderboard grid is 12 columns wide. Streamlit squeezes columns rather
+   than stacking them, so below ~1000px the Score column got 12px and "64.9"
+   wrapped to four lines — 108px rows. Scroll the grid instead, which is what
+   .cp-scroll did for the HTML table this replaced: the page body never scrolls
+   sideways, only this box does. */
+.st-key-lb_grid {{ overflow-x: auto; }}
+.st-key-lb_grid [data-testid="stHorizontalBlock"] {{ min-width: 760px; }}
 
 /* ---------- badges ---------- */
 .cp-badge {{
@@ -335,9 +360,6 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-scroll {{ overflow-x: auto; }}
 .cp-table td.num, .cp-table th.num {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }}
 .cp-table .dim {{ color: var(--cp-muted); }}
-/* "already on your watchlist" marker — accent-coloured so it reads as a state,
-   not as a rating. Sized down so it sits beside a ticker without shouting. */
-.cp-table .wl-on {{ color: var(--cp-accent); font-size: 11px; vertical-align: 1px; }}
 .cp-wbar {{ height: 5px; border-radius: 3px; background: var(--cp-line); overflow: hidden; min-width: 46px; display:inline-block; vertical-align: middle; }}
 .cp-wbar > i {{ display:block; height:100%; background: linear-gradient(90deg, var(--cp-accent-dim), var(--cp-accent)); }}
 
