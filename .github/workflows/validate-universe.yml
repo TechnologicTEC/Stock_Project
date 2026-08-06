@@ -18,12 +18,24 @@ name: Validate screener across the S&P 500
 #
 # The run is RESUMABLE: each ticker's reconstruction is cached in the shared DB for
 # a week, so if this is killed, just run it again — finished tickers are skipped.
+#
+# Runs MONTHLY (see the cron below) — this job is the single biggest consumer of
+# Supabase egress, and its answer barely moves between runs.
 
 on:
   schedule:
-    # 04:00 UTC Sunday — weekly is plenty: the result moves slowly, and after the
-    # first run the per-ticker SEC/price caches are warm so re-runs are much faster.
-    - cron: "0 4 * * 0"
+    # 04:00 UTC on the 1st — MONTHLY, not weekly. Two reasons:
+    #
+    # 1. Egress. Each run reads every ticker's price span out of Supabase; weekly
+    #    runs were ~4.1 GB/month on their own and put the free tier over its
+    #    5.5 GB quota. Monthly is ~1/4 of that (and the per-date over-read that
+    #    made it so expensive is fixed too — see price_history.window).
+    # 2. It buys almost nothing. The window is 5 years at monthly steps, so a
+    #    week of new data adds ~1 observation per ticker to ~57. The IC does not
+    #    move week to week; the leaderboard (which does) still refreshes weekly.
+    #
+    # Run it by hand from the Actions tab any time you want it sooner.
+    - cron: "0 4 1 * *"
   workflow_dispatch:
     inputs:
       universe_every:

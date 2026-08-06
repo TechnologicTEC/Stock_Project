@@ -1,9 +1,10 @@
 import json
 from datetime import date, timedelta
+import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
 
-from engine import screener_validation as sv
+from engine import price_history, screener_validation as sv
 
 
 # --------------------------------------------------------------------------
@@ -244,7 +245,7 @@ def test_a_consistently_zero_ic_is_not_significant():
 def _fake_universe_reconstruction():
     """Deterministic raw/score stubs: score depends only on (ticker, date), so
     both loop orders must agree exactly."""
-    def raw(ticker, as_of, include_analyst=True):
+    def raw(ticker, as_of, include_analyst=True, span_df=None):
         if ticker == "DEAD":
             return None                      # nothing in EDGAR -> contributes nothing
         return (f"raw::{ticker}::{as_of}", f"{ticker} Inc")
@@ -261,7 +262,7 @@ def _fake_universe_reconstruction():
 def test_universe_walk_forward_matches_the_ticker_major_loop_point_for_point():
     raw, score = _fake_universe_reconstruction()
 
-    def single(ticker, as_of, include_news=True, include_analyst=True):
+    def single(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
         built = raw(ticker, as_of, include_analyst)
         return None if built is None else score({ticker: built[0]}, as_of)[ticker]
 
@@ -580,10 +581,10 @@ def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():
 # --------------------------------------------------------------------------
 
 def test_walk_forward_collects_score_and_forward_return_points():
-    def fake_score(ticker, as_of, include_news=True, include_analyst=True):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
         return {"overall_score": 72.0, "recommendation": "Buy"}
 
-    def fake_forward(ticker, as_of, horizon_days):
+    def fake_forward(ticker, as_of, horizon_days, span_df=None):
         return 4.0
 
     with patch("engine.screener_validation.price_history.ensure_cached"), \
@@ -599,7 +600,7 @@ def test_walk_forward_collects_score_and_forward_return_points():
 def test_walk_forward_skips_dates_without_a_score_or_a_forward_return():
     calls = {"n": 0}
 
-    def fake_score(ticker, as_of, include_news=True, include_analyst=True):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
         calls["n"] += 1
         return {"overall_score": None, "recommendation": "Insufficient data"}  # never scorable
 
@@ -635,6 +636,83 @@ def test_walk_forward_does_not_score_dates_whose_forward_window_has_not_elapsed(
 
     assert points  # the older dates still score
     assert all(p["date"] <= today - timedelta(days=91) for p in points)
+
+
+# --------------------------------------------------------------------------
+# Egress: the price span is read ONCE per ticker, not once per scored date.
+# This is what put the Supabase free tier over its 5.5GB egress quota — adjacent
+# dates' 400-day momentum windows overlap ~93%, so the per-date reads were
+# pulling the same rows out of Postgres ~12x over (~8M rows per S&P 500 run).
+# --------------------------------------------------------------------------
+
+def _price_frame(start: date, days: int):
+    """A daily close series, weekends included — enough for the slicing to bite."""
+    idx = [start + timedelta(days=i) for i in range(days)]
+    return pd.DataFrame(
+        {"open": 10.0, "high": 10.0, "low": 10.0,
+         "close": [10.0 + i * 0.01 for i in range(days)], "volume": 1000},
+        index=idx,
+    )
+
+
+def test_walk_forward_reads_the_price_span_once_not_once_per_date():
+    start, end = date(2020, 1, 1), date(2024, 1, 1)
+    frame = _price_frame(date(2018, 1, 1), 2600)
+    reads = []
+
+    def counted(ticker, lo, hi, source=None):
+        reads.append((lo, hi))
+        return frame
+
+    with patch("engine.screener_validation.price_history.ensure_cached"), \
+         patch("engine.screener_validation.price_history.get_history_df", side_effect=counted), \
+         patch("engine.screener_history.price_history.get_history_df", side_effect=counted), \
+         patch("engine.screener_history.historical_raw_data", return_value=None):
+        sv.walk_forward("TEST", start, end, step_days=30, horizon_days=91,
+                        include_news=False, include_analyst=False)
+
+    # ~45 step dates in that window; before this fix each one issued its own read.
+    assert len(reads) == 1, f"expected 1 span read, got {len(reads)}"
+
+
+def test_the_span_slice_gives_the_same_price_a_per_date_query_would():
+    """The optimisation must be invisible in the numbers — a sliced frame has to
+    answer exactly what a fresh 400-day query answered."""
+    frame = _price_frame(date(2020, 1, 1), 900)
+    as_of = date(2021, 6, 1)
+    lo = as_of - timedelta(days=400)
+
+    sliced = price_history.window(frame, lo, as_of)
+    assert sliced.index[0] >= lo and sliced.index[-1] <= as_of
+    # same right-hand edge as an unsliced lookup, which is what the price-as-of
+    # and the momentum ratio both key off
+    assert sliced["close"].iloc[-1] == frame[[d <= as_of for d in frame.index]]["close"].iloc[-1]
+    assert price_history.close_on_or_before("TEST", as_of, df=frame) == sliced["close"].iloc[-1]
+
+
+def test_close_on_or_before_from_a_frame_never_touches_the_database():
+    frame = _price_frame(date(2020, 1, 1), 400)
+    with patch("engine.price_history.get_history_df",
+               side_effect=AssertionError("must not query when a frame is supplied")):
+        got = price_history.close_on_or_before("TEST", date(2020, 6, 15), df=frame)
+    assert got == frame[[d <= date(2020, 6, 15) for d in frame.index]]["close"].iloc[-1]
+
+
+def test_close_on_or_before_handles_a_date_before_the_frame_starts():
+    frame = _price_frame(date(2020, 1, 1), 100)
+    assert price_history.close_on_or_before("TEST", date(2019, 1, 1), df=frame) is None
+
+
+def test_forward_return_uses_the_supplied_frame_for_both_ends():
+    frame = _price_frame(date(2020, 1, 1), 400)
+    as_of = date(2020, 3, 1)
+    with patch("engine.price_history.get_history_df",
+               side_effect=AssertionError("must not query when a frame is supplied")):
+        got = sv.forward_return_pct("TEST", as_of, 91, frame)
+
+    lo = frame[[d <= as_of for d in frame.index]]["close"].iloc[-1]
+    hi = frame[[d <= as_of + timedelta(days=91) for d in frame.index]]["close"].iloc[-1]
+    assert got == pytest.approx((hi / lo - 1.0) * 100.0)
 
 
 def test_pooled_result_survives_a_lost_session_via_the_store():

@@ -131,15 +131,33 @@ def get_history_df(ticker: str, start: date, end: date, source: str | None = Non
     return df
 
 
-def close_on_or_before(ticker: str, day: date, source: str | None = None) -> float | None:
+def window(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
+    """Slice an already-loaded history frame to [start, end] — no DB round trip.
+
+    The point is egress. A walk-forward scores one ticker at ~57 monthly dates
+    and each date wants a 400-day momentum window, so consecutive dates overlap
+    by ~93%. Re-querying per date pulled the same rows out of Postgres a dozen
+    times over (~8M rows a run across the S&P 500); fetching the span once and
+    slicing it here reads ~630k instead."""
+    if df is None or df.empty:
+        return df
+    return df[[start <= d <= end for d in df.index]]
+
+
+def close_on_or_before(ticker: str, day: date, source: str | None = None,
+                       df: pd.DataFrame | None = None) -> float | None:
     """The last close at or before `day`, or None if there isn't one.
 
     The 10-day lookback covers weekends, holidays and — when `day` is today —
     the fact that today's bar doesn't exist until the close. Used anywhere a
     price has to be pinned to a calendar date the market may not have traded on
-    (validation's forward returns, the watchlist's since-added baseline)."""
-    df = get_history_df(ticker, day - timedelta(days=10), day, source=source)
-    if df.empty or "close" not in df.columns:
+    (validation's forward returns, the watchlist's since-added baseline).
+
+    Pass `df` to answer from a frame the caller already holds; `ticker` is then
+    only used if that frame turns out to be empty."""
+    if df is None:
+        df = get_history_df(ticker, day - timedelta(days=10), day, source=source)
+    if df is None or df.empty or "close" not in df.columns:
         return None
     closes = df[[d <= day for d in df.index]]["close"]
     return float(closes.iloc[-1]) if len(closes) else None

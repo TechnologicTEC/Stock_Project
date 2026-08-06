@@ -163,8 +163,8 @@ def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | 
     return metrics
 
 
-def historical_raw_data(ticker: str, as_of: date,
-                        include_analyst: bool = True) -> tuple[object, str | None] | None:
+def historical_raw_data(ticker: str, as_of: date, include_analyst: bool = True,
+                        span_df=None) -> tuple[object, str | None] | None:
     """Everything knowable about `ticker` on `as_of`, as a `TickerRawData` plus the
     company name — the **expensive, per-ticker** half of a reconstruction (prices,
     EDGAR filings, profile, analyst events). None if EDGAR has nothing.
@@ -175,10 +175,12 @@ def historical_raw_data(ticker: str, as_of: date,
     ticker today, which is why their cross-sectional percentiles are degenerate."""
     ticker = ticker.strip().upper()
     # One price fetch feeds both the as-of price (for P/E-P/B-P/S) and the
-    # momentum factor's window.
-    price_df = price_history.get_history_df(
-        ticker, as_of - timedelta(days=screener.MOMENTUM_LOOKBACK_DAYS), as_of
-    )
+    # momentum factor's window. `span_df` lets a walk-forward hand in the whole
+    # period once and have every date slice it in memory — the same rows
+    # otherwise come back out of Postgres once per date (see price_history.window).
+    lo = as_of - timedelta(days=screener.MOMENTUM_LOOKBACK_DAYS)
+    price_df = (price_history.window(span_df, lo, as_of) if span_df is not None
+                else price_history.get_history_df(ticker, lo, as_of))
     metrics = pit_fundamentals_metrics(ticker, as_of, price_df=price_df)
     if metrics is None:
         return None
@@ -246,7 +248,7 @@ def score_reconstructed_batch(raw_by_ticker: dict, as_of: date, *,
 
 
 def historical_screener_score(ticker: str, as_of: date, include_news: bool = True,
-                              include_analyst: bool = True) -> dict | None:
+                              include_analyst: bool = True, span_df=None) -> dict | None:
     """The Screener's overall score for `ticker` **as it would have scored on
     `as_of`**, using only then-knowable data and the live scoring curves.
     Returns None if EDGAR has nothing for the ticker; the score itself can still
@@ -259,7 +261,7 @@ def historical_screener_score(ticker: str, as_of: date, include_news: bool = Tru
     Single-ticker convenience wrapper over historical_raw_data +
     score_reconstructed_batch."""
     ticker = ticker.strip().upper()
-    built = historical_raw_data(ticker, as_of, include_analyst=include_analyst)
+    built = historical_raw_data(ticker, as_of, include_analyst=include_analyst, span_df=span_df)
     if built is None:
         return None
     raw, company_name = built

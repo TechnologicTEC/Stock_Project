@@ -48,14 +48,17 @@ def news_sentiment_available() -> bool:
     return gdelt_client.is_configured()
 
 
-def _price_on_or_before(ticker: str, day: date) -> float | None:
-    return price_history.close_on_or_before(ticker, day)
+def _price_on_or_before(ticker: str, day: date, span_df=None) -> float | None:
+    return price_history.close_on_or_before(ticker, day, df=span_df)
 
 
-def forward_return_pct(ticker: str, as_of: date, horizon_days: int) -> float | None:
-    """Percentage price change from `as_of` to `horizon_days` later."""
-    start = _price_on_or_before(ticker, as_of)
-    end = _price_on_or_before(ticker, as_of + timedelta(days=horizon_days))
+def forward_return_pct(ticker: str, as_of: date, horizon_days: int, span_df=None) -> float | None:
+    """Percentage price change from `as_of` to `horizon_days` later.
+
+    `span_df` answers both ends from a frame the caller already loaded instead
+    of two more queries per date — see price_history.window."""
+    start = _price_on_or_before(ticker, as_of, span_df)
+    end = _price_on_or_before(ticker, as_of + timedelta(days=horizon_days), span_df)
     if not start or not end:
         return None
     return (end / start - 1.0) * 100.0
@@ -77,11 +80,19 @@ def walk_forward(ticker: str, start: date, end: date,
     # point anyway. This is a correctness bound, not just a tidiness one.
     last_scorable = min(end, today - timedelta(days=horizon_days))
 
-    # Pre-warm the price cache for the whole span in one shot (never into the
-    # future), so the per-date lookups below hit the cache instead of making
-    # dozens of small yfinance calls. Best-effort — gaps still get filled.
+    # Fetch the whole span ONCE (never into the future) and hand it to every
+    # date below, which slices it in memory. Two reasons, in order: it stops the
+    # per-date lookups making dozens of small yfinance calls, and it stops them
+    # re-reading the same rows out of Postgres — the momentum windows of adjacent
+    # dates overlap ~93%, which made one S&P 500 run pull ~8M rows instead of
+    # ~630k. Best-effort: on failure span_df stays None and every call falls back
+    # to querying for itself, exactly as before.
+    span_lo = start - timedelta(days=_PRICE_WARMUP_DAYS)
+    span_hi = min(end + timedelta(days=horizon_days), today)
+    span_df = None
     try:
-        price_history.ensure_cached(ticker, start - timedelta(days=_PRICE_WARMUP_DAYS), min(end, today))
+        price_history.ensure_cached(ticker, span_lo, span_hi)
+        span_df = price_history.get_history_df(ticker, span_lo, span_hi)
     except Exception:
         pass
 
@@ -89,9 +100,10 @@ def walk_forward(ticker: str, start: date, end: date,
     current = start
     while current <= last_scorable:
         scored = screener_history.historical_screener_score(
-            ticker, current, include_news=include_news, include_analyst=include_analyst)
+            ticker, current, include_news=include_news, include_analyst=include_analyst,
+            span_df=span_df)
         if scored and scored["overall_score"] is not None:
-            fwd = forward_return_pct(ticker, current, horizon_days)
+            fwd = forward_return_pct(ticker, current, horizon_days, span_df)
             if fwd is not None:
                 points.append({
                     "date": current,
@@ -353,12 +365,18 @@ def universe_walk_forward(tickers, start: date, end: date, *,
     # the horizon has actually elapsed.
     last_scorable = min(end, today - timedelta(days=horizon_days))
 
-    # Pre-warm each ticker's price window once for the whole span, rather than
-    # re-deriving it per date. Best effort — gaps still get filled lazily.
+    # Load each ticker's price window ONCE for the whole span and keep it, rather
+    # than re-querying it per date (see price_history.window — adjacent dates'
+    # momentum windows overlap ~93%, so per-date reads pull the same rows over and
+    # over). ~100kB per ticker, so the whole S&P 500 is ~50MB held. Best effort:
+    # a ticker missing here just falls back to querying per date, as before.
+    span_lo = start - timedelta(days=_PRICE_WARMUP_DAYS)
+    span_hi = min(end + timedelta(days=horizon_days), today)
+    spans: dict[str, object] = {}
     for ticker in tickers:
         try:
-            price_history.ensure_cached(ticker, start - timedelta(days=_PRICE_WARMUP_DAYS),
-                                        min(end, today))
+            price_history.ensure_cached(ticker, span_lo, span_hi)
+            spans[ticker] = price_history.get_history_df(ticker, span_lo, span_hi)
         except Exception:
             pass
 
@@ -373,8 +391,8 @@ def universe_walk_forward(tickers, start: date, end: date, *,
         raw_by_ticker, names = {}, {}
         for ticker in tickers:
             try:
-                built = screener_history.historical_raw_data(ticker, as_of,
-                                                             include_analyst=include_analyst)
+                built = screener_history.historical_raw_data(
+                    ticker, as_of, include_analyst=include_analyst, span_df=spans.get(ticker))
             except Exception:
                 built = None
             if built is not None:
@@ -388,7 +406,7 @@ def universe_walk_forward(tickers, start: date, end: date, *,
         for ticker, scored in scored_by_ticker.items():
             if scored["overall_score"] is None:
                 continue
-            fwd = forward_return_pct(ticker, as_of, horizon_days)
+            fwd = forward_return_pct(ticker, as_of, horizon_days, spans.get(ticker))
             if fwd is None:
                 continue
             points.append({
