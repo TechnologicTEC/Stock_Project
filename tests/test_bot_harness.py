@@ -637,3 +637,60 @@ def test_a_cancelled_buy_does_not_start_a_minimum_hold_clock():
         }]}
 
     assert screener_common.runs_since_buy(_Ctx(), "VRT") is None
+
+
+def test_a_retry_after_cancellation_gets_a_fresh_order_id():
+    """Alpaca reserves a client_order_id permanently, cancelled or not — it
+    answers 'client_order_id must be unique'. So letting our own guard through
+    was only half the fix; the id itself has to change."""
+    day = date(2026, 9, 1)
+    first = journal.client_order_id("composite_rebalance", "WDC", "buy", day)
+    assert journal.attempt_number("composite_rebalance", "WDC", "buy", day) == 1
+    assert first == "composite_rebalance-2026-09-01-WDC-buy"
+
+    journal.record(run_id="r1", strategy="composite_rebalance", ticker="WDC",
+                   action=journal.BUY, reason="bought", status=journal.SUBMITTED,
+                   order_id=first, notional=666.67)
+    journal.mark_cancelled([first])
+
+    second = journal.attempt_number("composite_rebalance", "WDC", "buy", day)
+    assert second == 2
+    assert journal.client_order_id("composite_rebalance", "WDC", "buy", day,
+                                   attempt=second) == f"{first}-r2"
+
+
+def test_each_further_cancellation_advances_the_attempt():
+    day = date(2026, 9, 2)
+    for n in (1, 2, 3):
+        assert journal.attempt_number("top_decile_long", "EOG", "buy", day) == n
+        oid = journal.client_order_id("top_decile_long", "EOG", "buy", day, attempt=n)
+        journal.record(run_id=f"r{n}", strategy="top_decile_long", ticker="EOG",
+                       action=journal.BUY, reason="b", status=journal.SUBMITTED,
+                       order_id=oid, notional=200.0)
+        journal.mark_cancelled([oid])
+    assert journal.attempt_number("top_decile_long", "EOG", "buy", day) == 4
+
+
+def test_a_workflow_retry_still_collides_on_the_plain_id():
+    """The suffix must not weaken the guard it sits beside: with nothing
+    cancelled, the id stays the predictable one a retry hits."""
+    day = date(2026, 9, 3)
+    oid = journal.client_order_id("score_threshold", "ALL", "buy", day)
+    journal.record(run_id="r1", strategy="score_threshold", ticker="ALL",
+                   action=journal.BUY, reason="b", status=journal.SUBMITTED,
+                   order_id=oid, notional=500.0)
+    assert journal.attempt_number("score_threshold", "ALL", "buy", day) == 1
+    assert journal.already_acted(oid) is True
+
+
+def test_the_attempt_count_does_not_bleed_across_similar_tickers():
+    """MU and MUX share a prefix; the side suffix is what keeps them apart."""
+    day = date(2026, 9, 4)
+    oid = journal.client_order_id("top_decile_long", "MU", "buy", day)
+    journal.record(run_id="r1", strategy="top_decile_long", ticker="MU",
+                   action=journal.BUY, reason="b", status=journal.SUBMITTED,
+                   order_id=oid, notional=200.0)
+    journal.mark_cancelled([oid])
+    assert journal.attempt_number("top_decile_long", "MU", "buy", day) == 2
+    assert journal.attempt_number("top_decile_long", "MUX", "buy", day) == 1
+    assert journal.attempt_number("top_decile_long", "MU", "sell", day) == 1

@@ -216,7 +216,12 @@ def submit(
     accounts.assert_paper(client)          # never trust paper=True; verify the endpoint
 
     day = day or date_.today()
-    order_id = journal.client_order_id(strategy, order.ticker, order.side, day)
+    # A previously cancelled attempt at this same intent burns its id at Alpaca
+    # forever, so a genuine re-placement needs a fresh one. Attempt 1 is still
+    # the plain predictable id, which is what a retried workflow collides with.
+    attempt = journal.attempt_number(strategy, order.ticker, order.side, day)
+    order_id = journal.client_order_id(strategy, order.ticker, order.side, day,
+                                       attempt=attempt)
     notional = order.notional if order.notional is not None else 0.0
 
     # Idempotency: a retried workflow must not re-buy the book. Our journal

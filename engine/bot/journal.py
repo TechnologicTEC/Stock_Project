@@ -15,7 +15,7 @@ import json
 import os
 from datetime import date as date_
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.models import BotConfig, BotDecision, BotEquitySnapshot
 from db.session import get_session
@@ -56,18 +56,50 @@ def new_run_id() -> str:
     return "local-" + utcnow().strftime("%Y%m%dT%H%M%S")
 
 
-def client_order_id(strategy: str, ticker: str, side: str, day: date_ | None = None) -> str:
-    """Deterministic per (strategy, day, ticker, side).
+def _order_id_base(strategy: str, ticker: str, side: str, day: date_ | None = None) -> str:
+    day = day or date_.today()
+    return f"{strategy}-{day.isoformat()}-{ticker.upper()}-{side.lower()}"
+
+
+def client_order_id(strategy: str, ticker: str, side: str, day: date_ | None = None,
+                    *, attempt: int = 1) -> str:
+    """Deterministic per (strategy, day, ticker, side, attempt).
 
     This is the idempotency key. GitHub Actions retries jobs, and without a
     stable id a retry re-buys the entire book — so the same intent on the same
     day always produces the same id, and the second attempt is rejected by
     Alpaca (or skipped by us) rather than duplicated.
 
+    `attempt` exists because **Alpaca reserves a client_order_id permanently**,
+    including for an order that was CANCELLED — it answers
+    `{"code":40010001,"message":"client_order_id must be unique"}`. So teaching
+    our own guard that a cancelled order may be re-placed was only half the
+    job: the broker still refused the reused id. A genuine re-attempt of the
+    same intent therefore needs a genuinely new id, and the suffix is what
+    makes one without weakening the guard — attempt 1 is still the plain,
+    predictable id a workflow retry collides with.
+
     Alpaca caps client_order_id at 128 chars; this stays well under.
     """
-    day = day or date_.today()
-    return f"{strategy}-{day.isoformat()}-{ticker.upper()}-{side.lower()}"
+    base = _order_id_base(strategy, ticker, side, day)
+    return base if attempt <= 1 else f"{base}-r{attempt}"
+
+
+def attempt_number(strategy: str, ticker: str, side: str, day: date_ | None = None) -> int:
+    """Which attempt at this intent the next order would be.
+
+    One more than however many previous attempts were CANCELLED. Counting the
+    journal rather than storing a counter keeps this consistent with everything
+    else in the bot — the record of what happened is the state.
+    """
+    base = _order_id_base(strategy, ticker, side, day)
+    with get_session() as session:
+        n = session.execute(
+            select(func.count(BotDecision.id))
+            .where(BotDecision.client_order_id.like(f"{base}%"))
+            .where(BotDecision.status == CANCELLED)
+        ).scalar_one()
+    return int(n or 0) + 1
 
 
 # --------------------------------------------------------------------------
