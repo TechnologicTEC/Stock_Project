@@ -22,7 +22,7 @@ so without the band a name drifting by under two points of composite would trigg
 a round-trip. The band is what turns that into no trade at all.
 
 **Positions are only re-levelled at the rebalance.** Between them the book is
-restated with `resize=False`, so a winner is left to run and a laggard to
+restated with `sizing=executor.HOLD`, so a winner is left to run and a laggard to
 shrink. Restating it any other way meant every quiet day trimmed whatever had
 drifted past the band, which is a continuous equal-weighting scheme nobody
 asked for — and one that makes a difference in results impossible to pin on the
@@ -34,6 +34,7 @@ rebalance is the exit.
 """
 from __future__ import annotations
 
+from engine.bot import executor
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -59,7 +60,7 @@ def build(ctx) -> list[Target]:
     # written as "these are still my targets".
     if held and common.has_run_this_month(ctx):
         return [
-            Target(ticker=t, notional=notional, resize=False,
+            Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t)))
             for t in sorted(held)
         ]

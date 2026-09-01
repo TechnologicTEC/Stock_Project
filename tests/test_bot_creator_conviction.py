@@ -42,7 +42,7 @@ def _liquid(close=50.0, volume=1_000_000, bars=60):
     return pd.DataFrame({"close": [close] * bars, "volume": [volume] * bars})
 
 
-def _ctx(board, *, held=(), decisions=None, equity=10_000.0, slots=4, cap=0.25,
+def _ctx(board, *, held=(), decisions=None, equity=10_000.0, slots=4, cap=0.30,
          frames=None, candidates=None, last_run=2):
     """A context that has run before, so entries are possible.
 
@@ -188,7 +188,7 @@ def test_the_strongest_conviction_is_bought_first_when_slots_are_scarce():
 
 def test_every_target_is_sized_by_the_shared_rule():
     targets = cc.build(_ctx([_entry("NVTS", bullish=3)], equity=8_000.0, slots=4))
-    assert targets[0].notional == pytest.approx(2_000.0)      # 1/4 binds, not the 25% cap
+    assert targets[0].notional == pytest.approx(2_000.0)      # 1/4 at the entry bar
 
 
 # --------------------------------------------------------------------------
@@ -475,92 +475,110 @@ def test_the_slot_count_binds_rather_than_the_position_cap():
     assert targets[0].notional * 4 == pytest.approx(10_000.0)   # fully invested
 
 
-def test_creator_conviction_never_resizes_a_held_name():
-    """At 4 slots a position is $2,500 and the planner's cushion is $50, so
-    restating the book used to trim anything that moved ~3%. It holds now."""
+def test_a_held_name_is_never_trimmed_only_ever_topped_up():
+    """TOPUP, not LEVEL: a target that falls below the position must not turn
+    into a sell. Losing conviction is what the exit rules are for."""
     targets = cc.build(_ctx([_entry("NVTS", bullish=3)], held=["NVTS"]))
-    assert targets and all(not t.resize for t in targets)
+    assert targets and all(t.sizing == executor.TOPUP for t in targets)
 
 
 def test_a_name_inside_its_minimum_hold_is_also_left_unresized():
     board = [_entry("NVTS", neutral=1)]
     ctx = _ctx(board, held=["NVTS"], decisions=[
         _decision(TODAY, ticker="NVTS", action=journal.BUY, status=journal.SUBMITTED)])
-    assert [t.resize for t in cc.build(ctx)] == [False]
+    assert [t.sizing for t in cc.build(ctx)] == [executor.HOLD]
 
 
 def test_a_brand_new_entry_is_still_sized_normally():
     targets = cc.build(_ctx([_entry("NVTS", bullish=3)]))
-    assert targets and all(t.resize for t in targets)
+    assert targets and all(t.sizing == executor.LEVEL for t in targets)
 
 
 # --------------------------------------------------------------------------
-# Concentration cap — a winner may run, but not take over.
+# Size follows the strength of the case, and every figure is a share of the
+# account rather than a fixed amount.
 # --------------------------------------------------------------------------
 
-def _held_ctx(board, values, *, cap=0.30, slots=4, decisions=None):
-    equity = sum(values.values())
-    if decisions is None:
-        decisions = [_decision(TODAY - timedelta(days=2))]
-    return strategies.Context(
-        strategy="creator_conviction", equity=equity, cash=0.0, today=TODAY,
-        config={"target_slots": slots, "max_position_pct": cap,
-                "starting_equity": 10_000.0},
-        positions=tuple(Position(ticker=t, qty=1.0, market_value=v)
-                        for t, v in values.items()),
+def _size_ctx(bullish, *, equity=10_000.0, slots=4, cap=0.30):
+    return _ctx([_entry("NVTS", bullish=bullish)], equity=equity, slots=slots, cap=cap)
+
+
+def test_the_entry_bar_buys_the_plain_slot_share():
+    assert cc.conviction_notional(_size_ctx(3), 3) == pytest.approx(2_500.0)
+
+
+def test_an_extra_mention_buys_more():
+    assert cc.conviction_notional(_size_ctx(4), 4) == pytest.approx(2_750.0)
+
+
+def test_the_ceiling_is_reached_and_never_exceeded():
+    for bullish in (5, 6, 9, 20):
+        assert cc.conviction_notional(_size_ctx(bullish), bullish) == pytest.approx(3_000.0)
+
+
+def test_every_size_is_a_share_of_the_account_not_a_fixed_amount():
+    """The point Tane raised: at $100k these must be $25k and $30k, not stuck
+    at the $2,500/$3,000 figures that happen to apply at $10k."""
+    big = _size_ctx(3, equity=100_000.0)
+    assert cc.conviction_notional(big, 3) == pytest.approx(25_000.0)
+    assert cc.conviction_notional(big, 9) == pytest.approx(30_000.0)
+    tiny = _size_ctx(3, equity=1_000.0)
+    assert cc.conviction_notional(tiny, 3) == pytest.approx(250.0)
+    assert cc.conviction_notional(tiny, 9) == pytest.approx(300.0)
+
+
+def test_the_size_scales_with_the_slot_count_too():
+    at_eight = _size_ctx(3, slots=8, cap=0.20)
+    assert cc.conviction_notional(at_eight, 3) == pytest.approx(1_250.0)
+    assert cc.conviction_notional(at_eight, 9) == pytest.approx(2_000.0)
+
+
+def test_a_ceiling_below_the_floor_cannot_shrink_a_position():
+    """A misconfigured cap under 1/slots must not size below the slot share."""
+    ctx = _size_ctx(9, slots=4, cap=0.10)
+    assert cc.conviction_notional(ctx, 9) == pytest.approx(2_500.0)
+
+
+def test_a_growing_case_produces_a_top_up_order_and_no_sell():
+    """Held at the base size, creator keeps talking -> buy the difference."""
+    board = [_entry("NVTS", bullish=5)]
+    ctx = strategies.Context(
+        strategy="creator_conviction", equity=10_000.0, cash=500.0, today=TODAY,
+        config={"target_slots": 4, "max_position_pct": 0.30, "starting_equity": 10_000.0},
+        positions=(Position(ticker="NVTS", qty=1.0, market_value=2_500.0),),
         extras={"board": board, "candidates": [], "frames": {},
-                "decisions": list(decisions)},
-    )
+                "decisions": [_decision(TODAY - timedelta(days=2))]})
+    orders = executor.plan(cc.build(ctx), list(ctx.positions), equity=10_000.0)
+    assert [(o.side, o.notional) for o in orders] == [("buy", 500.0)]
 
 
-def _four(winner):
-    return {"S0": winner, "S1": 2_500.0, "S2": 2_500.0, "S3": 2_500.0}
+def test_a_weakening_case_never_produces_a_sell_from_sizing():
+    """Held big after topping up, conviction drops back to the entry bar. The
+    target falls, but TOPUP must not turn that into a trim."""
+    board = [_entry("NVTS", bullish=3)]
+    ctx = strategies.Context(
+        strategy="creator_conviction", equity=10_000.0, cash=0.0, today=TODAY,
+        config={"target_slots": 4, "max_position_pct": 0.30, "starting_equity": 10_000.0},
+        positions=(Position(ticker="NVTS", qty=1.0, market_value=3_000.0),),
+        extras={"board": board, "candidates": [], "frames": {},
+                "decisions": [_decision(TODAY - timedelta(days=2))]})
+    assert executor.plan(cc.build(ctx), list(ctx.positions), equity=10_000.0) == []
 
 
-def _board():
-    return [_entry(t, bullish=3) for t in ("S0", "S1", "S2", "S3")]
+def test_a_winner_that_simply_ran_is_left_alone_however_big_it_gets():
+    """No concentration cap here, deliberately — these turn over on the 30-day
+    window before concentration becomes a problem."""
+    board = [_entry("NVTS", bullish=3)]
+    ctx = strategies.Context(
+        strategy="creator_conviction", equity=12_000.0, cash=0.0, today=TODAY,
+        config={"target_slots": 4, "max_position_pct": 0.30, "starting_equity": 10_000.0},
+        positions=(Position(ticker="NVTS", qty=1.0, market_value=9_000.0),),
+        extras={"board": board, "candidates": [], "frames": {},
+                "decisions": [_decision(TODAY - timedelta(days=2))]})
+    assert executor.plan(cc.build(ctx), list(ctx.positions), equity=12_000.0) == []
 
 
-def test_no_breach_below_the_cap_so_nothing_is_resized():
-    ctx = _held_ctx(_board(), _four(3_000.0))
-    assert cc.concentration_breach(ctx) is None
-    assert all(not t.resize for t in cc.build(ctx))
-
-
-def test_the_cap_trips_once_the_winner_passes_thirty_percent():
-    """$3,214 rather than $3,000 — the account grew with the winner."""
-    assert cc.concentration_breach(_held_ctx(_board(), _four(3_214.0))) is None
-    breach = cc.concentration_breach(_held_ctx(_board(), _four(3_215.0)))
-    assert breach is not None and breach[0] == "S0"
-
-
-def test_a_breach_levels_the_whole_book_not_just_the_winner():
-    """Trimming only the offender would strand the proceeds in cash."""
-    targets = cc.build(_held_ctx(_board(), _four(3_500.0)))
-    assert len(targets) == 4
-    assert all(t.resize for t in targets)
-
-
-def test_the_levelling_produces_a_real_trim_and_redeploys_it():
-    ctx = _held_ctx(_board(), _four(3_500.0))
-    orders = executor.plan(cc.build(ctx), list(ctx.positions), equity=ctx.equity)
-    sells = [o for o in orders if o.side == "sell"]
-    buys = [o for o in orders if o.side == "buy"]
-    assert [o.ticker for o in sells] == ["S0"]
-    assert buys, "the trimmed money should go back into the laggards"
-    assert sum(o.notional for o in buys) == pytest.approx(
-        sum(o.notional for o in sells), abs=0.05)
-
-
-def test_the_reason_says_why_it_was_levelled():
-    targets = cc.build(_held_ctx(_board(), _four(3_500.0)))
-    assert "past the concentration cap" in targets[0].reason
-
-
-def test_a_cap_of_one_hundred_percent_never_trips():
-    assert cc.concentration_breach(_held_ctx(_board(), _four(9_000.0), cap=1.0)) is None
-
-
-def test_an_empty_account_does_not_trip_the_cap():
-    ctx = _held_ctx(_board(), {})
-    assert cc.concentration_breach(ctx) is None
+def test_a_new_entry_is_sized_on_its_conviction_from_the_start():
+    targets = cc.build(_ctx([_entry("NVTS", bullish=5)]))
+    assert targets[0].notional == pytest.approx(3_000.0)
+    assert "Topped up" in targets[0].reason

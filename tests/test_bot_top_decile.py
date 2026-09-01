@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from engine.bot import decile_spread, journal
+from engine.bot import decile_spread, executor, journal
 from engine.bot import strategies
 from engine.bot.executor import Position
 from engine.bot.strategies import top_decile_long as tdl
@@ -382,9 +382,9 @@ def test_top_decile_holds_without_resizing_between_rebalances():
     held = [f"T{i:03d}" for i in range(1, 51)]
     ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
     targets = tdl.build(ctx)
-    assert targets and all(not t.resize for t in targets)
+    assert targets and all(t.sizing == executor.HOLD for t in targets)
 
 
 def test_top_decile_does_resize_on_the_monthly_rebalance():
     targets = tdl.build(_ctx(held=["T007"]))
-    assert targets and all(t.resize for t in targets)
+    assert targets and all(t.sizing == executor.LEVEL for t in targets)

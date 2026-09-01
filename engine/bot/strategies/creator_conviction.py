@@ -60,37 +60,28 @@ Freshness is keyed on the newest **mention**, not the newest video, on purpose.
 Videos arriving with extraction broken would leave mentions frozen while the
 feed looked healthy — the failure this guards against, wearing a disguise.
 
-## A held position is never resized
+## Position size follows the strength of the case
 
-Bought once at its slot size, sold whole when the rules say so, and nothing
-trims it in between. That matters more here than anywhere else in the bot: at
-four slots a position is $2,500, while the planner's "ignore small gaps"
-cushion is a flat $50 — under 2% — so restating the book each day used to trim
-any name that had pulled about 3% ahead of the others, and buy back into any
-that had fallen the same distance. A stock moving 3% in a day is ordinary, so
-that was near-constant trading on a strategy whose entire claim is that it
-holds while a creator keeps making the case.
+A name enters at the ordinary slot share of the account. If the creator keeps
+returning to it, the target grows, and the position is **topped up** toward a
+ceiling — more bullish mentions, more money. `MENTIONS_TO_MAX` sets how many
+extra mentions it takes to reach the ceiling.
 
-## ...until it grows past the concentration cap
+Every one of these is a **share of the account, never a dollar figure**. At
+$10,000 across 4 slots that is $2,500 rising to $3,000; at $100,000 it is
+$25,000 rising to $30,000, with no code change. The floor is `1 / target_slots`
+and the ceiling is `max_position_pct`, both from `bot_config`.
 
-This has no periodic rebalance to level at — entries and exits are events — so
-without a backstop a winner could quietly take over the account. `max_position_pct`
-is that backstop, and it is checked against what a holding is WORTH, not just
-against order size (`risk.check_order` only ever sees the latter, which is why
-drift used to be invisible to every rail).
+Sizing is one-way. `executor.TOPUP` means the target can only ever buy: if the
+case weakens the target falls, and that must not become a sell order. Losing
+conviction is what the exit rules are for — a name is sold whole when the
+bullish mentions run out or the creator turns, not trimmed on the way down.
 
-When one name breaches it, the whole book is levelled back to equal, not just
-the offender. Trimming the winner alone would drop the proceeds into cash and
-strand them there, because each of the other three is individually too close to
-target for the planner's cushion to act on.
-
-At 4 slots and a 30% cap this trips at about **$3,214**, not a flat $3,000: the
-account grows along with the winner, so the position has to reach 30% of the
-larger account its own gain created — a 28.6% rise from the $2,500 equal share.
-Rare by construction, so it is an event rather than churn.
-
-`score_threshold` is deliberately left uncapped, and the two monthly strategies
-need no cap because they level on their own rebalance.
+**Nothing trims a position, and nothing caps how large it can grow by simply
+going up.** That is deliberate, and Tane's call: these positions turn over on
+the 30-day mention window soon enough that concentration does not get the
+chance to become a problem, and levelling the book would put the quiet-day
+churn straight back in.
 
 ## Liquidity
 
@@ -107,7 +98,7 @@ from __future__ import annotations
 
 from datetime import date as date_
 
-from engine.bot import liquidity
+from engine.bot import executor, liquidity
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -121,6 +112,13 @@ SUSTAINED_BULLISH = 2       # arm B: fewer explicit calls...
 SUSTAINED_MENTIONS = 4      # ...but sustained coverage, and no dissent at all
 
 MIN_HOLD_RUNS = 2           # runs a position survives before a soft exit applies
+
+# Extra bullish mentions, beyond the entry bar, to reach the maximum position
+# size. 2 means 3 mentions buys the base share, 4 buys halfway, 5 or more buys
+# the ceiling. Grounded in the scanned history: the most bullish mentions any
+# name has collected inside one 30-day window is 5 (NOW, RDW), so the top of
+# the range is reachable rather than theoretical.
+MENTIONS_TO_MAX = 2
 
 # The largest gap between video days across the scanned history is 9, and the
 # 90th percentile is 6. 21 days is over twice the worst observed silence, so it
@@ -177,12 +175,6 @@ def prepare(config: dict, today: date_) -> dict:
     }
 
 
-def _levelled_reason(breach, why: str) -> str:
-    ticker, value = breach
-    return (f"Levelled back to an equal share: {ticker} had grown to "
-            f"${value:,.2f}, past the concentration cap. Still qualifying: {why}.")
-
-
 def _notional_from_config(config: dict) -> float:
     """Indicative position size, for the liquidity screen only.
 
@@ -232,28 +224,35 @@ def newly_mentioned(entry: dict, watermark) -> bool:
     return seen_on >= watermark
 
 
-def concentration_breach(ctx) -> tuple[str, float] | None:
-    """The first held name worth more than the cap, or None.
+def conviction_notional(ctx, bullish: int) -> float:
+    """What this name should be worth, given how strong the case currently is.
 
-    The cap is `max_position_pct` of equity. That field already means "the most
-    one position may be", it just was not previously enforced against DRIFT —
-    `risk.check_order` only ever sees the size of an order, so a holding could
-    grow past it untouched. Reusing it keeps one number meaning one thing.
-
-    Note the cap is a share of the account, not a fixed dollar figure, and the
-    account grows along with the winner. At 4 slots and a 30% cap that means a
-    position trips at about $3,214 rather than $3,000 — it has to reach 30% of
-    the *larger* account its own gain created, which is a 28.6% rise from the
-    $2,500 equal share.
+    Scales from the ordinary slot share up to `max_position_pct` as bullish
+    mentions accumulate past the entry bar. Both ends are FRACTIONS OF EQUITY,
+    so the whole thing rescales with the account: $2,500 -> $3,000 on a $10k
+    account, $25,000 -> $30,000 on a $100k one, same code.
     """
-    cap_pct = float(ctx.config.get("max_position_pct") or 1.0)
-    if cap_pct >= 1.0 or ctx.equity <= 0:
-        return None
-    cap = ctx.equity * cap_pct
-    for ticker, value in sorted(ctx.position_values().items()):
-        if value > cap:
-            return ticker, value
-    return None
+    slots = max(1, int(ctx.config.get("target_slots") or 4))
+    floor_pct = 1.0 / slots
+    ceiling_pct = max(floor_pct, float(ctx.config.get("max_position_pct") or floor_pct))
+
+    extra = max(0, int(bullish) - ENTRY_BULLISH)
+    if MENTIONS_TO_MAX <= 0:
+        reached = 1.0
+    else:
+        reached = min(1.0, extra / MENTIONS_TO_MAX)
+    pct = floor_pct + (ceiling_pct - floor_pct) * reached
+    return float(ctx.equity) * pct
+
+
+def _size_note(ctx, bullish: int) -> str:
+    slots = max(1, int(ctx.config.get("target_slots") or 4))
+    floor = float(ctx.equity) / slots
+    size = conviction_notional(ctx, bullish)
+    if size <= floor + 0.005:
+        return ""
+    return (f" Topped up to ${size:,.2f} from the ${floor:,.2f} base on "
+            f"{bullish} bullish mentions.")
 
 
 def qualifies(entry: dict) -> tuple[bool, str]:
@@ -287,15 +286,6 @@ def build(ctx) -> list[Target]:
     notional = common.notional_for(ctx)
     slots = int(ctx.config.get("target_slots") or 4)
 
-    # One name has grown past the cap. Level the WHOLE book, not just the
-    # offender: trimming only the winner would drop the proceeds into cash and
-    # leave it there, because each of the others is individually too close to
-    # target for the planner's cushion to act on. Rare by construction — it
-    # needs a ~29% move relative to the rest — so this is an event, not the
-    # quiet-day churn that `resize=False` exists to stop.
-    breach = concentration_breach(ctx)
-    level = breach is not None
-
     targets: list[Target] = []
 
     # 1. What to keep. Anything not re-listed here is closed by the planner, so
@@ -318,7 +308,7 @@ def build(ctx) -> list[Target]:
             runs = common.runs_since_buy(ctx, ticker)
             if runs is not None and runs < MIN_HOLD_RUNS:
                 targets.append(Target(
-                    ticker=ticker, notional=notional, resize=level,
+                    ticker=ticker, notional=notional, sizing=executor.HOLD,
                     reason=f"No bullish mentions left in the {WINDOW_DAYS}-day window, "
                            f"but only {runs} run(s) held — minimum hold is "
                            f"{MIN_HOLD_RUNS}.",
@@ -326,13 +316,18 @@ def build(ctx) -> list[Target]:
             continue
 
         still, why = qualifies(entry or {})
+        # Size on the CURRENT strength of the case. If the creator has kept
+        # talking about it since we bought, the target is bigger than the
+        # position and TOPUP buys the difference. If the case has weakened the
+        # target falls, and TOPUP makes sure that is not a sell — conviction
+        # fading is what the exit rules are for, not a reason to trim.
         targets.append(Target(
-            ticker=ticker, notional=notional, resize=level,
-            reason=(_levelled_reason(breach, why) if breach else
-                    (f"Still qualifying: {why}." if still
-                     else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
-                          f"{WINDOW_DAYS} days) but coverage continues — held until it "
-                          "reaches zero.")),
+            ticker=ticker, notional=conviction_notional(ctx, bullish),
+            sizing=executor.TOPUP,
+            reason=(f"Still qualifying: {why}.{_size_note(ctx, bullish)}" if still
+                    else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
+                         f"{WINDOW_DAYS} days) but coverage continues — held until it "
+                         "reaches zero."),
         ))
 
     # 2. Fill free slots. Only names mentioned again since the last run are
@@ -355,10 +350,11 @@ def build(ctx) -> list[Target]:
         if not ticker or ticker in kept or ticker not in passed:
             continue
         _ok, why = qualifies(entry)
+        bullish = int((entry.get("stances") or {}).get("bullish") or 0)
         targets.append(Target(
-            ticker=ticker, notional=notional,
+            ticker=ticker, notional=conviction_notional(ctx, bullish),
             reason=f"Creator conviction: {why}, and mentioned again since the last "
-                   f"run. {passed[ticker].reason}",
+                   f"run.{_size_note(ctx, bullish)} {passed[ticker].reason}",
         ))
 
     return targets

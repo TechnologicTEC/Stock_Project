@@ -92,14 +92,16 @@ SEED: list[dict] = [
         # triggered by a name being mentioned again, so the backlog standing at
         # go-live is never bought.
         "target_slots": 4,
-        # 30%, and it does two jobs. 1/4 = 25% still binds for SIZING, so a new
-        # position is $2,500 as before. And it is now the CONCENTRATION CAP: a
-        # holding that drifts past 30% of the account gets the book levelled
-        # back to equal. Because the account grows with the winner, that trips
-        # at about $3,214 rather than a flat $3,000 — the position has to reach
-        # 30% of the larger account its own gain created, a 28.6% rise from the
-        # equal share. Nothing else needs the cap: the two monthly strategies
-        # re-level anyway, and score_threshold is deliberately left uncapped.
+        # The TOP-UP CEILING, not a cap on drift. A name enters at the slot
+        # share (1/4 = 25%) and is topped up toward 30% as the creator keeps
+        # coming back to it — more bullish mentions, more money. Both ends are
+        # shares of the account, so on $10k that is $2,500 rising to $3,000 and
+        # on $100k it is $25,000 rising to $30,000, unchanged code.
+        #
+        # Nothing trims, and nothing caps how large a position grows by simply
+        # going up: these turn over on the 30-day mention window soon enough
+        # that concentration does not get the chance to matter, and levelling
+        # would reintroduce the quiet-day churn.
         "max_position_pct": 0.30,
         # A full turnover of a 4-name book is 4 sells + 4 buys.
         "max_orders_per_run": 10,

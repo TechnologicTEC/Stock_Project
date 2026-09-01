@@ -54,6 +54,7 @@ an error rather than passing silently.
 from __future__ import annotations
 
 from engine.bot import decile_spread
+from engine.bot import executor
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -111,7 +112,7 @@ def build(ctx) -> list[Target]:
     # "sell everything".
     if not is_rebalance_run(ctx):
         return [
-            Target(ticker=t, notional=notional, resize=False,
+            Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t), len(rows)))
             for t in sorted(held)
         ]

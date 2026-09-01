@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from engine.bot import journal, risk
+from engine.bot import executor, journal, risk
 from engine.bot import strategies
 from engine.bot.executor import Position
 from engine.bot.strategies import composite_rebalance as comp
@@ -371,13 +371,13 @@ def test_composite_holds_without_resizing_between_rebalances():
     held = ["T01", "T02"]
     ctx = _ctx(_rows(), held=held, decisions=[_decision(TODAY - timedelta(days=1))])
     targets = comp.build(ctx)
-    assert targets and all(not t.resize for t in targets)
+    assert targets and all(t.sizing == executor.HOLD for t in targets)
 
 
 def test_composite_does_resize_on_the_monthly_rebalance():
     """'Rebalance' means levelling back to equal — that is the one day it should."""
     targets = comp.build(_ctx(_rows(), held=["T01"], slots=15))
-    assert targets and all(t.resize for t in targets)
+    assert targets and all(t.sizing == executor.LEVEL for t in targets)
 
 
 def test_score_threshold_never_resizes_a_held_name():
@@ -387,7 +387,7 @@ def test_score_threshold_never_resizes_a_held_name():
         r["score"] = 80.0
     ctx = _ctx(rows, held=["T01", "T02"], slots=20, strategy="score_threshold")
     held_targets = [t for t in thr.build(ctx) if t.ticker in {"T01", "T02"}]
-    assert held_targets and all(not t.resize for t in held_targets)
+    assert held_targets and all(t.sizing == executor.HOLD for t in held_targets)
 
 
 def test_score_threshold_sizes_a_brand_new_entry_normally():
@@ -395,5 +395,5 @@ def test_score_threshold_sizes_a_brand_new_entry_normally():
     for r in rows[:3]:
         r["score"] = 80.0
     ctx = _ctx(rows, slots=20, strategy="score_threshold")
-    fresh = [t for t in thr.build(ctx) if t.resize]
+    fresh = [t for t in thr.build(ctx) if t.sizing == executor.LEVEL]
     assert fresh, "a new entry has to be sized somehow"

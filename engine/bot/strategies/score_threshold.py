@@ -38,6 +38,7 @@ original share of the account, and nothing here caps that.
 """
 from __future__ import annotations
 
+from engine.bot import executor
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -66,7 +67,7 @@ def build(ctx) -> list[Target]:
         row = lookup.get(ticker)
         if row is None or row.get("score") is None:
             targets.append(Target(
-                ticker=ticker, notional=notional, resize=False,
+                ticker=ticker, notional=notional, sizing=executor.HOLD,
                 reason="Not in the current leaderboard — holding rather than reading "
                        "missing data as a sell.",
             ))
@@ -81,14 +82,14 @@ def build(ctx) -> list[Target]:
             runs = common.runs_since_buy(ctx, ticker)
             if runs is not None and runs < MIN_HOLD_RUNS:
                 targets.append(Target(
-                    ticker=ticker, notional=notional, resize=False,
+                    ticker=ticker, notional=notional, sizing=executor.HOLD,
                     reason=f"Score {score} is below the {EXIT_SCORE:.0f} exit, but only "
                            f"{runs} run(s) held — minimum hold is {MIN_HOLD_RUNS}.",
                 ))
             continue        # otherwise it goes
 
         targets.append(Target(
-            ticker=ticker, notional=notional, resize=False,
+            ticker=ticker, notional=notional, sizing=executor.HOLD,
             reason=f"Score {score} — {'above the entry' if score >= ENTRY_SCORE else 'in the hold band'}"
                    f", exits below {EXIT_SCORE:.0f}.",
         ))

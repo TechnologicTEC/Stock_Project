@@ -28,29 +28,40 @@ from engine.bot import accounts, journal, risk
 REBALANCE_BAND_PCT = 0.005      # 0.5% of equity
 REBALANCE_BAND_MIN = 25.0       # dollars
 
+# What may be done to a position that is already open. See Target.sizing.
+LEVEL = "level"       # resize both ways (a rebalance)
+HOLD = "hold"         # never resize
+TOPUP = "topup"       # buy up to the target, never sell down to it
+
 
 @dataclass(frozen=True)
 class Target:
     """One line of a strategy's desired book. `reason` becomes the journal entry
     and the "why it's held" column on the bot page, so write it for a human.
 
-    `resize=False` means "I already hold this and I only want to keep it" — open
-    it if it is missing, never trim or top it up. Strategies set that on every
-    run where they are not rebalancing, which is most runs.
+    `sizing` says what may happen to a position that is already open:
 
-    Without it, simply restating the book resized it. A strategy has to name its
+        LEVEL   resize both ways to hit `notional` — a rebalance.
+        HOLD    never resize. Open it if missing, close it if it leaves the
+                book, otherwise leave it exactly where it is.
+        TOPUP   buy up to `notional`, but never sell down to it. For a
+                position whose target size grows as the signal strengthens,
+                where a *falling* target must not become a sell order.
+
+    HOLD is the default state of affairs on a quiet day, and it exists because
+    simply restating the book used to resize it. A strategy has to name its
     whole book every run (an empty list means "sell everything" to `plan`), and
     since each target is sized off *current* equity, any price drift showed up
     as a gap and got traded away. Nobody chose that: it was a side effect of the
     architecture, and it quietly layered a continuous equal-weighting scheme on
-    top of all five strategies — which is precisely the thing the uniform sizing
-    rule exists to avoid, since it makes a difference in results impossible to
+    top of all five strategies — precisely the thing the uniform sizing rule
+    exists to avoid, since it makes a difference in results impossible to
     attribute to the signals.
     """
     ticker: str
     notional: float
     reason: str
-    resize: bool = True
+    sizing: str = "level"
 
 
 @dataclass(frozen=True)
@@ -84,7 +95,8 @@ def plan(
     Rules, in order:
       * a held name absent from the targets is closed in full (by qty, so no
         fractional dust is left behind)
-      * a held name whose target says `resize=False` is left completely alone
+      * a held name whose target says HOLD is left completely alone, and one
+        that says TOPUP is only ever bought, never trimmed
       * a gap smaller than the rebalance band is left alone
       * everything else is bought or trimmed by notional
     """
@@ -104,11 +116,17 @@ def plan(
     for ticker, target in wanted.items():
         current = held[ticker].market_value if ticker in held else 0.0
 
-        # Held, and the strategy only asked to keep it: leave it exactly where
-        # it is. A winner is allowed to run and a laggard to shrink; the
-        # strategy re-levels on its own rebalance, not on every quiet day.
-        if current > 0 and not target.resize:
-            continue
+        # What is allowed to happen to a position we already hold.
+        if current > 0:
+            if target.sizing == HOLD:
+                # Leave it exactly where it is. A winner runs, a laggard
+                # shrinks; the strategy levels on its own rebalance, if it has
+                # one, and not on every quiet day.
+                continue
+            if target.sizing == TOPUP and current >= target.notional:
+                # Only ever add. A target that has fallen below the position
+                # must not turn into a sell — that is the whole point of TOPUP.
+                continue
 
         gap = target.notional - current
 
