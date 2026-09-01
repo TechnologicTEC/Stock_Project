@@ -37,6 +37,7 @@ from engine import cache, news, price_history  # noqa: E402
 from engine.data_sources import finnhub_client  # noqa: E402
 
 PRICE_LOOKBACK_DAYS = 400      # ~13 months — covers the chart's 1Y/Max ranges + screener momentum
+BOT_LOOKBACK_DAYS = 30         # matches check_fills' own window
 FINNHUB_PAUSE_SECONDS = 1.1    # free tier is 60 req/min; stay just under it
 WARM_NEWS = os.environ.get("WARM_NEWS", "1").lower() not in ("0", "false", "no")
 
@@ -48,10 +49,40 @@ def all_tickers() -> list[str]:
     return sorted({(r[0] or "").upper() for r in rows if r[0]})
 
 
+def bot_tickers(days: int = BOT_LOOKBACK_DAYS) -> list[str]:
+    """Every ticker the trading bot has actually ordered recently.
+
+    `scripts/check_fills.py` grades each fill against that day's OPEN, which it
+    can only do if a bar for that ticker and day is cached. Nothing was
+    fetching them: this job warmed holdings and watchlist, and the bot trades
+    neither — so 72 fills sat ungradeable with "no cached bar for that day"
+    while the fill check, the one measurement of whether the bot's prices are
+    real, had nothing to work with.
+
+    Read from the journal rather than from Alpaca so this needs no broker keys,
+    and so a name stays covered after it is sold — a past fill is still worth
+    grading.
+    """
+    cutoff = date.today() - timedelta(days=days)
+    with get_session() as s:
+        rows = s.execute(text(
+            "SELECT DISTINCT ticker FROM bot_decisions "
+            "WHERE ticker IS NOT NULL AND status IN ('submitted', 'filled') "
+            "AND decided_at >= :cutoff"
+        ), {"cutoff": cutoff}).all()
+    return sorted({(r[0] or "").upper() for r in rows if r[0]})
+
+
 def main() -> None:
     configure()  # DATABASE_URL from env — the us-east-1 admin/postgres URL
     tickers = all_tickers()
-    print(f"warming {len(tickers)} ticker(s): {tickers}", flush=True)
+    # Names the bot traded get PRICES ONLY. That is all check_fills needs, and
+    # the full treatment (fundamentals + a FinBERT pass over the headlines) runs
+    # ~10s a name — across a 50-name decile book that would turn a 3-minute job
+    # into a 20-minute one for data nothing reads.
+    bot_only = [t for t in bot_tickers() if t not in set(tickers)]
+    print(f"warming {len(tickers)} user ticker(s): {tickers}", flush=True)
+    print(f"plus prices for {len(bot_only)} bot-traded ticker(s): {bot_only}", flush=True)
     start, end = date.today() - timedelta(days=PRICE_LOOKBACK_DAYS), date.today()
 
     priced = funded = newsed = 0
@@ -77,8 +108,22 @@ def main() -> None:
                 print(f"  {t:6} news FAILED: {type(exc).__name__}: {exc}", flush=True)
         time.sleep(FINNHUB_PAUSE_SECONDS)
 
+    # Names the bot traded get PRICES ONLY. That is all check_fills needs, and
+    # the full treatment (fundamentals + a FinBERT pass over the headlines)
+    # runs ~10s a name — across a 50-name decile book that would turn a
+    # 3-minute job into a 20-minute one for data nothing reads.
+    bot_priced = 0
+    for t in bot_only:
+        try:
+            n = price_history.refresh(t, start, end)
+            print(f"  {t:6} prices (bot): {n} bars", flush=True)
+            bot_priced += 1
+        except Exception as exc:
+            print(f"  {t:6} prices (bot) FAILED: {type(exc).__name__}: {exc}", flush=True)
+
     news_line = f", news {newsed}/{len(tickers)}" if WARM_NEWS else ""
-    print(f"\ndone: prices {priced}/{len(tickers)}, fundamentals {funded}/{len(tickers)}{news_line}", flush=True)
+    print(f"\ndone: prices {priced}/{len(tickers)}, fundamentals {funded}/{len(tickers)}"
+          f"{news_line}, bot prices {bot_priced}/{len(bot_only)}", flush=True)
 
 
 if __name__ == "__main__":

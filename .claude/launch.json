@@ -4,8 +4,35 @@
     {
       "name": "streamlit-app",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "streamlit", "run", "app/main.py", "--server.port", "8501", "--server.headless", "true"],
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "app/main.py",
+        "--server.port",
+        "8501",
+        "--server.headless",
+        "true"
+      ],
       "port": 8501
+    },
+    {
+      "name": "streamlit-prod-readonly",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "app/main.py",
+        "--server.port",
+        "8502",
+        "--server.headless",
+        "true"
+      ],
+      "port": 8502,
+      "env": {
+        "DATABASE_URL": "postgresql://postgres.qjjfnvqmbqzytrtdliff:DBDBwtnfaDB.@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+      }
     }
   ]
 }

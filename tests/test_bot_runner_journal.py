@@ -178,3 +178,45 @@ def test_no_row_a_dry_run_writes_ever_counts_as_a_run(recorded):
         rows.extend(recorded)
         assert rows, "a dry run should still journal something"
         assert common.run_dates(_Ctx(_as_decisions(rows))) == [], rows
+
+
+# --------------------------------------------------------------------------
+# Price-cache freshness. The bot is scheduled 15 min after warm-cache, but
+# GitHub's scheduled workflows have run 23 min to 8 HOURS late — so that
+# ordering is an assumption, and a stale read has to be visible.
+# --------------------------------------------------------------------------
+
+def _freshness_log(bars):
+    lines = []
+    with patch("engine.cache.get_closes_for", return_value=bars), \
+         patch.object(run_bot, "_log", lines.append):
+        run_bot._log_price_freshness(date(2026, 9, 1))
+    return " ".join(lines)
+
+
+def test_a_current_cache_says_so_plainly():
+    out = _freshness_log({"SPY": [(date(2026, 8, 31), 600.0), (date(2026, 9, 1), 601.0)]})
+    assert "current" in out
+    assert "may not have run" not in out
+
+
+def test_a_stale_cache_names_the_age_and_the_likely_cause():
+    """golden_cross would compute its 50/200 cross from yesterday's closes and
+    nothing would say so."""
+    out = _freshness_log({"SPY": [(date(2026, 8, 28), 600.0)]})
+    assert "2026-08-28" in out and "4 day(s) old" in out
+    assert "warm-cache may not have run yet" in out
+
+
+def test_no_bars_at_all_is_reported_rather_than_assumed_fresh():
+    assert "no recent SPY bars" in _freshness_log({})
+
+
+def test_a_failing_freshness_check_never_breaks_the_run():
+    """It is a diagnostic. A missing bar is already handled by each strategy's
+    own StrategyDataError."""
+    lines = []
+    with patch("engine.cache.get_closes_for", side_effect=RuntimeError("pooler down")), \
+         patch.object(run_bot, "_log", lines.append):
+        run_bot._log_price_freshness(date(2026, 9, 1))
+    assert "freshness unknown" in " ".join(lines)

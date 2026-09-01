@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date as date_
+from datetime import timedelta
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +53,41 @@ def _status(dry_run: bool, live_status: str) -> str:
     creator_conviction's watermark.
     """
     return journal.DRY_RUN if dry_run else live_status
+
+
+def _log_price_freshness(today: date_) -> None:
+    """Say how old the newest cached price bar is, and complain if it is stale.
+
+    The bot is scheduled 15 minutes after warm-cache so it reads the day's
+    closes. That ordering is an ASSUMPTION, not a guarantee: GitHub's scheduled
+    workflows are best-effort and have been observed running 23 minutes to
+    8 hours late, so warm-cache can easily land after this job rather than
+    before it. When that happens golden_cross computes its 50/200 cross from
+    yesterday's closes and nothing anywhere says so.
+
+    This cannot fix the ordering — it makes it visible, which is the difference
+    between a known limitation and a silent one. Never raises: a missing bar is
+    already handled by each strategy's own StrategyDataError.
+    """
+    from engine import cache, price_history
+
+    try:
+        bars = cache.get_closes_for([BENCHMARK_TICKER], price_history.canonical_source(),
+                                    today - timedelta(days=10), today)
+        dates = [d for d, _ in (bars.get(BENCHMARK_TICKER) or [])]
+        if not dates:
+            _log(f"  price cache: no recent {BENCHMARK_TICKER} bars at all")
+            return
+        newest = max(dates)
+        age = (today - newest).days
+        if age == 0:
+            _log(f"  price cache: current (newest {BENCHMARK_TICKER} bar is today)")
+        else:
+            _log(f"  price cache: newest {BENCHMARK_TICKER} bar is {newest} ({age} day(s) old) "
+                 "— warm-cache may not have run yet; price-driven signals are reading "
+                 "older closes than intended.")
+    except Exception as exc:                 # noqa: BLE001 — diagnostics never break a run
+        _log(f"  price cache: freshness unknown ({type(exc).__name__})")
 
 
 def _benchmark_equity(strategy: str, starting_equity: float, today: date_) -> float | None:
@@ -118,6 +154,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     positions = executor.current_positions(trading_client)
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
+    _log_price_freshness(today)
 
     # Gather, then decide. `prepare` is the only place a strategy does I/O; if it
     # can't see its inputs, `build` raises rather than returning an empty book —
