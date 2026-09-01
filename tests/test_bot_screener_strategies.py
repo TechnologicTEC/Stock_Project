@@ -368,7 +368,9 @@ def test_a_decayed_name_with_only_a_dry_run_buy_is_still_sold():
 # --------------------------------------------------------------------------
 
 def test_composite_holds_without_resizing_between_rebalances():
-    held = ["T01", "T02"]
+    # A FULL book: two names would be materially incomplete and correctly
+    # trigger a rebuild instead of the hold branch.
+    held = [f"T{i:02d}" for i in range(1, 16)]
     ctx = _ctx(_rows(), held=held, decisions=[_decision(TODAY - timedelta(days=1))])
     targets = comp.build(ctx)
     assert targets and all(t.sizing == executor.HOLD for t in targets)
@@ -397,3 +399,27 @@ def test_score_threshold_sizes_a_brand_new_entry_normally():
     ctx = _ctx(rows, slots=20, strategy="score_threshold")
     fresh = [t for t in thr.build(ctx) if t.sizing == executor.LEVEL]
     assert fresh, "a new entry has to be sized somehow"
+
+
+def test_composite_rebuilds_a_half_filled_book_mid_month():
+    """3 of 15 after a partly-placed rebalance. Always-fully-invested means a
+    third of a book is a broken state, not a resting one."""
+    ctx = _ctx(_rows(), held=["T01", "T02", "T03"], slots=15,
+               decisions=[_decision(TODAY - timedelta(days=1))])
+    assert len(comp.build(ctx)) == 15
+
+
+def test_composite_does_not_rebuild_for_one_missing_name():
+    held = [f"T{i:02d}" for i in range(1, 15)]          # 14 of 15
+    ctx = _ctx(_rows(), held=held, slots=15,
+               decisions=[_decision(TODAY - timedelta(days=1))])
+    targets = comp.build(ctx)
+    assert len(targets) == 14
+    assert all(t.sizing == executor.HOLD for t in targets)
+
+
+def test_the_incomplete_threshold_is_half_not_any_shortfall():
+    assert common.book_is_incomplete(8, 50) and common.book_is_incomplete(3, 15)
+    assert not common.book_is_incomplete(49, 50)
+    assert not common.book_is_incomplete(14, 15)
+    assert not common.book_is_incomplete(0, 0)          # no intent, no verdict

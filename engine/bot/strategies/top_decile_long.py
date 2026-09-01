@@ -91,12 +91,31 @@ def deciles(rows: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def is_rebalance_run(ctx) -> bool:
-    """Rebalance on the month's first run, and whenever the book is empty.
+    """Rebalance on the month's first run, and whenever the book is INCOMPLETE.
 
-    The empty case matters on day one and after a full exit: without it a
-    strategy that had already run this month would sit in cash until the 1st.
+    The incomplete case matters on day one, after a full exit, and after a
+    rebalance that only partly went through — which is not hypothetical: a
+    run whose orders were cancelled and re-placed filled 8 of 50, and the
+    monthly gate would then have held a one-sixth book until the 1st.
+
+    This strategy is always fully invested by construction (the top decile IS
+    the book), so holding fewer names than slots is a broken state rather than
+    a resting one, and the fix is the thing it already does once a month.
+
+    "Incomplete" means materially short, not one name short — see
+    `common.book_is_incomplete`. A single position closing mid-month must not
+    re-evaluate the whole ranking, because that is exactly the churn the
+    monthly cadence exists to prevent.
     """
-    return not (ctx.held_tickers() and common.has_run_this_month(ctx))
+    held = ctx.held_tickers()
+    if not held:
+        return True
+    slots = int(ctx.config.get("target_slots") or 0)
+    rows = (ctx.extras or {}).get("rows") or []
+    intended = min(slots, decile_size(rows)) if (slots and rows) else slots
+    if common.book_is_incomplete(len(held), intended):
+        return True
+    return not common.has_run_this_month(ctx)
 
 
 def build(ctx) -> list[Target]:

@@ -5,7 +5,7 @@ Nothing here touches the network. `plan()` is pure so it's tested directly, and
 `submit()` takes the client as an argument so a fake stands in for Alpaca — which
 is the whole point of keeping strategies and the executor apart.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 
 import pytest
@@ -576,3 +576,64 @@ def test_the_five_percent_case_that_started_this():
     assert executor.plan(holding, positions, equity=equity) == []
     levelling = [executor.Target(ticker=f"S{i}", notional=note, reason="r") for i in range(4)]
     assert len(executor.plan(levelling, positions, equity=equity)) == 1
+
+
+# --------------------------------------------------------------------------
+# CANCELLED — an order pulled before it filled must not lock the name out
+# --------------------------------------------------------------------------
+
+def test_a_cancelled_order_no_longer_counts_as_already_acted(tmp_path):
+    """The hole this status fills: cancelling 73 orders at Alpaca left 73 rows
+    reading 'submitted', so the corrected book was refused for every name it
+    shared with the old one."""
+    oid = journal.client_order_id("composite_rebalance", "MU", "buy", date(2026, 9, 1))
+    journal.record(run_id="r1", strategy="composite_rebalance", ticker="MU",
+                   action=journal.BUY, reason="bought", status=journal.SUBMITTED,
+                   order_id=oid, notional=666.67)
+    assert journal.already_acted(oid) is True
+
+    assert journal.mark_cancelled([oid]) == 1
+    assert journal.already_acted(oid) is False
+
+
+def test_marking_cancelled_never_rewrites_a_filled_order():
+    """A filled order cannot be un-filled — the position exists."""
+    oid = journal.client_order_id("composite_rebalance", "KO", "buy", date(2026, 9, 1))
+    journal.record(run_id="r2", strategy="composite_rebalance", ticker="KO",
+                   action=journal.BUY, reason="bought", status=journal.FILLED,
+                   order_id=oid, notional=666.67)
+    assert journal.mark_cancelled([oid]) == 0
+    assert journal.already_acted(oid) is True
+
+
+def test_marking_cancelled_is_a_no_op_on_ids_that_do_not_exist():
+    assert journal.mark_cancelled(["nope-2026-09-01-XXX-buy"]) == 0
+    assert journal.mark_cancelled([]) == 0
+    assert journal.mark_cancelled([None, ""]) == 0
+
+
+def test_the_cancelled_reason_says_what_happened():
+    oid = journal.client_order_id("top_decile_long", "VRT", "buy", date(2026, 9, 1))
+    journal.record(run_id="r3", strategy="top_decile_long", ticker="VRT",
+                   action=journal.BUY, reason="Rank 3 of 503.", status=journal.SUBMITTED,
+                   order_id=oid, notional=200.0)
+    journal.mark_cancelled([oid])
+    row = next(d for d in journal.recent_decisions("top_decile_long", 50)
+               if d["ticker"] == "VRT")
+    assert row["status"] == journal.CANCELLED
+    assert "cancelled before filling" in row["reason"]
+    assert "Rank 3 of 503." in row["reason"]      # the original reason survives
+
+
+def test_a_cancelled_buy_does_not_start_a_minimum_hold_clock():
+    """runs_since_buy counts real buys. A cancelled one bought nothing."""
+    from engine.bot.strategies import screener_common
+
+    class _Ctx:
+        today = date(2026, 9, 5)
+        extras = {"decisions": [{
+            "decided_at": datetime(2026, 9, 1), "ticker": "VRT",
+            "action": journal.BUY, "status": journal.CANCELLED, "blocked_by": None,
+        }]}
+
+    assert screener_common.runs_since_buy(_Ctx(), "VRT") is None

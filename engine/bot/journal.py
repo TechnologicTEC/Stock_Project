@@ -25,6 +25,21 @@ from engine.time_utils import utcnow
 SUBMITTED, FILLED, BLOCKED, SKIPPED, ERROR, DRY_RUN = (
     "submitted", "filled", "blocked", "skipped", "error", "dry_run",
 )
+
+# An order that reached the broker and was then cancelled before it filled.
+#
+# It exists because the idempotency guard could not tell that apart from a live
+# order. `client_order_id` is (strategy, day, ticker, side), and `already_acted`
+# refuses anything already SUBMITTED — correct for a retried workflow, and
+# wrong the moment an order is cancelled and the book legitimately needs
+# placing again. Cancelling 73 orders at Alpaca left 73 rows still reading
+# "submitted", so the corrected book was refused for every name it shared with
+# the old one and only the 11 genuinely new names went through.
+#
+# Deliberately its own status rather than a rewrite of the row: "submitted,
+# then cancelled" is what happened, and the journal's whole value is saying
+# what happened.
+CANCELLED = "cancelled"
 BUY, SELL, HOLD, SKIP = "buy", "sell", "hold", "skip"
 
 
@@ -104,6 +119,12 @@ def already_acted(order_id: str) -> bool:
     client_order_id: if a retry happens before Alpaca has registered the first
     order, our own journal still catches it. Blocked and skipped rows don't
     count — those never reached the broker.
+
+    CANCELLED doesn't count either, and that is the point of having it: an
+    order that was pulled before filling leaves no position, so the intent is
+    genuinely unfulfilled and the strategy must be free to place it again.
+    Without that distinction a cancellation locked the name out for the rest of
+    the day.
     """
     with get_session() as session:
         row = session.execute(
@@ -113,6 +134,30 @@ def already_acted(order_id: str) -> bool:
             .limit(1)
         ).first()
     return row is not None
+
+
+def mark_cancelled(order_ids: list[str]) -> int:
+    """Record that these submitted orders were cancelled before filling.
+
+    Returns how many rows changed. Only touches rows still reading SUBMITTED —
+    a filled order cannot be un-filled, and quietly rewriting one would put a
+    position in the account with no record of how it got there.
+    """
+    wanted = [oid for oid in order_ids if oid]
+    if not wanted:
+        return 0
+    changed = 0
+    with get_session() as session:
+        rows = session.execute(
+            select(BotDecision)
+            .where(BotDecision.client_order_id.in_(wanted))
+            .where(BotDecision.status == SUBMITTED)
+        ).scalars().all()
+        for row in rows:
+            row.status = CANCELLED
+            row.reason = f"[cancelled before filling] {row.reason}"
+            changed += 1
+    return changed
 
 
 def recent_decisions(strategy: str | None = None, limit: int = 50) -> list[dict]:

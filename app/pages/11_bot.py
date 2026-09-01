@@ -122,6 +122,7 @@ _STATUS_BADGE = {
     journal.FILLED: "sb", journal.SUBMITTED: "b",
     journal.BLOCKED: "s", journal.ERROR: "s",
     journal.SKIPPED: "h", journal.DRY_RUN: "faint",
+    journal.CANCELLED: "faint",     # reached the broker, pulled before it filled
 }
 
 

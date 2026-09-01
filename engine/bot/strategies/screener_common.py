@@ -138,6 +138,23 @@ def _is_non_run(decision: dict) -> bool:
                                                risk.STRATEGY_KILLED))
 
 
+# A book this far below its intended size is broken rather than resting, and
+# the monthly gate should not hold it there. HALF, not "any shortfall": one
+# name closing mid-month is normal and must not re-evaluate the whole ranking
+# (that is the churn the monthly cadence exists to avoid), while a rebalance
+# that only half went through has left the account holding something that is
+# not the strategy at all. The real case was 8 of 50 and 3 of 15 after a run's
+# orders were cancelled and re-placed.
+INCOMPLETE_BOOK_FRACTION = 0.5
+
+
+def book_is_incomplete(held_count: int, intended: int) -> bool:
+    """Is the book so far short of `intended` that it needs rebuilding?"""
+    if intended <= 0:
+        return False
+    return held_count < intended * INCOMPLETE_BOOK_FRACTION
+
+
 def run_dates(ctx) -> list[date_]:
     """Distinct dates on which this strategy actually ran, newest first."""
     seen = set()

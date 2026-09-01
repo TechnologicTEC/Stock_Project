@@ -58,7 +58,14 @@ def build(ctx) -> list[Target]:
     # holdings (rather than returning []) matters: an empty target book means
     # "sell everything" to the planner, so "do nothing this run" has to be
     # written as "these are still my targets".
-    if held and common.has_run_this_month(ctx):
+    # Rebalance when the book is short as well as when the month turns. This
+    # strategy is always fully invested and always ~`slots` names, so holding
+    # fewer is a broken state, not a resting one — a partly-filled rebalance
+    # would otherwise be frozen in place until the 1st. See top_decile_long's
+    # is_rebalance_run for the same argument at length.
+    intended = min(slots, len(rows)) if rows else slots
+    if (held and not common.book_is_incomplete(len(held), intended)
+            and common.has_run_this_month(ctx)):
         return [
             Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t)))

@@ -155,8 +155,32 @@ def test_between_rebalances_the_book_is_restated_not_emptied():
 
 
 def test_a_name_that_left_the_decile_is_not_force_sold_mid_month():
-    ctx = _ctx(held=["T200"], decisions=[_decision(TODAY - timedelta(days=1))])
-    assert [t.ticker for t in tdl.build(ctx)] == ["T200"]
+    """A FULL book holding one name that has since slipped out of the decile.
+    It stays until the next rebalance — mid-month churn is what the monthly
+    cadence exists to avoid. (Held as a full book on purpose: a one-name book
+    is materially incomplete and correctly triggers a rebuild instead.)"""
+    held = [f"T{i:03d}" for i in range(1, 50)] + ["T200"]
+    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    assert "T200" in [t.ticker for t in tdl.build(ctx)]
+
+
+def test_a_book_that_lost_one_name_mid_month_is_not_rebuilt():
+    """One position closing is normal. Re-evaluating all 50 for it would be
+    the churn the monthly gate is there to prevent."""
+    held = [f"T{i:03d}" for i in range(1, 50)]          # 49 of 50
+    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    assert not tdl.is_rebalance_run(ctx)
+    assert len(tdl.build(ctx)) == 49                    # restated, not rebuilt
+
+
+def test_a_half_filled_book_is_rebuilt_even_having_run_this_month():
+    """The real case: a rebalance whose orders were cancelled and re-placed
+    filled 8 of 50, and the monthly gate would have frozen it there until the
+    1st."""
+    held = [f"T{i:03d}" for i in range(1, 9)]           # 8 of 50
+    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    assert tdl.is_rebalance_run(ctx)
+    assert len(tdl.build(ctx)) == 50
 
 
 def test_a_run_in_a_previous_month_still_rebalances():
@@ -171,10 +195,13 @@ def test_an_empty_book_rebalances_even_having_run_this_month():
 
 
 def test_a_held_name_missing_from_the_leaderboard_is_held_mid_month():
-    ctx = _ctx(held=["GONE"], decisions=[_decision(TODAY - timedelta(days=1))])
-    targets = tdl.build(ctx)
-    assert [t.ticker for t in targets] == ["GONE"]
-    assert "not in the current leaderboard" in targets[0].reason
+    """Full book, one name no longer in the ranking at all. Missing data is not
+    a sell signal — it leaves at the next rebalance, not today."""
+    held = [f"T{i:03d}" for i in range(1, 50)] + ["GONE"]
+    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    targets = {t.ticker: t for t in tdl.build(ctx)}
+    assert "GONE" in targets
+    assert "not in the current leaderboard" in targets["GONE"].reason
 
 
 # --------------------------------------------------------------------------
