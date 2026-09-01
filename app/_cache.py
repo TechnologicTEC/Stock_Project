@@ -147,6 +147,77 @@ def bot_account_view(key_env_prefix: str) -> dict:
     return live.account_view(key_env_prefix)
 
 
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_leaderboard() -> dict:
+    """The cached S&P 500 ranking the screener strategies trade off.
+
+    Read through the strategies' own loader rather than the screener's, so the
+    page shows exactly what the bot would act on — including refusing a ranking
+    the bot would consider too stale to trade.
+    """
+    from datetime import date as _date
+
+    from engine.bot.strategies import screener_common
+
+    try:
+        return screener_common.load_leaderboard(_date.today())
+    except Exception as exc:                 # noqa: BLE001 — a panel, not the page
+        return {"rows": [], "error": str(exc)}
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_decile_spread() -> dict | None:
+    """Top-minus-bottom decile return since the last rebalance snapshot."""
+    from engine.bot import decile_spread
+
+    try:
+        return decile_spread.current()
+    except Exception:                        # noqa: BLE001
+        return None
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_creator_mentions() -> list[dict]:
+    """The creator mention window the conviction strategy reads, with videos."""
+    from engine.bot.strategies import creator_conviction
+    from engine import creator_signals
+
+    try:
+        return creator_signals.mention_leaderboard(
+            days=creator_conviction.WINDOW_DAYS, min_mentions=1)
+    except Exception:                        # noqa: BLE001
+        return []
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_sma_frame(ticker: str, lookback_days: int) -> list[dict]:
+    """Closes plus the two SMAs golden_cross decides on, oldest first.
+
+    Computed with the strategy's own `moving_averages`, so the chart cannot
+    drift from the numbers the bot acted on.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    from engine import price_history
+    from engine.bot.strategies import golden_cross
+
+    try:
+        today = _date.today()
+        df = price_history.get_history_df(ticker, today - _timedelta(days=lookback_days), today)
+        if df is None or df.empty or "close" not in df:
+            return []
+        fast, slow = golden_cross.moving_averages(df["close"])
+        out = []
+        for when, close, f, s_ in zip(df.index, df["close"], fast, slow):
+            out.append({"date": when, "close": float(close),
+                        "fast": None if f != f else float(f),
+                        "slow": None if s_ != s_ else float(s_)})
+        return out
+    except Exception:                        # noqa: BLE001
+        return []
+
+
 def clear() -> None:
     """Drop all cached results. Call after any write so nothing shows stale."""
     st.cache_data.clear()

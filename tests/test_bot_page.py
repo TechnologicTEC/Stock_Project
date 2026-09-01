@@ -71,8 +71,41 @@ def _account_view(available=True, **overrides):
     return base
 
 
-def _run(configs=None, curve=None, decisions=None, view=None, env=None):
-    """Render the page with every external read stubbed."""
+def _leaderboard(n=60):
+    return {"rows": [{"ticker": f"T{i:02d}", "name": f"Name {i}", "rank": i,
+                      "score": round(90 - i * 0.4, 1)} for i in range(1, n + 1)]}
+
+
+def _mentions():
+    return [{"ticker": "NVTS", "mentions": 3, "company_name": "Navitas",
+             "stances": {"bullish": 3, "bearish": 0, "neutral": 0, "unknown": 0},
+             "last_seen": datetime(2026, 8, 26),
+             "videos": [{"title": "Stocks to buy", "url": "https://x/1",
+                         "published_at": datetime(2026, 8, 26), "stance": "bullish"}]}]
+
+
+def _spread(days=30):
+    return {"as_of": date(2026, 8, 2), "days": days, "top_return": 0.04,
+            "bottom_return": 0.01, "spread": 0.03, "top_priced": 50,
+            "bottom_priced": 50, "missing": 0, "universe": 503}
+
+
+def _sma(n=260):
+    return [{"date": date(2026, 1, 1) + timedelta(days=i), "close": 600.0 + i,
+             "fast": 610.0 + i, "slow": 590.0 + i} for i in range(n)]
+
+
+_UNSET = object()      # so `spread=None` can mean "no snapshot yet", not "default"
+
+
+def _run(configs=None, curve=None, decisions=None, view=None, env=None,
+         leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET):
+    """Render the page with every external read stubbed.
+
+    The panel readers are stubbed here too. Without them the strategy panels
+    reach the real leaderboard and price cache, which makes the suite depend on
+    a warm database and quietly turns these into integration tests.
+    """
     configs = [_config()] if configs is None else configs
     curve = _curve() if curve is None else curve
     decisions = [_decision()] if decisions is None else decisions
@@ -82,6 +115,14 @@ def _run(configs=None, curve=None, decisions=None, view=None, env=None):
          patch("app._cache.bot_equity_curve", return_value=curve), \
          patch("app._cache.bot_decisions", return_value=decisions), \
          patch("app._cache.bot_account_view", return_value=view), \
+         patch("app._cache.bot_leaderboard",
+               return_value=_leaderboard() if leaderboard is _UNSET else leaderboard), \
+         patch("app._cache.bot_creator_mentions",
+               return_value=_mentions() if mentions is _UNSET else mentions), \
+         patch("app._cache.bot_decile_spread",
+               return_value=_spread() if spread is _UNSET else spread), \
+         patch("app._cache.bot_sma_frame",
+               return_value=_sma() if sma is _UNSET else sma), \
          patch.dict("os.environ", env or {}, clear=False):
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=60)
@@ -265,3 +306,125 @@ def test_a_stopped_strategy_says_positions_are_left_alone():
     warnings = " ".join(w.value for w in at.warning)
     assert "is stopped" in warnings
     assert "doesn't liquidate" in warnings
+
+
+# --------------------------------------------------------------------------
+# Tabs. The old strip used the full labels in ranked order, which pushed the
+# last strategies off the row behind a scroll chevron and moved a tab whenever
+# a curve crossed overnight.
+# --------------------------------------------------------------------------
+
+def _all_six():
+    return [_config(s, key_env_prefix="ALPACA_X", target_slots=n)
+            for s, n in (("top_decile_long", 50), ("creator_conviction", 4),
+                         ("golden_cross", 1), ("composite_rebalance", 15),
+                         ("score_threshold", 20), ("spy_harness", 1))]
+
+
+def test_tabs_use_short_labels_not_the_full_ones():
+    at = _run(configs=_all_six())
+    labels = list(at.tabs[0].label for _ in [0]) if False else [t.label for t in at.tabs]
+    assert "Composite 15" in labels
+    assert "Composite rebalance (top 15 by rank)" not in labels
+    assert max(len(l) for l in labels) <= 14
+
+
+def test_tab_order_is_the_build_order_not_the_leaderboard():
+    """A tab that moves because a curve crossed overnight makes the page harder
+    to use every day. The comparison table above is the ranked view."""
+    at = _run(configs=_all_six())
+    labels = [t.label for t in at.tabs]
+    assert labels == ["Golden cross", "Composite 15", "Strong Buy",
+                      "Creator", "Top decile", "SPY harness"]
+
+
+def test_the_full_label_still_appears_inside_the_tab():
+    """Shortening the tab must not lose which strategy you are looking at."""
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)])
+    assert any("Composite rebalance" in str(m.value) for m in at.markdown)
+
+
+# --------------------------------------------------------------------------
+# The per-strategy panels
+# --------------------------------------------------------------------------
+
+def _page_text(at) -> str:
+    return " ".join(str(m.value) for m in at.markdown) + " ".join(
+        str(c.value) for c in at.caption)
+
+
+def test_the_decile_panel_reports_the_spread():
+    at = _run(configs=[_config("top_decile_long", target_slots=50)])
+    text = _page_text(at)
+    assert "Top-minus-bottom decile spread" in text
+    assert "+3.00%" in text and "never traded" in text
+
+
+def test_the_decile_panel_refuses_a_verdict_before_prices_have_moved():
+    """On the day of a rebalance every number is +0.00% by construction, and
+    reading that as 'the ranking failed' would be nonsense dressed as a finding."""
+    at = _run(configs=[_config("top_decile_long", target_slots=50)],
+              spread={**_spread(days=1), "top_return": 0.0,
+                      "bottom_return": 0.0, "spread": 0.0})
+    text = _page_text(at)
+    assert "far too early to read" in text
+    assert "did not separate" not in text
+
+
+def test_the_decile_panel_gives_a_verdict_once_there_is_a_window():
+    at = _run(configs=[_config("top_decile_long", target_slots=50)])
+    assert "separated the two ends" in _page_text(at)
+
+
+def test_the_decile_panel_says_so_before_the_first_snapshot():
+    at = _run(configs=[_config("top_decile_long", target_slots=50)], spread=None)
+    assert "until the first rebalance" in _page_text(at)
+
+
+def test_the_creator_panel_shows_the_window_and_links_the_videos():
+    at = _run(configs=[_config("creator_conviction", target_slots=4)])
+    text = _page_text(at)
+    assert "30-day mention window" in text
+    assert "https://x/1" in text and "NVTS" in text
+
+
+def test_the_creator_panel_reports_a_stalled_scan_rather_than_going_blank():
+    at = _run(configs=[_config("creator_conviction", target_slots=4)], mentions=[])
+    assert "refuses to run" in _page_text(at)
+
+
+def test_the_composite_panel_shows_the_ranking_and_the_buffer():
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)])
+    text = _page_text(at)
+    assert "buffer to rank 30" in text and "T01" in text
+
+
+def test_the_threshold_panel_shows_who_is_queued_above_the_entry():
+    at = _run(configs=[_config("score_threshold", target_slots=20)])
+    assert "waiting for a slot" in _page_text(at)
+
+
+def test_a_panel_that_cannot_load_its_data_does_not_break_the_tab():
+    """These are illustrations. The numbers above them come from the database
+    and must survive a cold cache or a stale ranking."""
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)],
+              leaderboard={"rows": [], "error": "leaderboard is 40 days old"})
+    assert not at.exception
+    assert "leaderboard is 40 days old" in _page_text(at)
+
+
+def test_a_panel_raising_never_takes_the_page_down():
+    def boom(cfg, view):
+        raise RuntimeError("boom")
+
+    from app import _bot_panels
+    with patch.dict(_bot_panels._PANELS, {"top_decile_long": boom}):
+        at = _run(configs=[_config("top_decile_long", target_slots=50)])
+    assert not at.exception
+    assert "could not be drawn" in _page_text(at)
+
+
+def test_the_sizing_note_does_not_hardcode_a_strategy_count():
+    at = _run(configs=_all_six())
+    text = _page_text(at)
+    assert "these five curves" not in text

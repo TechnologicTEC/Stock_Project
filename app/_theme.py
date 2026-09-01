@@ -237,8 +237,28 @@ a {{ text-decoration: none; }} a:hover {{ text-decoration: underline; }}
 
 /* ---------- inputs / tabs / expanders / alerts ---------- */
 [data-baseweb="input"], [data-baseweb="select"], [data-baseweb="textarea"] {{ border-radius: 6px; }}
-.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid var(--cp-line); }}
-.stTabs [aria-selected="true"] {{ color: var(--cp-accent-ink); }}
+/* Tabs. WRAPPING is the important part: Streamlit's default is a single
+   scrolling row, so a page with five or six strategies pushed the last tabs
+   off the edge behind a chevron — invisible unless you knew to look. Wrapping
+   costs a second line at narrow widths and makes every tab reachable. */
+.stTabs [data-baseweb="tab-list"] {{
+  gap: 2px; flex-wrap: wrap; row-gap: 0;
+  border-bottom: 1px solid var(--cp-line); overflow: visible;
+}}
+.stTabs [data-baseweb="tab-list"] button {{ white-space: nowrap; }}
+.stTabs [data-baseweb="tab"] {{
+  height: auto; padding: .46rem .8rem; margin: 0;
+  font-size: .9rem; font-weight: 550; color: var(--cp-muted);
+  border-radius: 7px 7px 0 0; border-bottom: 2px solid transparent;
+}}
+.stTabs [data-baseweb="tab"]:hover {{ color: var(--cp-text); background: var(--cp-panel-2); }}
+.stTabs [aria-selected="true"] {{
+  color: var(--cp-accent-ink); background: var(--cp-panel);
+  border-bottom-color: var(--cp-accent);
+}}
+/* the scroll chevrons the wrap makes redundant */
+.stTabs [data-baseweb="tab-list"] + div,
+.stTabs [data-baseweb="tab-highlight"] {{ display: none; }}
 [data-testid="stExpander"] details {{
   background: linear-gradient(180deg, var(--cp-panel), var(--cp-panel-2));
   border: 1px solid var(--cp-line); border-radius: 8px;

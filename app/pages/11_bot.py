@@ -35,7 +35,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import _cache, _theme
+from app import _bot_panels, _cache, _theme
 from app._auth import gate
 from db.session import init_db
 from engine.bot import journal, performance, risk
@@ -378,11 +378,18 @@ if plottable:
 
 st.markdown("### Per strategy")
 
-tabs = st.tabs([r["label"] for r in rows])
+# Tabs use the SHORT labels and the blueprint's build order, not the table's
+# ranking. Two separate fixes: the full labels run to 40 characters and pushed
+# the last tabs off the row behind a scroll chevron, and a tab that changes
+# position because a curve crossed overnight makes the page harder to use every
+# day. The comparison table above is already ranked; this is navigation.
+tab_rows = sorted(rows, key=lambda r: bot_strategies.display_index(r["name"]))
+tabs = st.tabs([bot_strategies.short_label(r["name"]) for r in tab_rows])
 
-for tab, r in zip(tabs, rows):
+for tab, r in zip(tabs, tab_rows):
     with tab:
         name, cfg, s, curve = r["name"], r["config"], r["summary"], r["curve"]
+        _theme.eyebrow(r["label"])
 
         if cfg.get("killed"):
             st.warning(f"**{r['label']} is stopped.** Its runs will halt at the rails and place no "
@@ -491,7 +498,7 @@ for tab, r in zip(tabs, rows):
             f'{_money(cash_now)} cash ({_pct(cash_pct, 0)}) · position size is '
             f'<b>equity × min(1/{slots}, {(cfg.get("max_position_pct") or 1.0):.0%})</b>. '
             "Unfilled slots are held as cash — the same sizing rule runs on every strategy, so "
-            "these five curves test the <i>signals</i> rather than five different sizing schemes."
+            "these curves test the <i>signals</i> rather than a different sizing scheme each."
             "</p>",
             tag=f"{fill:.0f}% invested",
         )
@@ -536,6 +543,9 @@ for tab, r in zip(tabs, rows):
                 f'</p><p class="cp-foot">{_esc(view["error"])}</p>',
                 tag="not connected from here",
             )
+
+        # ---- the panel only this strategy can have ----
+        _bot_panels.render(name, cfg, view)
 
         # ---- what it decided, including the runs where nothing happened ----
         recent = r["decisions"][:15]

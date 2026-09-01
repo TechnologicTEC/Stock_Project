@@ -157,8 +157,39 @@ NOTES: dict[str, object] = {
 }
 
 
+# Short names, for anywhere the full label does not fit — the bot page's tab
+# strip above all. The full labels run to 40 characters, which pushed the last
+# tabs off the edge of the row behind a scroll chevron.
+SHORT_LABELS: dict[str, str] = {
+    "spy_harness": "SPY harness",
+    "golden_cross": "Golden cross",
+    "composite_rebalance": "Composite 15",
+    "score_threshold": "Strong Buy",
+    "creator_conviction": "Creator",
+    "top_decile_long": "Top decile",
+}
+
+# The order strategies are presented in: the blueprint's build order, simplest
+# first. Deliberately NOT sorted by return — a tab that moves position because
+# a curve crossed overnight makes the page harder to use every day, and the
+# comparison table above it is already ranked.
+DISPLAY_ORDER: tuple[str, ...] = (
+    "golden_cross", "composite_rebalance", "score_threshold",
+    "creator_conviction", "top_decile_long", "spy_harness",
+)
+
+
 def label(name: str) -> str:
     return STRATEGIES[name][0] if name in STRATEGIES else name
+
+
+def short_label(name: str) -> str:
+    return SHORT_LABELS.get(name) or label(name)
+
+
+def display_index(name: str) -> int:
+    """Sort key for presentation. Unknown names sort last, alphabetically."""
+    return DISPLAY_ORDER.index(name) if name in DISPLAY_ORDER else len(DISPLAY_ORDER)
 
 
 def _entry(name: str) -> tuple:
