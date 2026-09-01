@@ -71,9 +71,26 @@ that had fallen the same distance. A stock moving 3% in a day is ordinary, so
 that was near-constant trading on a strategy whose entire claim is that it
 holds while a creator keeps making the case.
 
-Like `score_threshold`, this has no periodic rebalance to re-level at — entries
-and exits are events. The consequence, stated plainly: a winner can grow well
-past a quarter of the account, and nothing here caps that.
+## ...until it grows past the concentration cap
+
+This has no periodic rebalance to level at — entries and exits are events — so
+without a backstop a winner could quietly take over the account. `max_position_pct`
+is that backstop, and it is checked against what a holding is WORTH, not just
+against order size (`risk.check_order` only ever sees the latter, which is why
+drift used to be invisible to every rail).
+
+When one name breaches it, the whole book is levelled back to equal, not just
+the offender. Trimming the winner alone would drop the proceeds into cash and
+strand them there, because each of the other three is individually too close to
+target for the planner's cushion to act on.
+
+At 4 slots and a 30% cap this trips at about **$3,214**, not a flat $3,000: the
+account grows along with the winner, so the position has to reach 30% of the
+larger account its own gain created — a 28.6% rise from the $2,500 equal share.
+Rare by construction, so it is an event rather than churn.
+
+`score_threshold` is deliberately left uncapped, and the two monthly strategies
+need no cap because they level on their own rebalance.
 
 ## Liquidity
 
@@ -160,6 +177,12 @@ def prepare(config: dict, today: date_) -> dict:
     }
 
 
+def _levelled_reason(breach, why: str) -> str:
+    ticker, value = breach
+    return (f"Levelled back to an equal share: {ticker} had grown to "
+            f"${value:,.2f}, past the concentration cap. Still qualifying: {why}.")
+
+
 def _notional_from_config(config: dict) -> float:
     """Indicative position size, for the liquidity screen only.
 
@@ -209,6 +232,30 @@ def newly_mentioned(entry: dict, watermark) -> bool:
     return seen_on >= watermark
 
 
+def concentration_breach(ctx) -> tuple[str, float] | None:
+    """The first held name worth more than the cap, or None.
+
+    The cap is `max_position_pct` of equity. That field already means "the most
+    one position may be", it just was not previously enforced against DRIFT —
+    `risk.check_order` only ever sees the size of an order, so a holding could
+    grow past it untouched. Reusing it keeps one number meaning one thing.
+
+    Note the cap is a share of the account, not a fixed dollar figure, and the
+    account grows along with the winner. At 4 slots and a 30% cap that means a
+    position trips at about $3,214 rather than $3,000 — it has to reach 30% of
+    the *larger* account its own gain created, which is a 28.6% rise from the
+    $2,500 equal share.
+    """
+    cap_pct = float(ctx.config.get("max_position_pct") or 1.0)
+    if cap_pct >= 1.0 or ctx.equity <= 0:
+        return None
+    cap = ctx.equity * cap_pct
+    for ticker, value in sorted(ctx.position_values().items()):
+        if value > cap:
+            return ticker, value
+    return None
+
+
 def qualifies(entry: dict) -> tuple[bool, str]:
     """Does this leaderboard entry clear the conviction bar? -> (ok, why)."""
     stances = entry.get("stances") or {}
@@ -240,6 +287,15 @@ def build(ctx) -> list[Target]:
     notional = common.notional_for(ctx)
     slots = int(ctx.config.get("target_slots") or 4)
 
+    # One name has grown past the cap. Level the WHOLE book, not just the
+    # offender: trimming only the winner would drop the proceeds into cash and
+    # leave it there, because each of the others is individually too close to
+    # target for the planner's cushion to act on. Rare by construction — it
+    # needs a ~29% move relative to the rest — so this is an event, not the
+    # quiet-day churn that `resize=False` exists to stop.
+    breach = concentration_breach(ctx)
+    level = breach is not None
+
     targets: list[Target] = []
 
     # 1. What to keep. Anything not re-listed here is closed by the planner, so
@@ -262,7 +318,7 @@ def build(ctx) -> list[Target]:
             runs = common.runs_since_buy(ctx, ticker)
             if runs is not None and runs < MIN_HOLD_RUNS:
                 targets.append(Target(
-                    ticker=ticker, notional=notional, resize=False,
+                    ticker=ticker, notional=notional, resize=level,
                     reason=f"No bullish mentions left in the {WINDOW_DAYS}-day window, "
                            f"but only {runs} run(s) held — minimum hold is "
                            f"{MIN_HOLD_RUNS}.",
@@ -271,11 +327,12 @@ def build(ctx) -> list[Target]:
 
         still, why = qualifies(entry or {})
         targets.append(Target(
-            ticker=ticker, notional=notional, resize=False,
-            reason=(f"Still qualifying: {why}." if still
-                    else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
-                         f"{WINDOW_DAYS} days) but coverage continues — held until it "
-                         "reaches zero."),
+            ticker=ticker, notional=notional, resize=level,
+            reason=(_levelled_reason(breach, why) if breach else
+                    (f"Still qualifying: {why}." if still
+                     else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
+                          f"{WINDOW_DAYS} days) but coverage continues — held until it "
+                          "reaches zero.")),
         ))
 
     # 2. Fill free slots. Only names mentioned again since the last run are

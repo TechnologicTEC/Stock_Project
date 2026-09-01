@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from engine.bot import journal, liquidity
+from engine.bot import executor, journal, liquidity
 from engine.bot import strategies
 from engine.bot.executor import Position
 from engine.bot.strategies import creator_conviction as cc
@@ -492,3 +492,75 @@ def test_a_name_inside_its_minimum_hold_is_also_left_unresized():
 def test_a_brand_new_entry_is_still_sized_normally():
     targets = cc.build(_ctx([_entry("NVTS", bullish=3)]))
     assert targets and all(t.resize for t in targets)
+
+
+# --------------------------------------------------------------------------
+# Concentration cap — a winner may run, but not take over.
+# --------------------------------------------------------------------------
+
+def _held_ctx(board, values, *, cap=0.30, slots=4, decisions=None):
+    equity = sum(values.values())
+    if decisions is None:
+        decisions = [_decision(TODAY - timedelta(days=2))]
+    return strategies.Context(
+        strategy="creator_conviction", equity=equity, cash=0.0, today=TODAY,
+        config={"target_slots": slots, "max_position_pct": cap,
+                "starting_equity": 10_000.0},
+        positions=tuple(Position(ticker=t, qty=1.0, market_value=v)
+                        for t, v in values.items()),
+        extras={"board": board, "candidates": [], "frames": {},
+                "decisions": list(decisions)},
+    )
+
+
+def _four(winner):
+    return {"S0": winner, "S1": 2_500.0, "S2": 2_500.0, "S3": 2_500.0}
+
+
+def _board():
+    return [_entry(t, bullish=3) for t in ("S0", "S1", "S2", "S3")]
+
+
+def test_no_breach_below_the_cap_so_nothing_is_resized():
+    ctx = _held_ctx(_board(), _four(3_000.0))
+    assert cc.concentration_breach(ctx) is None
+    assert all(not t.resize for t in cc.build(ctx))
+
+
+def test_the_cap_trips_once_the_winner_passes_thirty_percent():
+    """$3,214 rather than $3,000 — the account grew with the winner."""
+    assert cc.concentration_breach(_held_ctx(_board(), _four(3_214.0))) is None
+    breach = cc.concentration_breach(_held_ctx(_board(), _four(3_215.0)))
+    assert breach is not None and breach[0] == "S0"
+
+
+def test_a_breach_levels_the_whole_book_not_just_the_winner():
+    """Trimming only the offender would strand the proceeds in cash."""
+    targets = cc.build(_held_ctx(_board(), _four(3_500.0)))
+    assert len(targets) == 4
+    assert all(t.resize for t in targets)
+
+
+def test_the_levelling_produces_a_real_trim_and_redeploys_it():
+    ctx = _held_ctx(_board(), _four(3_500.0))
+    orders = executor.plan(cc.build(ctx), list(ctx.positions), equity=ctx.equity)
+    sells = [o for o in orders if o.side == "sell"]
+    buys = [o for o in orders if o.side == "buy"]
+    assert [o.ticker for o in sells] == ["S0"]
+    assert buys, "the trimmed money should go back into the laggards"
+    assert sum(o.notional for o in buys) == pytest.approx(
+        sum(o.notional for o in sells), abs=0.05)
+
+
+def test_the_reason_says_why_it_was_levelled():
+    targets = cc.build(_held_ctx(_board(), _four(3_500.0)))
+    assert "past the concentration cap" in targets[0].reason
+
+
+def test_a_cap_of_one_hundred_percent_never_trips():
+    assert cc.concentration_breach(_held_ctx(_board(), _four(9_000.0), cap=1.0)) is None
+
+
+def test_an_empty_account_does_not_trip_the_cap():
+    ctx = _held_ctx(_board(), {})
+    assert cc.concentration_breach(ctx) is None

@@ -53,6 +53,16 @@ class Context:
     def held_tickers(self) -> set[str]:
         return {p.ticker.upper() for p in self.positions if getattr(p, "qty", 0)}
 
+    def position_values(self) -> dict:
+        """ticker -> what the position is worth right now, per the broker.
+
+        Needed by any rule about how big a holding has GROWN, as opposed to how
+        big an order is. `risk.check_order` only ever sees order size, so drift
+        is invisible to it.
+        """
+        return {p.ticker.upper(): float(getattr(p, "market_value", 0.0) or 0.0)
+                for p in self.positions if getattr(p, "qty", 0)}
+
 
 def _build_spy_harness(ctx: Context) -> list[Target]:
     from engine.bot.strategies import spy_harness

@@ -92,11 +92,15 @@ SEED: list[dict] = [
         # triggered by a name being mentioned again, so the backlog standing at
         # go-live is never bought.
         "target_slots": 4,
-        # 25% rather than the 20% the other strategies carry, so that 1/4 still
-        # binds and the cap stays a backstop. At 20% the cap would quietly
-        # become the real position size and a full book would strand $2,000 in
-        # cash — the concentration is deliberate at four slots, not accidental.
-        "max_position_pct": 0.25,
+        # 30%, and it does two jobs. 1/4 = 25% still binds for SIZING, so a new
+        # position is $2,500 as before. And it is now the CONCENTRATION CAP: a
+        # holding that drifts past 30% of the account gets the book levelled
+        # back to equal. Because the account grows with the winner, that trips
+        # at about $3,214 rather than a flat $3,000 — the position has to reach
+        # 30% of the larger account its own gain created, a 28.6% rise from the
+        # equal share. Nothing else needs the cap: the two monthly strategies
+        # re-level anyway, and score_threshold is deliberately left uncapped.
+        "max_position_pct": 0.30,
         # A full turnover of a 4-name book is 4 sells + 4 buys.
         "max_orders_per_run": 10,
         "starting_equity": 10_000.0,
