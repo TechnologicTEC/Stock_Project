@@ -128,6 +128,18 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     _log(f"  {len(targets)} targets -> {len(orders)} orders "
          f"(rebalance band ${executor.band_for(equity):,.2f})")
 
+    # A name the strategy wanted and declined produces no order, so without
+    # this it would leave no trace at all — and "we never considered it" and
+    # "we considered it and said no" are very different things to read back
+    # months later. Usually empty; that is the expected result.
+    for note in strategies.notes(strategy, ctx):
+        _log(f"    declined: {note.get('ticker')} ({note.get('code')})")
+        journal.record(
+            run_id=run_id, strategy=strategy, ticker=note.get("ticker"),
+            action=journal.SKIP, reason=note.get("reason") or "Declined.",
+            status=journal.BLOCKED, blocked_by=risk.LIQUIDITY, inputs=note,
+        )
+
     # Drop anything we're already waiting on a fill for. plan() reconciles
     # against positions, which don't exist until an order fills, so a queued
     # order is invisible to it — see executor.open_order_tickers for the holiday

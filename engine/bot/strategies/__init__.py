@@ -89,6 +89,21 @@ def _prepare_score_threshold(config: dict, today: date_) -> dict:
     return score_threshold.prepare(config, today)
 
 
+def _build_creator_conviction(ctx: Context) -> list[Target]:
+    from engine.bot.strategies import creator_conviction
+    return creator_conviction.build(ctx)
+
+
+def _prepare_creator_conviction(config: dict, today: date_) -> dict:
+    from engine.bot.strategies import creator_conviction
+    return creator_conviction.prepare(config, today)
+
+
+def _notes_creator_conviction(ctx: Context) -> list[dict]:
+    from engine.bot.strategies import creator_conviction
+    return creator_conviction.liquidity_notes(ctx)
+
+
 # name -> (human label, builder, preparer|None). Imports are deferred inside the
 # callables so importing this registry stays cheap for the runner and the page.
 #
@@ -101,6 +116,16 @@ STRATEGIES: dict[str, tuple[str, object, object]] = {
                             _build_composite_rebalance, _prepare_composite_rebalance),
     "score_threshold": ("Strong Buy threshold (score >= 75)",
                         _build_score_threshold, _prepare_score_threshold),
+    "creator_conviction": ("Creator conviction (repeat bullish coverage)",
+                           _build_creator_conviction, _prepare_creator_conviction),
+}
+
+# Optional per-strategy observations the runner should journal alongside the
+# orders — things a strategy decided that produce no order and would otherwise
+# leave no trace. Kept out of the registry tuple so adding one to a strategy
+# doesn't change the shape every other strategy is read through.
+NOTES: dict[str, object] = {
+    "creator_conviction": _notes_creator_conviction,
 }
 
 
@@ -129,3 +154,16 @@ def prepare(name: str, *, config: dict, today: date_) -> dict:
 
 def build(name: str, ctx: Context) -> list[Target]:
     return _entry(name)[1](ctx)
+
+
+def notes(name: str, ctx: Context) -> list[dict]:
+    """Observations worth journalling that aren't orders — a name a strategy
+    wanted but declined. Never raises: a missing note is a gap in the record,
+    not a reason to fail a run that otherwise traded correctly."""
+    reporter = NOTES.get(name)
+    if reporter is None:
+        return []
+    try:
+        return list(reporter(ctx) or [])
+    except Exception:                    # noqa: BLE001 — see docstring
+        return []

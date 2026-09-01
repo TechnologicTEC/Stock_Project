@@ -77,6 +77,23 @@ SEED: list[dict] = [
         "starting_equity": 10_000.0,
         "enabled": True,
     },
+    {
+        "strategy": "creator_conviction",
+        "key_env_prefix": "ALPACA_CREATOR_CONVICTION",
+        # The blueprint's simulation said 8. Replaying the real conviction rule
+        # over every video scanned so far, the book is 1-4 names and has never
+        # exceeded 4 — so 8 is a ceiling, not a target, and this account will
+        # usually run mostly in cash. That is the rule working (the same way
+        # score_threshold leaves cash), not a bug, but it does mean the curve
+        # measures a partly-invested account. Worth revisiting once more
+        # creators are added; see the memory note for the measurement.
+        "target_slots": 8,
+        "max_position_pct": 0.20,    # 1/8 = 12.5% binds; the cap is a backstop
+        # A full turnover of an 8-name book is 8 sells + 8 buys.
+        "max_orders_per_run": 20,
+        "starting_equity": 10_000.0,
+        "enabled": True,
+    },
 ]
 
 

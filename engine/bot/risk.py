@@ -32,6 +32,10 @@ ORDER_CAP = "order_cap"
 MIN_NOTIONAL = "min_notional"
 DUPLICATE = "duplicate"
 PENDING_ORDER = "pending_order"
+# Not a risk rail like the others: nothing here protects the account, which
+# is paper. It marks a name declined because a fill in it would not have
+# been a believable price — see engine/bot/liquidity.
+LIQUIDITY = "liquidity"
 
 # Alpaca accepts fractional orders down to about $1 of notional. Anything
 # smaller is a rounding artifact of the sizing rule, not an intent to trade.

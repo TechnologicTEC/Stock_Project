@@ -24,5 +24,15 @@ pandas-ta-classic>=0.6
 # fail to import; without finnhub, screener does.
 yfinance>=0.2            # engine/price_history's module-level import
 finnhub-python>=2.4      # engine/screener's, via engine/data_sources
+# Needed by creator_conviction, and it fails LATER than the two above rather
+# than at import: engine/creator_signals imports youtube_client, which imports
+# BeautifulSoup at module level to scrape the channel feed. The bot reads
+# mentions back out of the database and never scrapes anything, so nothing here
+# calls bs4 — and because the strategy defers its creator_signals import into
+# prepare(), the module loads fine and the run dies mid-flight with a
+# ModuleNotFoundError once it reaches out for the mention window. Confirmed by
+# uninstalling it from a venv built off this file: creator_signals stops
+# importing, creator_conviction does not.
+beautifulsoup4>=4.12
 python-dotenv>=1.0
 requests>=2.31
