@@ -318,3 +318,86 @@ class VideoMention(Base):
     screener_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+# --------------------------------------------------------------------------
+# Trading bot (see the bot blueprint). Like the caches and creator tables
+# above these are GLOBAL/shared — there is ONE bot, not one per user — so they
+# carry no user_id and stay OUT of db.session._USER_SCOPED_MODELS. If the bot
+# ever becomes per-user that's a migration, not a default.
+# --------------------------------------------------------------------------
+
+class BotConfig(Base):
+    """One row per strategy — the whole control surface, editable without a deploy.
+
+    `killed` is the per-strategy stop, checked immediately before every order.
+    The GLOBAL stop is the BOT_TRADING_ENABLED env var (see engine/bot/risk.py),
+    which must equal "true" or nothing trades at all; keeping both means the
+    convenient switch and the reliable one are separate.
+
+    `key_env_prefix` names the env vars holding this strategy's Alpaca keys —
+    e.g. "ALPACA_GOLDEN_CROSS" resolves ALPACA_GOLDEN_CROSS_KEY / _SECRET. Each
+    strategy has its own $10k paper account because Alpaca is then the source of
+    truth for its equity curve, with no attribution logic of ours in between.
+    """
+
+    __tablename__ = "bot_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(40), unique=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    killed: Mapped[bool] = mapped_column(default=False)
+    target_slots: Mapped[int] = mapped_column(default=1)
+    max_position_pct: Mapped[float] = mapped_column(Float, default=0.20)
+    max_orders_per_run: Mapped[int] = mapped_column(default=60)
+    key_env_prefix: Mapped[str] = mapped_column(String(60))
+    starting_equity: Mapped[float] = mapped_column(Float, default=10_000.0)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class BotDecision(Base):
+    """The journal — one row per decision, whether or not it became an order.
+
+    The rows that matter most are the ones where nothing happened: `status`
+    'blocked' with `blocked_by` naming the rail that stopped it. A log of fills
+    tells you what the bot did; this tells you what it decided.
+    """
+
+    __tablename__ = "bot_decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    strategy: Mapped[str] = mapped_column(String(40), index=True)
+    ticker: Mapped[str | None] = mapped_column(String(10), index=True, nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    action: Mapped[str] = mapped_column(String(10))          # buy | sell | hold | skip
+    reason: Mapped[str] = mapped_column(Text)                # human-readable, shown on the page
+    inputs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16))          # submitted|filled|blocked|skipped|error|dry_run
+    blocked_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Deterministic per (strategy, day, ticker, side) — replaying a retried
+    # workflow finds the order already exists and skips instead of double-buying.
+    client_order_id: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    notional: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class BotEquitySnapshot(Base):
+    """Daily account value per strategy — powers every chart on the bot page.
+
+    (strategy, date) is unique so a re-run on the same day updates rather than
+    duplicating, which keeps the workflow safely retryable.
+    """
+
+    __tablename__ = "bot_equity_snapshots"
+    __table_args__ = (UniqueConstraint("strategy", "date", name="uq_bot_equity_strategy_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(40), index=True)
+    date: Mapped[date_] = mapped_column(index=True)
+    equity: Mapped[float] = mapped_column(Float)
+    cash: Mapped[float] = mapped_column(Float)
+    positions_count: Mapped[int] = mapped_column(default=0)
+    # SPY rebased to this strategy's starting equity, so the dashed benchmark
+    # line on the page needs no arithmetic at render time.
+    benchmark_equity: Mapped[float | None] = mapped_column(Float, nullable=True)

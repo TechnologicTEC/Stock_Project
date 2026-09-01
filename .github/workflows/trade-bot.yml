@@ -1,0 +1,86 @@
+name: Trading bot
+
+# Runs each paper-trading strategy once per weekday, after the US close.
+#
+# Every strategy trades its OWN $10k Alpaca paper account, so Alpaca computes
+# each equity curve directly and no attribution logic of ours sits in between.
+# That's also why this is a matrix: one job per strategy, its own keys, its own
+# log, and `fail-fast: false` so one strategy erroring leaves the others to trade.
+#
+# SAFETY. Three things have to line up before an order is placed:
+#   1. BOT_TRADING_ENABLED (a repo *variable*) must equal "true". Anything else —
+#      unset, empty, "false", a typo — halts the run. Named positively and
+#      checked for equality so the accidental state is always the safe one.
+#   2. bot_config.enabled must be true and bot_config.killed false, per strategy.
+#   3. The Alpaca client's resolved endpoint is asserted to be the paper host
+#      before every submission (engine/bot/accounts.assert_paper).
+# A halted run exits 0 — a stop working correctly is not a failure, so a red job
+# in Actions always means something is genuinely wrong.
+
+on:
+  schedule:
+    # 21:45 UTC on weekdays — 15 minutes after warm-cache's 21:30, so the day's
+    # prices and fundamentals are already in Supabase and the bot reads a warm
+    # cache instead of re-fetching. Both are shortly after the 4pm ET close
+    # (works for EST and EDT). Orders placed after the close queue for the next
+    # open, which is the intended behaviour for a daily bot.
+    - cron: "45 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan and journal, but submit no orders"
+        type: boolean
+        required: false
+        default: true          # a manual run defaults to SAFE, not to trading
+      strategy:
+        description: "Run only this strategy (blank = all)"
+        required: false
+        default: ""
+
+concurrency: trade-bot        # never overlap runs
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false        # one strategy's failure must not stop the others
+      matrix:
+        # Add each strategy here as it lands, in the blueprint's build order.
+        # Only names registered in engine/bot/strategies/__init__.py are valid —
+        # run_bot.py validates against that registry, so a stale entry fails fast.
+        strategy: [spy_harness]
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-bot.txt
+
+      - name: Run ${{ matrix.strategy }}
+        # Skip this job when a manual run named a different strategy.
+        if: ${{ github.event.inputs.strategy == '' || github.event.inputs.strategy == matrix.strategy }}
+        env:
+          DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}      # BYPASSRLS role; bot tables are shared
+          PRICE_HISTORY_SOURCE: "alpaca"                      # match the app's provider so the warm cache is read
+          BOT_TRADING_ENABLED: ${{ vars.BOT_TRADING_ENABLED }}
+
+          # Per-strategy Alpaca paper accounts. bot_config.key_env_prefix picks
+          # the pair; every strategy's keys are passed to every job because the
+          # matrix can't index secrets by name, and a job only ever reads its own.
+          ALPACA_GOLDEN_CROSS_KEY: ${{ secrets.ALPACA_GOLDEN_CROSS_KEY }}
+          ALPACA_GOLDEN_CROSS_SECRET: ${{ secrets.ALPACA_GOLDEN_CROSS_SECRET }}
+          ALPACA_COMPOSITE_REBALANCE_KEY: ${{ secrets.ALPACA_COMPOSITE_REBALANCE_KEY }}
+          ALPACA_COMPOSITE_REBALANCE_SECRET: ${{ secrets.ALPACA_COMPOSITE_REBALANCE_SECRET }}
+          ALPACA_SCORE_THRESHOLD_KEY: ${{ secrets.ALPACA_SCORE_THRESHOLD_KEY }}
+          ALPACA_SCORE_THRESHOLD_SECRET: ${{ secrets.ALPACA_SCORE_THRESHOLD_SECRET }}
+          ALPACA_CREATOR_CONVICTION_KEY: ${{ secrets.ALPACA_CREATOR_CONVICTION_KEY }}
+          ALPACA_CREATOR_CONVICTION_SECRET: ${{ secrets.ALPACA_CREATOR_CONVICTION_SECRET }}
+          ALPACA_TOP_DECILE_LONG_KEY: ${{ secrets.ALPACA_TOP_DECILE_LONG_KEY }}
+          ALPACA_TOP_DECILE_LONG_SECRET: ${{ secrets.ALPACA_TOP_DECILE_LONG_SECRET }}
+        run: |
+          python scripts/run_bot.py \
+            --strategy ${{ matrix.strategy }} \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

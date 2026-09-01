@@ -1,0 +1,14 @@
+# Deps for the scheduled trading bot (scripts/run_bot.py) in CI.
+#
+# Deliberately the smallest of the requirements files. The bot places orders and
+# reads cached prices — it renders nothing and scores nothing, so there's no
+# Streamlit stack, no torch/transformers (FinBERT), and no BigQuery. The screener
+# strategies read the leaderboard that the weekly screen job already wrote to the
+# shared cache, rather than re-screening the index themselves.
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+alpaca-py>=0.30          # paper trading + the price history the bot reads
+pandas>=2.2              # engine/price_history returns frames
+numpy>=2.0               # pandas' own dependency; also engine/health metrics
+python-dotenv>=1.0
+requests>=2.31
