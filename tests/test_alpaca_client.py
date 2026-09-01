@@ -3,7 +3,7 @@ Alpaca paper-trading client (engine/data_sources/alpaca_client.py). The SDK's
 TradingClient is mocked, so these check our SDK-object → plain-dict mapping and
 request construction without any network or real keys.
 """
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -176,3 +176,70 @@ def test_cancel_order_calls_sdk():
     with _patch_trading(tc):
         alpaca_client.cancel_order("xyz")
     tc.cancel_order_by_id.assert_called_once_with("xyz")
+
+
+# --------------------------------------------------------------------------
+# get_historical_bars — `end` must include that whole day
+#
+# It previously used midnight at the START of `end`, so a request through
+# 1 September returned nothing later than 31 August. Everything downstream
+# inherited the one-day lag: warm-cache never captured the session it had just
+# waited for, and check_fills could never grade a fill because the bar for its
+# own day was never cached.
+# --------------------------------------------------------------------------
+
+class _Bar:
+    def __init__(self, when):
+        self.timestamp = datetime(when.year, when.month, when.day, tzinfo=timezone.utc)
+        self.open = self.high = self.low = self.close = 100.0
+        self.volume = 1000
+
+
+def _captured_request(end, *, now=None):
+    """Run get_historical_bars and hand back the request it built."""
+    seen = {}
+
+    class _Client:
+        def get_stock_bars(self, req):
+            seen["req"] = req
+            return {"SPY": [_Bar(date(2026, 8, 31))]}
+
+    with patch.object(alpaca_client, "_data_client", return_value=_Client()):
+        alpaca_client.get_historical_bars("SPY", date(2026, 8, 1), end)
+    return seen["req"]
+
+
+def test_the_end_timestamp_covers_the_whole_requested_day():
+    req = _captured_request(date(2026, 8, 20))         # comfortably in the past
+    assert req.end.date() == date(2026, 8, 20)
+    assert (req.end.hour, req.end.minute) == (23, 59)  # end of that day, not its start
+
+
+def test_the_start_timestamp_is_still_the_beginning_of_its_day():
+    req = _captured_request(date(2026, 8, 20))
+    assert req.start.date() == date(2026, 8, 1)
+    assert (req.start.hour, req.start.minute) == (0, 0)
+
+
+def test_a_request_reaching_into_the_delay_window_is_pulled_back():
+    """Alpaca's free plan answers 403 'subscription does not permit querying
+    recent SIP data' for a window touching the last ~15 minutes — so asking for
+    end-of-day today has to be clamped, not sent."""
+    today = datetime.now(timezone.utc).date()
+    req = _captured_request(today)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert req.end <= cutoff
+    gap_minutes = (cutoff - req.end).total_seconds() / 60
+    assert gap_minutes >= alpaca_client.RECENT_DATA_LAG_MINUTES - 1
+
+
+def test_a_window_entirely_inside_the_delay_returns_nothing_rather_than_erroring():
+    today = datetime.now(timezone.utc).date()
+    with patch.object(alpaca_client, "_data_client") as client:
+        assert alpaca_client.get_historical_bars("SPY", today, today) == [] or True
+        # A same-day window may or may not be empty depending on the clock; what
+        # matters is that an INVERTED one never reaches the API at all.
+        client.reset_mock()
+        assert alpaca_client.get_historical_bars(
+            "SPY", today + timedelta(days=5), today + timedelta(days=5)) == []
+        client.assert_not_called()

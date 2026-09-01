@@ -12,7 +12,7 @@ shapes (matching how get_latest_quote/get_historical_bars already behave).
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 
 from alpaca.data.historical import StockHistoricalDataClient
@@ -23,6 +23,11 @@ from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 
 from engine import config, credentials  # noqa: F401  (config: side effect loads .env)
+
+# Alpaca's free data plan refuses a bar window reaching into the last ~15
+# minutes ("subscription does not permit querying recent SIP data"). One
+# minute of headroom over their stated 15.
+RECENT_DATA_LAG_MINUTES = 16
 
 
 class AlpacaConfigError(RuntimeError):
@@ -86,13 +91,39 @@ def get_latest_trade(ticker: str, feed: str = "iex") -> dict:
 
 
 def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
-    """Backup historical source if yfinance is unavailable — daily bars only."""
+    """Backup historical source if yfinance is unavailable — daily bars only.
+
+    `end` is INCLUSIVE of that calendar day, which it previously was not. The
+    request used midnight at the *start* of `end`, so asking for bars through
+    1 September returned nothing later than 31 August — the whole requested day
+    fell outside the window. Everything downstream inherited that: warm-cache
+    ran nightly and never captured the session it had just waited for, the
+    bot's price-driven signals read a close a day older than intended, and
+    `check_fills` could never grade a fill because the bar for its own day was
+    never cached.
+
+    The end is also clamped to `RECENT_DATA_LAG_MINUTES` ago. Alpaca's free
+    data plan refuses a window reaching into the last ~15 minutes — it answers
+    403 "subscription does not permit querying recent SIP data" — so simply
+    asking for end-of-day would have swapped a silent one-day lag for a loud
+    failure whenever the request ran before that day was old enough. Verified
+    against the live API: end-of-start-of-day returns 31 Aug, 21:00 UTC returns
+    1 Sep, and now-minus-5-minutes is a 403.
+    """
     ticker = ticker.upper()
+    end_dt = datetime.combine(end, time.max)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        minutes=RECENT_DATA_LAG_MINUTES)
+    end_dt = min(end_dt, cutoff)
+    start_dt = datetime.combine(start, datetime.min.time())
+    if end_dt <= start_dt:
+        return []                    # window entirely inside the delay period
+
     req = StockBarsRequest(
         symbol_or_symbols=ticker,
         timeframe=TimeFrame.Day,
-        start=datetime.combine(start, datetime.min.time()),
-        end=datetime.combine(end, datetime.min.time()),
+        start=start_dt,
+        end=end_dt,
     )
     bars = _data_client().get_stock_bars(req)[ticker]
     return [
