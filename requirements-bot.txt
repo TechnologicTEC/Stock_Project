@@ -15,5 +15,14 @@ numpy>=2.0               # pandas' own dependency; also engine/health metrics
 # strategy is that the live bot and the backtest must compute the identical
 # thing, and a second copy of the formula would quietly break the comparison.
 pandas-ta-classic>=0.6
+
+# Not optional, despite the bot reading prices from Alpaca and never calling
+# either of these. engine/price_history imports yfinance_client at module level
+# and engine/screener imports finnhub_client, so both packages must be
+# importable or the job dies on `import`, not on use. Verified by simulating
+# this file's environment: without yfinance, price_history and screener both
+# fail to import; without finnhub, screener does.
+yfinance>=0.2            # engine/price_history's module-level import
+finnhub-python>=2.4      # engine/screener's, via engine/data_sources
 python-dotenv>=1.0
 requests>=2.31

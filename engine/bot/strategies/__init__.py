@@ -42,9 +42,16 @@ class Context:
     cash: float
     config: dict
     today: date_
+    # What the account actually holds right now, straight from Alpaca. A
+    # strategy that can only see the target book can't express "keep what I
+    # have" — which is most of what a buffered rebalance or a minimum hold does.
+    positions: tuple = ()
     # Whatever that strategy's `prepare()` gathered — price frames, leaderboard
     # rows, creator mentions. The harness needs none of it.
     extras: dict = field(default_factory=dict)
+
+    def held_tickers(self) -> set[str]:
+        return {p.ticker.upper() for p in self.positions if getattr(p, "qty", 0)}
 
 
 def _build_spy_harness(ctx: Context) -> list[Target]:
@@ -62,6 +69,26 @@ def _prepare_golden_cross(config: dict, today: date_) -> dict:
     return golden_cross.prepare(config, today)
 
 
+def _build_composite_rebalance(ctx: Context) -> list[Target]:
+    from engine.bot.strategies import composite_rebalance
+    return composite_rebalance.build(ctx)
+
+
+def _prepare_composite_rebalance(config: dict, today: date_) -> dict:
+    from engine.bot.strategies import composite_rebalance
+    return composite_rebalance.prepare(config, today)
+
+
+def _build_score_threshold(ctx: Context) -> list[Target]:
+    from engine.bot.strategies import score_threshold
+    return score_threshold.build(ctx)
+
+
+def _prepare_score_threshold(config: dict, today: date_) -> dict:
+    from engine.bot.strategies import score_threshold
+    return score_threshold.prepare(config, today)
+
+
 # name -> (human label, builder, preparer|None). Imports are deferred inside the
 # callables so importing this registry stays cheap for the runner and the page.
 #
@@ -70,6 +97,10 @@ def _prepare_golden_cross(config: dict, today: date_) -> dict:
 STRATEGIES: dict[str, tuple[str, object, object]] = {
     "spy_harness": ("SPY harness (plumbing test)", _build_spy_harness, None),
     "golden_cross": ("Golden cross (50/200 SMA)", _build_golden_cross, _prepare_golden_cross),
+    "composite_rebalance": ("Composite rebalance (top 15 by rank)",
+                            _build_composite_rebalance, _prepare_composite_rebalance),
+    "score_threshold": ("Strong Buy threshold (score >= 75)",
+                        _build_score_threshold, _prepare_score_threshold),
 }
 
 

@@ -113,7 +113,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
         extras = strategies.prepare(strategy, config=config, today=today)
         ctx = strategies.Context(
             strategy=strategy, equity=equity, cash=account["cash"],
-            config=config, today=today, extras=extras,
+            config=config, today=today, positions=tuple(positions), extras=extras,
         )
         targets = strategies.build(strategy, ctx)
     except strategies.StrategyDataError as exc:

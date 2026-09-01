@@ -54,6 +54,29 @@ SEED: list[dict] = [
         "starting_equity": 10_000.0,
         "enabled": True,
     },
+    {
+        "strategy": "composite_rebalance",
+        "key_env_prefix": "ALPACA_COMPOSITE_REBALANCE",
+        "target_slots": 15,          # the top 15 by rank, equal-weighted
+        "max_position_pct": 0.20,    # 1/15 = 6.7% binds first; the cap is a backstop
+        # A full monthly turnover is 15 sells + 15 buys. 40 leaves headroom for
+        # that worst case without the cap silently truncating a rebalance.
+        "max_orders_per_run": 40,
+        "starting_equity": 10_000.0,
+        "enabled": True,
+    },
+    {
+        "strategy": "score_threshold",
+        "key_env_prefix": "ALPACA_SCORE_THRESHOLD",
+        # 20, simulated rather than guessed: demand ran 8-26 over five years of
+        # reconstructed history, median 20. Deliberately borderline — usually
+        # some cash spare, occasionally a name that can't be bought.
+        "target_slots": 20,
+        "max_position_pct": 0.20,    # 1/20 = 5% binds; the cap is a backstop
+        "max_orders_per_run": 40,
+        "starting_equity": 10_000.0,
+        "enabled": True,
+    },
 ]
 
 

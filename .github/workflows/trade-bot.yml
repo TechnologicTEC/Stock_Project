@@ -53,7 +53,7 @@ jobs:
         # harness was the plumbing test that runs until the real signal is ready,
         # and both hold SPY at one slot, so the handover needs no trade when the
         # cross is on. Running both would have them fight over one account.
-        strategy: [golden_cross]
+        strategy: [golden_cross, composite_rebalance, score_threshold]
 
     steps:
       - uses: actions/checkout@v5
