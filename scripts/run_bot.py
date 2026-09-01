@@ -104,16 +104,53 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
 
-    ctx = strategies.Context(
-        strategy=strategy, equity=equity, cash=account["cash"],
-        config=config, today=today,
-    )
-    targets = strategies.build(strategy, ctx)
+    # Gather, then decide. `prepare` is the only place a strategy does I/O; if it
+    # can't see its inputs, `build` raises rather than returning an empty book —
+    # an empty book means "sell everything" to the planner, so a cache miss would
+    # otherwise liquidate the account. Both halves are caught here, before any
+    # order exists, which is what makes the failure safe as well as loud.
+    try:
+        extras = strategies.prepare(strategy, config=config, today=today)
+        ctx = strategies.Context(
+            strategy=strategy, equity=equity, cash=account["cash"],
+            config=config, today=today, extras=extras,
+        )
+        targets = strategies.build(strategy, ctx)
+    except strategies.StrategyDataError as exc:
+        _log(f"  ERROR insufficient data: {exc}")
+        journal.record(
+            run_id=run_id, strategy=strategy, action=journal.SKIP,
+            reason=str(exc), status=journal.ERROR, blocked_by="insufficient_data",
+        )
+        return 1        # genuinely wrong: the job should go red. No orders placed.
+
     orders = executor.plan(targets, positions, equity=equity)
     _log(f"  {len(targets)} targets -> {len(orders)} orders "
          f"(rebalance band ${executor.band_for(equity):,.2f})")
 
-    if not orders:
+    # Drop anything we're already waiting on a fill for. plan() reconciles
+    # against positions, which don't exist until an order fills, so a queued
+    # order is invisible to it — see executor.open_order_tickers for the holiday
+    # case that turns into a doubled position.
+    pending = executor.open_order_tickers(trading_client)
+    held_back = [o for o in orders if o.ticker.upper() in pending] if pending else []
+    if pending:
+        _log(f"  {len(pending)} symbol(s) with unfilled orders: {', '.join(sorted(pending))}")
+        for order in held_back:
+            journal.record(
+                run_id=run_id, strategy=strategy, ticker=order.ticker, action=order.side,
+                reason=f"An order for {order.ticker} is still unfilled; not stacking another "
+                       "on top of it.",
+                status=journal.BLOCKED, blocked_by=risk.PENDING_ORDER,
+                qty=order.qty, notional=order.notional,
+            )
+        orders = [o for o in orders if o.ticker.upper() not in pending]
+
+    # Only claim "nothing to do" when there was genuinely nothing to do. If the
+    # list emptied because orders were held back, that has its own journal rows
+    # above and a second row asserting the book already matched would contradict
+    # them — the journal's value is that it says what actually happened.
+    if not orders and not held_back:
         journal.record(
             run_id=run_id, strategy=strategy, action=journal.HOLD,
             reason="Book already matches the target inside the rebalance band.",

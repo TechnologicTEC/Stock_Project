@@ -47,11 +47,13 @@ class FakeClient:
     real attributes that accounts.assert_paper inspects."""
 
     def __init__(self, *, equity=10_000.0, cash=10_000.0, positions=None,
-                 base_url=PAPER_URL, sandbox=True, raises=None, blocked=False):
+                 base_url=PAPER_URL, sandbox=True, raises=None, blocked=False,
+                 open_orders=None):
         self._base_url = base_url
         self._sandbox = sandbox
         self._account = FakeAccount(equity, cash, blocked)
         self._positions = positions or []
+        self._open_orders = open_orders or []
         self._raises = raises
         self.submitted = []
 
@@ -60,6 +62,9 @@ class FakeClient:
 
     def get_all_positions(self):
         return self._positions
+
+    def get_orders(self, filter=None):        # noqa: A002 — alpaca-py's own kwarg name
+        return self._open_orders
 
     def submit_order(self, req):
         if self._raises:
@@ -465,3 +470,51 @@ def test_unknown_strategy_is_a_clear_error():
                              config=_config(), today=date(2026, 9, 1))
     with pytest.raises(KeyError, match="Unknown strategy"):
         strategies.build("nope", ctx)
+
+
+# --------------------------------------------------------------------------
+# Unfilled orders are invisible to plan(), which reconciles against positions
+# --------------------------------------------------------------------------
+
+class FakeOpenOrder:
+    def __init__(self, symbol):
+        self.symbol = symbol
+
+
+def test_open_order_tickers_reads_the_symbols_awaiting_a_fill():
+    client = FakeClient(open_orders=[FakeOpenOrder("spy"), FakeOpenOrder("MU")])
+    assert executor.open_order_tickers(client) == {"SPY", "MU"}
+
+
+def test_no_open_orders_is_an_empty_set_not_an_error():
+    assert executor.open_order_tickers(FakeClient()) == set()
+
+
+def test_a_queued_order_leaves_the_account_looking_flat_to_the_planner():
+    """The bug the pending-order rail exists for, stated as a test.
+
+    An order placed Thursday evening queues through a closed Friday. Friday's
+    run sees no position and full cash — identical to Thursday's starting state
+    — so plan() asks for the same $10k buy a second time. The client_order_id is
+    dated, so idempotency doesn't catch it either: a different day is a
+    genuinely different order. Both then fill on Monday.
+    """
+    targets = [executor.Target(ticker="SPY", notional=10_000.0, reason="signal on")]
+    orders = executor.plan(targets, positions=[], equity=10_000.0)
+
+    assert [(o.ticker, o.side) for o in orders] == [("SPY", "buy")]      # ordered again
+
+    # The rail is what separates the two cases: same plan, different outcome.
+    pending = executor.open_order_tickers(FakeClient(open_orders=[FakeOpenOrder("SPY")]))
+    assert [o for o in orders if o.ticker.upper() not in pending] == []
+    assert [o for o in orders if o.ticker.upper() not in set()] == orders
+
+
+def test_the_rail_is_per_ticker_so_one_stuck_order_does_not_freeze_the_book():
+    orders = executor.plan(
+        [executor.Target("SPY", 5_000.0, "on"), executor.Target("MU", 5_000.0, "on")],
+        positions=[], equity=10_000.0,
+    )
+    pending = executor.open_order_tickers(FakeClient(open_orders=[FakeOpenOrder("SPY")]))
+    survivors = [o.ticker for o in orders if o.ticker.upper() not in pending]
+    assert survivors == ["MU"]

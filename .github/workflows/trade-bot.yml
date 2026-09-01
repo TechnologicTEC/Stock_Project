@@ -49,7 +49,11 @@ jobs:
         # Add each strategy here as it lands, in the blueprint's build order.
         # Only names registered in engine/bot/strategies/__init__.py are valid —
         # run_bot.py validates against that registry, so a stale entry fails fast.
-        strategy: [spy_harness]
+        # golden_cross REPLACES spy_harness on the same Alpaca account: the
+        # harness was the plumbing test that runs until the real signal is ready,
+        # and both hold SPY at one slot, so the handover needs no trade when the
+        # cross is on. Running both would have them fight over one account.
+        strategy: [golden_cross]
 
     steps:
       - uses: actions/checkout@v5

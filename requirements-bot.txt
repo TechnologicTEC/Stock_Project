@@ -10,5 +10,10 @@ psycopg2-binary>=2.9
 alpaca-py>=0.30          # paper trading + the price history the bot reads
 pandas>=2.2              # engine/price_history returns frames
 numpy>=2.0               # pandas' own dependency; also engine/health metrics
+# Pure-python TA. Here so golden_cross can import engine/backtest's own
+# _signal_sma_cross instead of reimplementing the 50/200 rule: the point of that
+# strategy is that the live bot and the backtest must compute the identical
+# thing, and a second copy of the formula would quietly break the comparison.
+pandas-ta-classic>=0.6
 python-dotenv>=1.0
 requests>=2.31

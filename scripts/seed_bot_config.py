@@ -27,9 +27,14 @@ from engine.bot import journal          # noqa: E402
 # Only strategies that actually exist in engine/bot/strategies are listed. The
 # rest are added here as they're built, so a row never points at a missing module.
 #
-# spy_harness deliberately shares the golden-cross account: it's the plumbing
-# test that runs before the real signal replaces it, and its book (SPY at one
-# slot) is what golden_cross holds when its signal is on anyway.
+# THE HANDOVER. spy_harness and golden_cross share one Alpaca account, which was
+# always the plan: the harness is the plumbing test that runs until the real
+# signal is ready, and both hold SPY at a single slot, so when the cross is on
+# the handover costs no trade at all. They must never run at once, though, or
+# they fight over the same book — so seeding golden_cross DISABLES the harness.
+# That is a state change, not just a new row; `--show` first if you want to see
+# what it will replace. Its journal rows and equity snapshots are untouched, so
+# the harness's grade stays readable afterwards.
 SEED: list[dict] = [
     {
         "strategy": "spy_harness",
@@ -37,6 +42,15 @@ SEED: list[dict] = [
         "target_slots": 1,
         "max_position_pct": 1.0,     # a single-ETF strategy isn't diversifying; 20% would make no sense
         "max_orders_per_run": 5,     # it should only ever need one
+        "starting_equity": 10_000.0,
+        "enabled": False,            # retired: golden_cross now owns this account
+    },
+    {
+        "strategy": "golden_cross",
+        "key_env_prefix": "ALPACA_GOLDEN_CROSS",
+        "target_slots": 1,           # one name (SPY), so the live-vs-backtest check is exact
+        "max_position_pct": 1.0,     # long-or-cash: when the cross is on, it's on fully
+        "max_orders_per_run": 5,
         "starting_equity": 10_000.0,
         "enabled": True,
     },

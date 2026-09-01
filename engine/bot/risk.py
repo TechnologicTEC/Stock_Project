@@ -31,6 +31,7 @@ POSITION_CAP = "position_cap"
 ORDER_CAP = "order_cap"
 MIN_NOTIONAL = "min_notional"
 DUPLICATE = "duplicate"
+PENDING_ORDER = "pending_order"
 
 # Alpaca accepts fractional orders down to about $1 of notional. Anything
 # smaller is a rounding artifact of the sizing rule, not an intent to trade.

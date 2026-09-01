@@ -117,6 +117,33 @@ def account_snapshot(client) -> dict:
     }
 
 
+def open_order_tickers(client) -> set[str]:
+    """Symbols with an order that hasn't filled yet.
+
+    `plan()` reconciles the target book against POSITIONS, and a position only
+    exists once an order fills — so a still-queued order is invisible to it.
+    Normally that gap is harmless: the bot runs after the close, the order fills
+    at the next open some 16 hours later, and the following run is a day after
+    that.
+
+    A market holiday breaks the assumption. An order placed Thursday evening
+    queues through a closed Friday; Friday's run sees the same flat account and
+    orders again; both fill on Monday. The client_order_id is dated, so
+    idempotency doesn't catch it either — it's a different day, so a genuinely
+    different order. Alpaca grants 3x intraday buying power on a $10k account,
+    which is exactly enough for the double to go through rather than bounce.
+
+    So the runner reads this and refuses to add to a name it's already waiting
+    on, per ticker rather than per run — one stuck order shouldn't freeze the
+    other nineteen slots.
+    """
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest
+
+    req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=200)
+    return {(o.symbol or "").upper() for o in client.get_orders(filter=req)}
+
+
 def current_positions(client) -> list[Position]:
     return [
         Position(
