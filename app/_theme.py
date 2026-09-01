@@ -80,6 +80,9 @@ _NAV = [
                   ("pages/10_creator_signals.py", "Creator Signals")]),
     ("Execution", [("pages/5_backtest.py", "Backtest"),
                    ("pages/7_paper_trading.py", "Paper Trading"),
+                   # Directly beneath Paper Trading: same accounts, same broker,
+                   # the difference being who presses the button.
+                   ("pages/11_bot.py", "Trading Bot"),
                    ("pages/8_chat.py", "Assistant"),
                    ("pages/9_settings.py", "Settings")]),
 ]

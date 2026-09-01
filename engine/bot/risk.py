@@ -55,6 +55,23 @@ def trading_enabled() -> bool:
     return (os.environ.get(TRADING_ENABLED_VAR) or "").strip().lower() == "true"
 
 
+# Switch states, for display only. `trading_enabled()` stays the single authority
+# on whether to trade — this exists because "unset" and "off" are the same
+# decision but different facts, and the bot page must not report one as the
+# other. The variable lives in GitHub Actions, so the app's own environment
+# usually has no opinion at all, and claiming "global stop" there would be a
+# confident wrong answer about whether the bot is armed.
+SWITCH_UNSET, SWITCH_ON, SWITCH_OFF = "unset", "on", "off"
+
+
+def trading_switch_state() -> str:
+    """SWITCH_UNSET when the variable is absent, SWITCH_ON/SWITCH_OFF otherwise."""
+    raw = os.environ.get(TRADING_ENABLED_VAR)
+    if raw is None:
+        return SWITCH_UNSET
+    return SWITCH_ON if raw.strip().lower() == "true" else SWITCH_OFF
+
+
 def check_run(config: dict | None, *, strategy: str, require_global: bool = True) -> Blocked | None:
     """Rails evaluated once per run, before any strategy logic executes.
 

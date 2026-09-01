@@ -104,6 +104,49 @@ def signal_summary(ticker: str) -> dict:
     return signals.aggregate_signals(ticker)
 
 
+# --------------------------------------------------------------------------
+# Trading bot. Note the deliberate absence of a `user_id` cache key on these:
+# bot_config, bot_decisions and bot_equity_snapshots are SHARED tables with no
+# user_id column (the bot runs as a batch job, not as a person), so there is no
+# per-user data to keep apart. Everything above takes user_id precisely because
+# it is per-user; these don't because they aren't.
+# --------------------------------------------------------------------------
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_configs() -> list[dict]:
+    """Every strategy's control row — the tab list and the slot counts."""
+    from engine.bot import journal
+
+    return journal.list_configs()
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_equity_curve(strategy: str) -> list[dict]:
+    """One strategy's daily snapshots, oldest first. The bot writes one row a
+    day, so a 5-minute TTL is generous."""
+    from engine.bot import journal
+
+    return journal.equity_curve(strategy)
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_decisions(strategy: str | None, limit: int) -> list[dict]:
+    """Newest-first journal rows; `strategy=None` spans all of them."""
+    from engine.bot import journal
+
+    return journal.recent_decisions(strategy, limit)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def bot_account_view(key_env_prefix: str) -> dict:
+    """Live Alpaca positions for one strategy. Shorter TTL than the DB reads —
+    it's the only thing here that changes intraday — and it never raises, so a
+    missing key pair costs one panel rather than the page."""
+    from engine.bot import live
+
+    return live.account_view(key_env_prefix)
+
+
 def clear() -> None:
     """Drop all cached results. Call after any write so nothing shows stale."""
     st.cache_data.clear()

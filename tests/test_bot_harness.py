@@ -100,6 +100,27 @@ def test_missing_variable_halts_the_bot(monkeypatch):
     assert risk.trading_enabled() is False
 
 
+@pytest.mark.parametrize("value,expected", [
+    ("true", risk.SWITCH_ON),
+    ("false", risk.SWITCH_OFF),
+    ("", risk.SWITCH_OFF),
+    ("ture", risk.SWITCH_OFF),
+])
+def test_switch_state_reports_on_or_off_when_the_variable_exists(monkeypatch, value, expected):
+    monkeypatch.setenv(risk.TRADING_ENABLED_VAR, value)
+    assert risk.trading_switch_state() == expected
+
+
+def test_switch_state_distinguishes_unset_from_off(monkeypatch):
+    """Both halt the bot, but they are different facts, and the bot page must not
+    report one as the other. The variable lives in GitHub Actions, so the app's
+    own environment normally has no opinion — announcing "global stop" there
+    would tell the user the bot was halted when it was in fact armed."""
+    monkeypatch.delenv(risk.TRADING_ENABLED_VAR, raising=False)
+    assert risk.trading_switch_state() == risk.SWITCH_UNSET
+    assert risk.trading_enabled() is False          # still halts, still fail-safe
+
+
 # --------------------------------------------------------------------------
 # Run-level rails
 # --------------------------------------------------------------------------
