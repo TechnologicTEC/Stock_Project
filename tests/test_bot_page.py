@@ -428,3 +428,49 @@ def test_the_sizing_note_does_not_hardcode_a_strategy_count():
     at = _run(configs=_all_six())
     text = _page_text(at)
     assert "these five curves" not in text
+
+
+# --------------------------------------------------------------------------
+# Slots and cash are present-tense questions
+# --------------------------------------------------------------------------
+
+def test_the_table_reports_slots_from_the_broker_not_the_last_snapshot():
+    """The snapshot is written the moment a run finishes submitting, before
+    its orders fill — it showed 9 of 15 while the account held all 15."""
+    view = _account_view(positions=[
+        {"ticker": f"T{i}", "qty": 1.0, "avg_entry_price": 10.0, "current_price": 11.0,
+         "market_value": 660.0, "unrealized_pl": 1.0, "unrealized_plpc": 0.01}
+        for i in range(15)
+    ], cash=0.0, equity=10_000.0)
+    curve = _curve()
+    for point in curve:                      # snapshot disagrees: 1 position, lots of cash
+        point["positions_count"] = 1
+        point["cash"] = 9_000.0
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)],
+              curve=curve, view=view)
+    body = _body(at)
+    assert "15 / 15" in body
+    assert "1 / 15" not in body
+
+
+def test_the_cash_percentage_uses_the_same_source_as_the_slot_count():
+    """Live cash over snapshot equity would be two numbers measured hours
+    apart, and the percentage would be true of neither."""
+    view = _account_view(positions=[], cash=10_000.0, equity=10_000.0)
+    curve = _curve()
+    for point in curve:
+        point["cash"] = 0.0                  # snapshot says fully invested
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)],
+              curve=curve, view=view)
+    assert "100%" in _body(at)               # live: all cash
+
+
+def test_it_falls_back_to_the_snapshot_when_the_broker_is_unreachable():
+    """The deployed Space holds no bot keys, so the table must still fill in."""
+    curve = _curve()
+    for point in curve:
+        point["positions_count"] = 12
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)],
+              curve=curve, view=_account_view(available=False))
+    assert not at.exception
+    assert "12 / 15" in _body(at)

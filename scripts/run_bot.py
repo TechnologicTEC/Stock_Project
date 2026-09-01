@@ -206,6 +206,19 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
 
     # Snapshot last, from a fresh read — the chart should show what the broker
     # says, not what we believe we did.
+    #
+    # "Last" is still BEFORE the orders fill, and that is not fixable here.
+    # After the close they queue until the next open; on an intraday run they
+    # are mid-flight. So `positions_count` and `cash` describe the account as
+    # the run LEFT it, not as it settled — 42 orders submitted and 46 of 50
+    # positions recorded, the rest landing seconds later.
+    #
+    # Equity is barely affected (cash becomes stock, the total holds), which is
+    # what the curve is built from, so the curve stays sound. The count and the
+    # cash are the misleading pair, and the fix is at the reader: the bot page
+    # asks the broker for those directly rather than believing this row. Do not
+    # "fix" it by sleeping here — an after-close run would wait forever, since
+    # those orders cannot fill until the market opens.
     final = executor.account_snapshot(trading_client) if submitted else account
     final_positions = executor.current_positions(trading_client) if submitted else positions
     journal.snapshot_equity(

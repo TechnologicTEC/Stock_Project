@@ -169,6 +169,14 @@ for cfg in configs:
         "label": bot_strategies.label(name),
         "curve": curve,
         "decisions": decisions,
+        # Fetched once here and reused by the tab below — same cached call.
+        # SLOTS and CASH are present-tense questions and have to be answered
+        # from the broker, not from the last snapshot. The snapshot is written
+        # the moment a run finishes submitting, which is BEFORE its orders
+        # fill: after the close they queue until the next open, and on an
+        # intraday run they are still filling. Reading it as "slots filled now"
+        # showed 9 of 15 while the account actually held all 15.
+        "view": _cache.bot_account_view(cfg.get("key_env_prefix") or ""),
         "summary": performance.summarise(
             curve, starting_equity=cfg.get("starting_equity"), trades=trades),
     })
@@ -269,10 +277,17 @@ else:
 # --------------------------------------------------------------------------
 
 def _strategy_row(r: dict) -> tuple[float, str]:
-    s, cfg = r["summary"], r["config"]
+    s, cfg, view = r["summary"], r["config"], r["view"]
     slots = cfg.get("target_slots") or 1
-    held = s["positions_count"]
-    cash_pct = (s["cash"] / s["equity"]) if (s["cash"] is not None and s["equity"]) else None
+
+    # Live where we can reach the broker, the last snapshot where we can't (the
+    # deployed Space holds no bot keys). Both halves from the SAME source, so
+    # the cash percentage is never a live number divided by a stale one.
+    if view.get("available"):
+        held, cash_now, equity_now = len(view["positions"]), view["cash"], view["equity"]
+    else:
+        held, cash_now, equity_now = s["positions_count"], s["cash"], s["equity"]
+    cash_pct = (cash_now / equity_now) if (cash_now is not None and equity_now) else None
     stopped = ' <span class="cp-badge s">stopped</span>' if cfg.get("killed") else ""
     curve_values = [float(p["equity"]) for p in r["curve"]]
 
@@ -476,7 +491,7 @@ for tab, r in zip(tabs, tab_rows):
                          "The bot writes one per weekday run.</p>")
 
         # ---- live account: positions, or an honest note about why not ----
-        view = _cache.bot_account_view(cfg.get("key_env_prefix") or "")
+        view = r["view"]
         slots = cfg.get("target_slots") or 1
 
         # Take cash and equity from the SAME source. Mixing live cash with the
