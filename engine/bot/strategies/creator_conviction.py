@@ -60,6 +60,21 @@ Freshness is keyed on the newest **mention**, not the newest video, on purpose.
 Videos arriving with extraction broken would leave mentions frozen while the
 feed looked healthy — the failure this guards against, wearing a disguise.
 
+## A held position is never resized
+
+Bought once at its slot size, sold whole when the rules say so, and nothing
+trims it in between. That matters more here than anywhere else in the bot: at
+four slots a position is $2,500, while the planner's "ignore small gaps"
+cushion is a flat $50 — under 2% — so restating the book each day used to trim
+any name that had pulled about 3% ahead of the others, and buy back into any
+that had fallen the same distance. A stock moving 3% in a day is ordinary, so
+that was near-constant trading on a strategy whose entire claim is that it
+holds while a creator keeps making the case.
+
+Like `score_threshold`, this has no periodic rebalance to re-level at — entries
+and exits are events. The consequence, stated plainly: a winner can grow well
+past a quarter of the account, and nothing here caps that.
+
 ## Liquidity
 
 Every candidate is screened by `engine/bot/liquidity` before it can be bought;
@@ -247,7 +262,7 @@ def build(ctx) -> list[Target]:
             runs = common.runs_since_buy(ctx, ticker)
             if runs is not None and runs < MIN_HOLD_RUNS:
                 targets.append(Target(
-                    ticker=ticker, notional=notional,
+                    ticker=ticker, notional=notional, resize=False,
                     reason=f"No bullish mentions left in the {WINDOW_DAYS}-day window, "
                            f"but only {runs} run(s) held — minimum hold is "
                            f"{MIN_HOLD_RUNS}.",
@@ -256,7 +271,7 @@ def build(ctx) -> list[Target]:
 
         still, why = qualifies(entry or {})
         targets.append(Target(
-            ticker=ticker, notional=notional,
+            ticker=ticker, notional=notional, resize=False,
             reason=(f"Still qualifying: {why}." if still
                     else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
                          f"{WINDOW_DAYS} days) but coverage continues — held until it "

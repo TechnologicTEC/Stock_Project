@@ -111,7 +111,8 @@ def build(ctx) -> list[Target]:
     # "sell everything".
     if not is_rebalance_run(ctx):
         return [
-            Target(ticker=t, notional=notional, reason=_hold_reason(lookup.get(t), len(rows)))
+            Target(ticker=t, notional=notional, resize=False,
+                   reason=_hold_reason(lookup.get(t), len(rows)))
             for t in sorted(held)
         ]
 

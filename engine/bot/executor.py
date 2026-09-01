@@ -32,10 +32,25 @@ REBALANCE_BAND_MIN = 25.0       # dollars
 @dataclass(frozen=True)
 class Target:
     """One line of a strategy's desired book. `reason` becomes the journal entry
-    and the "why it's held" column on the bot page, so write it for a human."""
+    and the "why it's held" column on the bot page, so write it for a human.
+
+    `resize=False` means "I already hold this and I only want to keep it" — open
+    it if it is missing, never trim or top it up. Strategies set that on every
+    run where they are not rebalancing, which is most runs.
+
+    Without it, simply restating the book resized it. A strategy has to name its
+    whole book every run (an empty list means "sell everything" to `plan`), and
+    since each target is sized off *current* equity, any price drift showed up
+    as a gap and got traded away. Nobody chose that: it was a side effect of the
+    architecture, and it quietly layered a continuous equal-weighting scheme on
+    top of all five strategies — which is precisely the thing the uniform sizing
+    rule exists to avoid, since it makes a difference in results impossible to
+    attribute to the signals.
+    """
     ticker: str
     notional: float
     reason: str
+    resize: bool = True
 
 
 @dataclass(frozen=True)
@@ -69,6 +84,7 @@ def plan(
     Rules, in order:
       * a held name absent from the targets is closed in full (by qty, so no
         fractional dust is left behind)
+      * a held name whose target says `resize=False` is left completely alone
       * a gap smaller than the rebalance band is left alone
       * everything else is bought or trimmed by notional
     """
@@ -87,6 +103,13 @@ def plan(
 
     for ticker, target in wanted.items():
         current = held[ticker].market_value if ticker in held else 0.0
+
+        # Held, and the strategy only asked to keep it: leave it exactly where
+        # it is. A winner is allowed to run and a laggard to shrink; the
+        # strategy re-levels on its own rebalance, not on every quiet day.
+        if current > 0 and not target.resize:
+            continue
+
         gap = target.notional - current
 
         if abs(gap) < band:

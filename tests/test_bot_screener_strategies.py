@@ -361,3 +361,39 @@ def test_a_decayed_name_with_only_a_dry_run_buy_is_still_sold():
                            status=journal.DRY_RUN, ticker="AAA")]
     # runs_since_buy is None -> no minimum hold to enforce -> the soft exit applies.
     assert thr.build(_thr_ctx(rows, held=["AAA"], decisions=decisions)) == []
+
+
+# --------------------------------------------------------------------------
+# Quiet days must not resize anything (Tane's call, 2026-09-01).
+# --------------------------------------------------------------------------
+
+def test_composite_holds_without_resizing_between_rebalances():
+    held = ["T01", "T02"]
+    ctx = _ctx(_rows(), held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    targets = comp.build(ctx)
+    assert targets and all(not t.resize for t in targets)
+
+
+def test_composite_does_resize_on_the_monthly_rebalance():
+    """'Rebalance' means levelling back to equal — that is the one day it should."""
+    targets = comp.build(_ctx(_rows(), held=["T01"], slots=15))
+    assert targets and all(t.resize for t in targets)
+
+
+def test_score_threshold_never_resizes_a_held_name():
+    """No periodic rebalance to level at: bought once, sold whole."""
+    rows = _rows()
+    for r in rows[:3]:
+        r["score"] = 80.0
+    ctx = _ctx(rows, held=["T01", "T02"], slots=20, strategy="score_threshold")
+    held_targets = [t for t in thr.build(ctx) if t.ticker in {"T01", "T02"}]
+    assert held_targets and all(not t.resize for t in held_targets)
+
+
+def test_score_threshold_sizes_a_brand_new_entry_normally():
+    rows = _rows()
+    for r in rows[:3]:
+        r["score"] = 80.0
+    ctx = _ctx(rows, slots=20, strategy="score_threshold")
+    fresh = [t for t in thr.build(ctx) if t.resize]
+    assert fresh, "a new entry has to be sized somehow"

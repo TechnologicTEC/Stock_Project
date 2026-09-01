@@ -518,3 +518,61 @@ def test_the_rail_is_per_ticker_so_one_stuck_order_does_not_freeze_the_book():
     pending = executor.open_order_tickers(FakeClient(open_orders=[FakeOpenOrder("SPY")]))
     survivors = [o.ticker for o in orders if o.ticker.upper() not in pending]
     assert survivors == ["MU"]
+
+
+# --------------------------------------------------------------------------
+# resize=False — quiet days leave positions completely alone
+#
+# Tane's call, and it matches the blueprint's own principle: constant trimming
+# is a sizing scheme layered on every strategy, and a difference in results
+# then cannot be attributed to the signal rather than the sizing.
+# --------------------------------------------------------------------------
+
+def test_a_held_position_is_left_alone_when_the_target_says_keep():
+    """The winner runs. Without resize=False this trimmed $93.75."""
+    targets = [executor.Target(ticker="S0", notional=2_531.25, reason="hold", resize=False)]
+    positions = [executor.Position(ticker="S0", qty=1.0, market_value=2_625.0)]
+    assert executor.plan(targets, positions, equity=10_125.0) == []
+
+
+def test_a_laggard_is_not_topped_up_either():
+    targets = [executor.Target(ticker="S0", notional=2_531.25, reason="hold", resize=False)]
+    positions = [executor.Position(ticker="S0", qty=1.0, market_value=2_400.0)]
+    assert executor.plan(targets, positions, equity=9_900.0) == []
+
+
+def test_resize_false_still_opens_a_position_we_do_not_hold():
+    """Keep-what-I-have must not mean never-buy: a name in the book that isn't
+    held yet still gets bought at its slot size."""
+    targets = [executor.Target(ticker="NEW", notional=2_500.0, reason="entry", resize=False)]
+    orders = executor.plan(targets, [], equity=10_000.0)
+    assert [(o.side, o.notional) for o in orders] == [("buy", 2_500.0)]
+
+
+def test_resize_false_still_closes_a_name_that_left_the_book():
+    """The safety property is unchanged: absent from targets means sold."""
+    targets = [executor.Target(ticker="KEEP", notional=2_500.0, reason="hold", resize=False)]
+    positions = [executor.Position(ticker="KEEP", qty=1.0, market_value=2_900.0),
+                 executor.Position(ticker="GONE", qty=3.0, market_value=2_500.0)]
+    orders = executor.plan(targets, positions, equity=10_000.0)
+    assert [(o.ticker, o.side, o.qty) for o in orders] == [("GONE", "sell", 3.0)]
+
+
+def test_resize_defaults_to_true_so_a_rebalance_still_levels():
+    targets = [executor.Target(ticker="S0", notional=2_531.25, reason="rebalance")]
+    positions = [executor.Position(ticker="S0", qty=1.0, market_value=2_625.0)]
+    orders = executor.plan(targets, positions, equity=10_125.0)
+    assert [(o.side, o.notional) for o in orders] == [("sell", 93.75)]
+
+
+def test_the_five_percent_case_that_started_this():
+    """One stock up 5%, three flat. Before: sell $93.75. After: nothing."""
+    equity = 10_125.0
+    note = 2_531.25
+    positions = [executor.Position(ticker="S0", qty=1.0, market_value=2_625.0)] + [
+        executor.Position(ticker=f"S{i}", qty=1.0, market_value=2_500.0) for i in (1, 2, 3)]
+    holding = [executor.Target(ticker=f"S{i}", notional=note, reason="h", resize=False)
+               for i in range(4)]
+    assert executor.plan(holding, positions, equity=equity) == []
+    levelling = [executor.Target(ticker=f"S{i}", notional=note, reason="r") for i in range(4)]
+    assert len(executor.plan(levelling, positions, equity=equity)) == 1

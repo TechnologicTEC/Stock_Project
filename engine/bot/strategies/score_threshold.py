@@ -27,6 +27,14 @@ Three exit rules, in priority order:
 
 Unfilled slots stay in cash. It never reaches further down the leaderboard to
 fill them, because a 70-scoring name bought to occupy a slot is not the strategy.
+
+**A held position is never resized.** It is bought once at its slot size and
+sold whole when the score says so; nothing trims it in between. This strategy
+has no periodic rebalance to re-level at — entries and exits are events, driven
+by a score crossing a line — so re-levelling would have to happen on arbitrary
+days, and that is exactly the quiet-day churn the `resize` flag exists to stop.
+The consequence, stated plainly: a long-running winner can grow well past its
+original share of the account, and nothing here caps that.
 """
 from __future__ import annotations
 
@@ -58,7 +66,7 @@ def build(ctx) -> list[Target]:
         row = lookup.get(ticker)
         if row is None or row.get("score") is None:
             targets.append(Target(
-                ticker=ticker, notional=notional,
+                ticker=ticker, notional=notional, resize=False,
                 reason="Not in the current leaderboard — holding rather than reading "
                        "missing data as a sell.",
             ))
@@ -73,14 +81,14 @@ def build(ctx) -> list[Target]:
             runs = common.runs_since_buy(ctx, ticker)
             if runs is not None and runs < MIN_HOLD_RUNS:
                 targets.append(Target(
-                    ticker=ticker, notional=notional,
+                    ticker=ticker, notional=notional, resize=False,
                     reason=f"Score {score} is below the {EXIT_SCORE:.0f} exit, but only "
                            f"{runs} run(s) held — minimum hold is {MIN_HOLD_RUNS}.",
                 ))
             continue        # otherwise it goes
 
         targets.append(Target(
-            ticker=ticker, notional=notional,
+            ticker=ticker, notional=notional, resize=False,
             reason=f"Score {score} — {'above the entry' if score >= ENTRY_SCORE else 'in the hold band'}"
                    f", exits below {EXIT_SCORE:.0f}.",
         ))

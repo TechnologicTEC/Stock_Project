@@ -21,6 +21,14 @@ rank 30. On the current leaderboard rank 15 scores 72.8 and rank 30 scores 71.0,
 so without the band a name drifting by under two points of composite would trigger
 a round-trip. The band is what turns that into no trade at all.
 
+**Positions are only re-levelled at the rebalance.** Between them the book is
+restated with `resize=False`, so a winner is left to run and a laggard to
+shrink. Restating it any other way meant every quiet day trimmed whatever had
+drifted past the band, which is a continuous equal-weighting scheme nobody
+asked for — and one that makes a difference in results impossible to pin on the
+signal rather than the sizing. On the monthly rebalance it does re-level, which
+is what "rebalance" means.
+
 It is always fully invested and always ~15 names: no target, no stop, the
 rebalance is the exit.
 """
@@ -51,7 +59,7 @@ def build(ctx) -> list[Target]:
     # written as "these are still my targets".
     if held and common.has_run_this_month(ctx):
         return [
-            Target(ticker=t, notional=notional,
+            Target(ticker=t, notional=notional, resize=False,
                    reason=_hold_reason(lookup.get(t)))
             for t in sorted(held)
         ]

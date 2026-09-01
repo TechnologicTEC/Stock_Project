@@ -473,3 +473,22 @@ def test_the_slot_count_binds_rather_than_the_position_cap():
                             slots=4, cap=0.25))
     assert targets[0].notional == pytest.approx(2_500.0)
     assert targets[0].notional * 4 == pytest.approx(10_000.0)   # fully invested
+
+
+def test_creator_conviction_never_resizes_a_held_name():
+    """At 4 slots a position is $2,500 and the planner's cushion is $50, so
+    restating the book used to trim anything that moved ~3%. It holds now."""
+    targets = cc.build(_ctx([_entry("NVTS", bullish=3)], held=["NVTS"]))
+    assert targets and all(not t.resize for t in targets)
+
+
+def test_a_name_inside_its_minimum_hold_is_also_left_unresized():
+    board = [_entry("NVTS", neutral=1)]
+    ctx = _ctx(board, held=["NVTS"], decisions=[
+        _decision(TODAY, ticker="NVTS", action=journal.BUY, status=journal.SUBMITTED)])
+    assert [t.resize for t in cc.build(ctx)] == [False]
+
+
+def test_a_brand_new_entry_is_still_sized_normally():
+    targets = cc.build(_ctx([_entry("NVTS", bullish=3)]))
+    assert targets and all(t.resize for t in targets)
