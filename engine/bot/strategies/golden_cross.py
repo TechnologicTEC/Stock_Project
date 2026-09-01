@@ -6,16 +6,34 @@ in cash otherwise.
 in the build order for a reason that has nothing to do with returns: the same
 signal is already implemented and backtested in `engine/backtest.py`, so the
 live bot has a *known expected answer*. Run it beside a backtest over the same
-window and any divergence is a plumbing bug — the highest-value test in the
-build. That only holds if both sides compute the identical thing, so this module
-imports `_signal_sma_cross` rather than reimplementing it. A copied formula that
-drifts by one bar would quietly destroy the whole point.
+window and a divergence in the SIGNAL is a plumbing bug — the highest-value test
+in the build. That only holds if both sides compute the identical thing, so this
+module imports `_signal_sma_cross` rather than reimplementing it. A copied
+formula that drifts by one bar would quietly destroy the whole point.
 
-Execution timing lines up with the backtest's convention by construction. The
-backtest applies `signal.shift(1)` — a signal built from closes through day *t*
-is acted on at *t+1*. The bot runs after the close, computes the signal from
-that day's closes, and submits an order that fills at the next open. Same shift,
-arrived at by the clock rather than by a `.shift()`.
+**The decision timing matches. The execution price does not.** Both sides act on
+a one-day shift: the backtest applies `signal.shift(1)`, so a signal built from
+closes through day *t* is acted on at *t+1*, and the bot arrives at the same
+shift by the clock — it runs at 21:45 UTC, after the close, computes the signal
+from that day's closes, and submits an order that fills at the next open.
+
+Where they part company is the price. `run_backtest` measures returns with
+`closes.pct_change()`, so it is implicitly transacting at **close[t]** — the
+very print it just used to decide. The bot transacts at **open[t+1]**. The
+difference is one overnight gap per trade, and on SPY over the last 250
+sessions that gap averaged **+0.068%** (median +0.087%, sd 0.53%), so roughly
+**+0.14% per round trip** — small against a 0.81% daily standard deviation, but
+a *systematic* bias rather than noise that cancels, because overnight drift is
+positive on average. At ~3 trades a year it is a few tenths of a percent
+annually.
+
+Do not chase that as a bug, and do not "fix" it by moving the schedule. The
+backtest is the unrealistic side: it cannot be a live execution, because you
+only know a closing price once it is already set. Filling at the next open is
+what actually happens, which is why `scripts/check_fills.py` grades every fill
+against the day's open. Matching the backtest exactly would mean
+market-on-close orders submitted before the 15:50 ET cutoff, deciding on a
+not-yet-final price and giving up the warm cache — a bad trade for 0.07%.
 
 The one asymmetry worth understanding here:
 
