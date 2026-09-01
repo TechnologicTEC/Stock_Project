@@ -39,6 +39,21 @@ def _log(message: str) -> None:
     print(message, flush=True)
 
 
+def _status(dry_run: bool, live_status: str) -> str:
+    """The status to journal for a decision this run reached.
+
+    On a dry run EVERY row the run produces has to say so, not just the ones
+    `executor.submit` writes. The journal is read back as "did this strategy
+    run, and when" — `screener_common` derives the monthly rebalance cadence
+    and creator_conviction's entry watermark from exactly that — so a dry run
+    leaving a row that looks live makes `--dry-run` change what a later live
+    run does. That was a real bug: a dry run with nothing to trade wrote its
+    "book already matches" row as SKIPPED, which counted as a run and armed
+    creator_conviction's watermark.
+    """
+    return journal.DRY_RUN if dry_run else live_status
+
+
 def _benchmark_equity(strategy: str, starting_equity: float, today: date_) -> float | None:
     """SPY rebased to this strategy's starting equity, for the dashed line.
 
@@ -137,7 +152,8 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
         journal.record(
             run_id=run_id, strategy=strategy, ticker=note.get("ticker"),
             action=journal.SKIP, reason=note.get("reason") or "Declined.",
-            status=journal.BLOCKED, blocked_by=risk.LIQUIDITY, inputs=note,
+            status=_status(dry_run, journal.BLOCKED), blocked_by=risk.LIQUIDITY,
+            inputs=note,
         )
 
     # Drop anything we're already waiting on a fill for. plan() reconciles
@@ -153,7 +169,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
                 run_id=run_id, strategy=strategy, ticker=order.ticker, action=order.side,
                 reason=f"An order for {order.ticker} is still unfilled; not stacking another "
                        "on top of it.",
-                status=journal.BLOCKED, blocked_by=risk.PENDING_ORDER,
+                status=_status(dry_run, journal.BLOCKED), blocked_by=risk.PENDING_ORDER,
                 qty=order.qty, notional=order.notional,
             )
         orders = [o for o in orders if o.ticker.upper() not in pending]
@@ -166,7 +182,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
         journal.record(
             run_id=run_id, strategy=strategy, action=journal.HOLD,
             reason="Book already matches the target inside the rebalance band.",
-            status=journal.SKIPPED,
+            status=_status(dry_run, journal.SKIPPED),
             inputs={"targets": [t.ticker for t in targets], "equity": equity},
         )
 
