@@ -42,8 +42,16 @@ def _liquid(close=50.0, volume=1_000_000, bars=60):
     return pd.DataFrame({"close": [close] * bars, "volume": [volume] * bars})
 
 
-def _ctx(board, *, held=(), decisions=(), equity=10_000.0, slots=8, cap=0.20,
-         frames=None, candidates=None):
+def _ctx(board, *, held=(), decisions=None, equity=10_000.0, slots=8, cap=0.20,
+         frames=None, candidates=None, last_run=2):
+    """A context that has run before, so entries are possible.
+
+    `last_run` is days ago; the default of 2 sits behind `_entry`'s default
+    mention date, so a fixture name counts as newly mentioned. Pass
+    `decisions=[]` for the never-run case, which must buy nothing.
+    """
+    if decisions is None:
+        decisions = [_decision(TODAY - timedelta(days=last_run))]
     if candidates is None:
         candidates = [e for e in board if cc.qualifies(e)[0]]
     if frames is None:
@@ -335,3 +343,123 @@ def test_a_failing_note_reporter_never_breaks_a_run_that_traded():
     orders — the orders are the thing that has to be right."""
     with patch.object(cc, "liquidity_notes", side_effect=RuntimeError("boom")):
         assert strategies.notes("creator_conviction", _ctx([])) == []
+
+
+# --------------------------------------------------------------------------
+# The entry trigger: clearing the bar buys nothing without a fresh mention.
+# --------------------------------------------------------------------------
+
+def test_the_first_ever_run_buys_nothing_and_just_starts_watching():
+    """The backlog problem, solved by the rule rather than by a special case:
+    with no previous run there is no watermark, so nothing is eligible."""
+    board = [_entry("NVTS", bullish=5), _entry("CRM", bullish=4)]
+    assert cc.build(_ctx(board, decisions=[])) == []
+
+
+def test_a_name_clearing_the_bar_on_stale_mentions_is_not_bought():
+    """NVTS as it actually stood at go-live: three bullish mentions, all of them
+    weeks old. Meeting the criteria is not a trigger."""
+    board = [_entry("NVTS", bullish=3, days_ago=6)]
+    assert cc.build(_ctx(board, last_run=2)) == []
+
+
+def test_a_name_mentioned_again_since_the_last_run_is_bought():
+    board = [_entry("NVTS", bullish=3, days_ago=1)]
+    targets = cc.build(_ctx(board, last_run=2))
+    assert [t.ticker for t in targets] == ["NVTS"]
+    assert "mentioned again since the last run" in targets[0].reason
+
+
+def test_the_backlog_still_counts_toward_the_tally():
+    """Only the trigger has to be new. A name mentioned once today, on top of
+    two older bullish mentions, clears the bar on the combined window."""
+    board = [_entry("NVTS", bullish=3, days_ago=0)]
+    assert [t.ticker for t in cc.build(_ctx(board, last_run=1))] == ["NVTS"]
+
+
+def test_a_mention_on_the_previous_run_date_still_triggers():
+    """Compared with >=, so a video landing alongside a run isn't lost between
+    two runs and rendered permanently unactionable."""
+    board = [_entry("NVTS", bullish=3, days_ago=2)]
+    assert [t.ticker for t in cc.build(_ctx(board, last_run=2))] == ["NVTS"]
+
+
+def test_a_mention_older_than_the_previous_run_does_not_trigger():
+    board = [_entry("NVTS", bullish=3, days_ago=3)]
+    assert cc.build(_ctx(board, last_run=2)) == []
+
+
+def test_a_dry_run_cannot_arm_the_watermark():
+    """Otherwise `--dry-run` would decide what a later live run buys — the same
+    isolation the screener strategies rely on."""
+    dry = [{"decided_at": datetime(TODAY.year, TODAY.month, TODAY.day) - timedelta(days=2),
+            "ticker": "NVTS", "action": journal.BUY, "status": journal.DRY_RUN,
+            "blocked_by": None}]
+    board = [_entry("NVTS", bullish=3, days_ago=1)]
+    assert cc.build(_ctx(board, decisions=dry)) == []
+
+
+def test_a_halted_day_cannot_arm_the_watermark():
+    blocked = [{"decided_at": datetime(TODAY.year, TODAY.month, TODAY.day) - timedelta(days=2),
+                "ticker": None, "action": journal.SKIP, "status": journal.BLOCKED,
+                "blocked_by": "global_switch"}]
+    board = [_entry("NVTS", bullish=3, days_ago=1)]
+    assert cc.build(_ctx(board, decisions=blocked)) == []
+
+
+def test_entry_watermark_is_the_previous_run_date():
+    ctx = _ctx([], decisions=[_decision(TODAY - timedelta(days=5)),
+                              _decision(TODAY - timedelta(days=2))])
+    assert cc.entry_watermark(ctx) == TODAY - timedelta(days=2)
+
+
+def test_entry_watermark_is_none_before_the_first_run():
+    assert cc.entry_watermark(_ctx([], decisions=[])) is None
+
+
+def test_newly_mentioned_is_false_without_a_date():
+    assert not cc.newly_mentioned({"ticker": "X"}, TODAY)
+
+
+# --------------------------------------------------------------------------
+# The trigger must not leak into the exit side.
+# --------------------------------------------------------------------------
+
+def test_a_held_name_is_restated_even_though_nothing_new_was_said():
+    """The liquidation trap, under the new rule. The trigger gates ENTRIES; if
+    it gated the book, every position would be sold the day after it was
+    bought."""
+    board = [_entry("NVTS", bullish=3, days_ago=9)]
+    targets = cc.build(_ctx(board, held=["NVTS"], last_run=2))
+    assert [t.ticker for t in targets] == ["NVTS"]
+
+
+def test_exits_still_work_on_a_name_that_was_never_freshly_mentioned():
+    board = [_entry("NVTS", neutral=2, days_ago=9)]
+    ctx = _ctx(board, held=["NVTS"], last_run=2,
+               decisions=[_decision(TODAY - timedelta(days=d)) for d in (2, 3, 4)])
+    assert cc.build(ctx) == []
+
+
+def test_a_first_run_that_already_holds_something_does_not_liquidate_it():
+    """No watermark means no buying — it must not also mean no book."""
+    board = [_entry("NVTS", bullish=3, days_ago=1)]
+    targets = cc.build(_ctx(board, held=["NVTS"], decisions=[]))
+    assert [t.ticker for t in targets] == ["NVTS"]
+
+
+# --------------------------------------------------------------------------
+# Reporting follows the trigger too.
+# --------------------------------------------------------------------------
+
+def test_an_illiquid_name_is_only_reported_once_it_is_actually_eligible():
+    """A name held back for want of a new mention was never going to be
+    ordered, so calling it 'declined on liquidity' would be a false reason
+    repeated in the journal every day."""
+    board = [_entry("FEED", bullish=5, days_ago=9)]
+    frames = {"FEED": _liquid(0.35, 270_000)}
+    assert cc.liquidity_notes(_ctx(board, frames=frames, last_run=2)) == []
+
+    fresh = [_entry("FEED", bullish=5, days_ago=1)]
+    notes = cc.liquidity_notes(_ctx(fresh, frames=frames, last_run=2))
+    assert [n["ticker"] for n in notes] == ["FEED"]

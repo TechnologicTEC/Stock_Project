@@ -87,6 +87,9 @@ SEED: list[dict] = [
         # score_threshold leaves cash), not a bug, but it does mean the curve
         # measures a partly-invested account. Worth revisiting once more
         # creators are added; see the memory note for the measurement.
+        # Expect it to start empty and fill slowly regardless: entries are
+        # triggered by a name being mentioned again, so the backlog standing at
+        # go-live is never bought.
         "target_slots": 8,
         "max_position_pct": 0.20,    # 1/8 = 12.5% binds; the cap is a backstop
         # A full turnover of an 8-name book is 8 sells + 8 buys.

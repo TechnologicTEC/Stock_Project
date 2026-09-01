@@ -6,7 +6,7 @@ repetition is attention, not conviction. This strategy is the test of whether
 that attention is worth anything, run with its own $10k so the answer is a
 curve rather than an opinion.
 
-Two ways in, both inside a 30-day window:
+Two ways to clear the bar, both inside a 30-day window:
 
   >=3 bullish mentions                        a case made repeatedly
   >=2 bullish, 0 bearish, and >=4 mentions    sustained coverage, no dissent
@@ -17,6 +17,30 @@ history to date it has **never** fired — every qualification came through the
 first arm. It is kept because it costs nothing and the creator set is expected
 to grow, but it is not currently doing anything, and a comment claiming
 otherwise would be wrong.
+
+## Clearing the bar is not enough: a new mention has to trigger it
+
+A name is bought only when it is **mentioned again**, and the tally at that
+moment clears the bar. Meeting the criteria on its own never buys anything.
+
+The distinction matters because the two are easy to confuse and behave very
+differently. At the moment this went live there was already a backlog of
+mentions going back months, and one name (NVTS) cleared the bar on history
+alone. Buying it would have been acting on a case the creator made weeks
+earlier, at a price that has already moved — the strategy would open by betting
+on stale news and then, by construction, never do so again. That is not the
+thing being measured. What is being measured is whether a creator returning to
+a name is worth acting on, so the return *is* the trigger, and the backlog only
+ever counts toward the tally.
+
+The watermark is the strategy's **previous run date**, read back out of the
+journal (`screener_common.run_dates`) rather than stored anywhere. That gives
+three properties for free. The first run has no previous run, so it buys
+nothing and simply starts watching — which is exactly the "don't act on the
+backlog" behaviour, arrived at by the rule rather than by a special case. A
+mention stays actionable across about two runs, absorbing a weekend or a lagging
+scan job. And because `run_dates` already discards dry runs, `--dry-run` cannot
+arm the watermark and change what a later live run does.
 
 ## Why absence means "sell" here, when it means "hold" everywhere else
 
@@ -140,6 +164,36 @@ def _notional_from_config(config: dict) -> float:
     )
 
 
+def entry_watermark(ctx):
+    """The date a mention must be at or after to trigger a buy: this strategy's
+    previous run. None before it has ever run, which buys nothing.
+
+    Derived from the journal rather than stored, so there is no watermark to
+    keep in sync and no way for it to disagree with what actually happened.
+    """
+    previous = common.run_dates(ctx)
+    return previous[0] if previous else None
+
+
+def newly_mentioned(entry: dict, watermark) -> bool:
+    """Has this name been mentioned since we last looked?
+
+    Compared with >= rather than >, deliberately. A run that happens twice in a
+    day, or a scan that lands a video's mentions just after a run, would
+    otherwise let a mention fall between two runs and never be actionable at
+    all. The cost is that a mention can trigger across two consecutive runs
+    instead of one, which is harmless: if it qualified, the name is already held
+    and skipped as such; if it did not, nothing happens either way.
+    """
+    if watermark is None:
+        return False                     # never run: start watching, buy nothing
+    last_seen = entry.get("last_seen")
+    if last_seen is None:
+        return False
+    seen_on = last_seen.date() if hasattr(last_seen, "date") else last_seen
+    return seen_on >= watermark
+
+
 def qualifies(entry: dict) -> tuple[bool, str]:
     """Does this leaderboard entry clear the conviction bar? -> (ok, why)."""
     stances = entry.get("stances") or {}
@@ -209,22 +263,20 @@ def build(ctx) -> list[Target]:
                          "reaches zero."),
         ))
 
-    # 2. Fill free slots from the qualifying candidates, strongest first, after
-    #    the liquidity screen. Held names are screened but never excluded on
-    #    it — see engine/bot/liquidity for why that asymmetry is deliberate.
-    candidates = extras.get("candidates") or []
+    # 2. Fill free slots. Only names mentioned again since the last run are
+    #    eligible — clearing the bar on an old tally never buys anything, and
+    #    on the first run nothing is eligible at all. Held names are screened
+    #    for liquidity but never excluded on it; see engine/bot/liquidity for
+    #    why that asymmetry is deliberate.
+    entrants = eligible_entrants(ctx)
     frames = extras.get("frames") or {}
     tradable, _excluded = liquidity.screen(
-        [e["ticker"] for e in candidates], frames, notional, held=held,
+        [e["ticker"] for e in entrants], frames, notional, held=held,
     )
     passed = {a.ticker: a for a in tradable}
 
     kept = {t.ticker for t in targets}
-    ranked = sorted(candidates,
-                    key=lambda e: (-(e.get("stances") or {}).get("bullish", 0),
-                                   -(e.get("mentions") or 0),
-                                   (e.get("ticker") or "")))
-    for entry in ranked:
+    for entry in entrants:
         if len(targets) >= slots:
             break
         ticker = (entry.get("ticker") or "").upper()
@@ -233,10 +285,26 @@ def build(ctx) -> list[Target]:
         _ok, why = qualifies(entry)
         targets.append(Target(
             ticker=ticker, notional=notional,
-            reason=f"Creator conviction: {why}. {passed[ticker].reason}",
+            reason=f"Creator conviction: {why}, and mentioned again since the last "
+                   f"run. {passed[ticker].reason}",
         ))
 
     return targets
+
+
+def eligible_entrants(ctx) -> list[dict]:
+    """Candidates that both clear the bar and were mentioned again, best first.
+
+    Ranked by bullish count then total mentions, which only decides who gets a
+    slot when more names are eligible than there is room for.
+    """
+    candidates = (ctx.extras or {}).get("candidates") or []
+    watermark = entry_watermark(ctx)
+    fresh = [e for e in candidates if newly_mentioned(e, watermark)]
+    return sorted(fresh,
+                  key=lambda e: (-(e.get("stances") or {}).get("bullish", 0),
+                                 -(e.get("mentions") or 0),
+                                 (e.get("ticker") or "")))
 
 
 def liquidity_notes(ctx) -> list[dict]:
@@ -244,14 +312,18 @@ def liquidity_notes(ctx) -> list[dict]:
 
     Returned for the runner to journal. Usually empty — that is the expected
     result, not a sign it isn't running.
+
+    Scoped to names that were actually about to be bought, not to every name
+    clearing the bar. A candidate held back because nothing new was said about
+    it was never going to be ordered, so reporting it as "declined on
+    liquidity" would put a false reason in the journal and repeat it daily.
     """
-    extras = ctx.extras or {}
-    candidates = extras.get("candidates") or []
-    if not candidates:
+    entrants = eligible_entrants(ctx)
+    if not entrants:
         return []
     _tradable, excluded = liquidity.screen(
-        [e["ticker"] for e in candidates],
-        extras.get("frames") or {},
+        [e["ticker"] for e in entrants],
+        (ctx.extras or {}).get("frames") or {},
         common.notional_for(ctx),
         held=ctx.held_tickers(),
     )
