@@ -28,12 +28,18 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Plan and journal, but submit no orders"
+        # GitHub renders a boolean as a TICKBOX, and the description is its
+        # only label — so it has to describe the tick, not the job. The old
+        # wording ("Plan and journal, but submit no orders") read as a
+        # statement about what the bot does, which is exactly how a run meant
+        # to open five accounts came back as a rehearsal that traded nothing.
+        # Lead with "DRY RUN" and say plainly what unticking it does.
+        description: "DRY RUN — tick to plan only. UNTICK to place real paper orders."
         type: boolean
         required: false
         default: true          # a manual run defaults to SAFE, not to trading
       strategy:
-        description: "Run only this strategy (blank = all)"
+        description: "Run only this strategy (blank = all six)"
         required: false
         default: ""
 
