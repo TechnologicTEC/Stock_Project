@@ -1176,18 +1176,7 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
     scored = sorted((r for r in results
                      if r.overall_score is not None and _weight_covered(r) >= MIN_FACTOR_WEIGHT - 1e-9),
                     key=lambda r: -r.overall_score)
-    ranked = [
-        {
-            "rank": i,
-            "ticker": r.ticker,
-            "name": r.company_name,          # display only; None if the profile fetch failed
-            "score": round(r.overall_score, 1),
-            "recommendation": r.recommendation,
-            "factor_scores": {name: (round(fr.score, 1) if fr.score is not None else None)
-                              for name, fr in r.factors.items()},
-        }
-        for i, r in enumerate(scored, start=1)
-    ]
+    ranked = _rerank([_leaderboard_row(r) for r in scored])
     return {
         "universe": universe,
         "generated_at": date.today().isoformat(),
@@ -1198,6 +1187,62 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
                           and _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9),
         "rows": ranked,
     }
+
+
+def _leaderboard_row(result: ScreenerResult) -> dict:
+    """One unranked row. Split out so a repair run can rebuild a few rows and
+    splice them into an existing ranking without re-screening 500 names."""
+    return {
+        "ticker": result.ticker,
+        "name": result.company_name,     # display only; None if the profile fetch failed
+        "score": round(result.overall_score, 1),
+        "recommendation": result.recommendation,
+        "factor_scores": {name: (round(fr.score, 1) if fr.score is not None else None)
+                          for name, fr in result.factors.items()},
+    }
+
+
+def _rerank(rows: list[dict]) -> list[dict]:
+    """Sort best-first and renumber. Rank is a position, never stored data."""
+    ordered = sorted(rows, key=lambda r: -(r.get("score") or 0))
+    for i, row in enumerate(ordered, start=1):
+        row["rank"] = i
+    return ordered
+
+
+def repair_leaderboard(payload: dict, results: list[ScreenerResult]) -> dict:
+    """Splice freshly screened names into an existing ranking and renumber.
+
+    Valid because scoring is ABSOLUTE: each ticker's score is computed from its
+    own metrics against fixed curves, never against the others in the batch, so
+    a name rescored today ranks correctly beside one scored last week. That is
+    the same property `screen_universe.py` already relies on to save after every
+    chunk.
+
+    What it does NOT fix is that the spliced rows are priced later than the
+    rest. Momentum moves with price, so a repair run leaves a mixed-vintage
+    ranking — recorded as `repaired_at` and `n_repaired` rather than left for
+    someone to infer from a date that only describes the older half.
+
+    A rescored name that STILL cannot clear MIN_FACTOR_WEIGHT is removed rather
+    than left at its old score: the old score is exactly the number the repair
+    exists to retract.
+    """
+    fresh_by_ticker = {r.ticker.upper(): r for r in results}
+    kept = [row for row in (payload.get("rows") or [])
+            if (row.get("ticker") or "").upper() not in fresh_by_ticker]
+
+    added = [_leaderboard_row(r) for r in results
+             if r.overall_score is not None
+             and _weight_covered(r) >= MIN_FACTOR_WEIGHT - 1e-9]
+
+    out = dict(payload)
+    out["rows"] = _rerank(kept + added)
+    out["n_scored"] = len(out["rows"])
+    out["repaired_at"] = date.today().isoformat()
+    out["n_repaired"] = len(added)
+    out["n_withheld"] = sum(1 for r in results if _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9)
+    return out
 
 
 def _weight_covered(result: ScreenerResult) -> float:

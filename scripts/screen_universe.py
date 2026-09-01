@@ -23,6 +23,18 @@ Run:
     EDGAR_USER_AGENT='Your Name you@example.com' python scripts/screen_universe.py
 
 Env knobs (optional): UNIVERSE_EVERY (every Nth name), UNIVERSE_SIZE (cap).
+
+REPAIR MODE. `SCREEN_TICKERS=AAA,BBB` rescreens just those names and splices
+them into the EXISTING leaderboard instead of rebuilding it. Use it when a run
+lost data for a slice of the index — a provider refusing a burst of fundamentals
+costs valuation, growth and profitability together, and those names get withheld
+under MIN_FACTOR_WEIGHT rather than ranked on what is left. Rescoring 55 names
+takes ~12 minutes against ~2 hours for the full index.
+
+`SCREEN_TICKERS=auto` picks the names to repair itself: everything the current
+leaderboard is missing or scored thinly. Safe because scoring is absolute, so a
+name rescored today ranks correctly beside one scored last week — but the result
+IS mixed-vintage, which the payload records as `repaired_at`/`n_repaired`.
 """
 from __future__ import annotations
 
@@ -48,8 +60,65 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _repair_targets() -> list[str]:
+    """Names the current leaderboard has lost: absent from it, or scored under
+    the minimum weighting. Read from the saved payload rather than recomputed,
+    so this repairs exactly what is actually published."""
+    payload = screener.load_leaderboard() or {}
+    ranked = {(r.get("ticker") or "").upper() for r in (payload.get("rows") or [])}
+    W = screener.FACTOR_WEIGHTS
+    thin = set()
+    for row in payload.get("rows") or []:
+        scores = row.get("factor_scores") or {}
+        covered = sum(w for name, w in W.items() if scores.get(name) is not None)
+        if covered < screener.MIN_FACTOR_WEIGHT - 1e-9:
+            thin.add((row.get("ticker") or "").upper())
+    missing = {t.upper() for t in universe.sp500()} - ranked
+    return sorted(missing | thin)
+
+
+def _repair(tickers: list[str], chunk: int) -> None:
+    payload = screener.load_leaderboard()
+    if not payload:
+        print("no leaderboard to repair — run a full screen first", flush=True)
+        return
+    print(f"repairing {len(tickers)} name(s) into the {payload.get('n_scored')}-name "
+          f"leaderboard generated {payload.get('generated_at')}", flush=True)
+    started = time.time()
+    results = []
+    for start in range(0, len(tickers), chunk):
+        results.extend(screener.screen_tickers(tickers[start:start + chunk]))
+        done = min(start + chunk, len(tickers))
+        # Save after each chunk, like the full run, so an interruption leaves a
+        # consistent leaderboard rather than a half-applied repair.
+        screener.save_leaderboard(screener.repair_leaderboard(payload, results))
+        rate = (time.time() - started) / done
+        print(f"  {done}/{len(tickers)} rescored  (~{(len(tickers)-done)*rate/60:.0f} min left)",
+              flush=True)
+
+    out = screener.load_leaderboard()
+    print(f"\nrepaired {out.get('n_repaired')} · still withheld {out.get('n_withheld')} · "
+          f"leaderboard now {out.get('n_scored')} names, in "
+          f"{(time.time() - started) / 60:.1f} min", flush=True)
+    print("Top 15 after the repair:", flush=True)
+    for row in out["rows"][:15]:
+        print(f"  {row['rank']:>3}. {row['ticker']:6} {row['score']:5.1f}  {row['recommendation']}",
+              flush=True)
+
+
 def main() -> None:
     configure()  # DATABASE_URL from env
+
+    requested = (os.environ.get("SCREEN_TICKERS") or "").strip()
+    if requested:
+        chunk = max(1, _int_env("SCREEN_CHUNK", 40))
+        targets = (_repair_targets() if requested.lower() == "auto"
+                   else sorted({t.strip().upper() for t in requested.split(",") if t.strip()}))
+        if not targets:
+            print("nothing to repair — every name is ranked with enough coverage", flush=True)
+            return
+        _repair(targets, chunk)
+        return
 
     every = _int_env("UNIVERSE_EVERY", 1)
     size = _int_env("UNIVERSE_SIZE", 0) or None
