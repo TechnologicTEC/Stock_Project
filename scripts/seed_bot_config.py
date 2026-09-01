@@ -80,20 +80,25 @@ SEED: list[dict] = [
     {
         "strategy": "creator_conviction",
         "key_env_prefix": "ALPACA_CREATOR_CONVICTION",
-        # The blueprint's simulation said 8. Replaying the real conviction rule
+        # The blueprint's simulation said 8; replaying the real conviction rule
         # over every video scanned so far, the book is 1-4 names and has never
-        # exceeded 4 — so 8 is a ceiling, not a target, and this account will
-        # usually run mostly in cash. That is the rule working (the same way
-        # score_threshold leaves cash), not a bug, but it does mean the curve
-        # measures a partly-invested account. Worth revisiting once more
-        # creators are added; see the memory note for the measurement.
+        # exceeded 4. Set to 4 so the curve measures a mostly-invested account
+        # rather than one diluted by permanent cash — at 8 the account would
+        # have sat ~60-85% idle and the equity line would have been reporting
+        # the cash weighting more than the signal. Revisit if more creators are
+        # added and demand rises; the count is the whole experiment's exposure.
+        #
         # Expect it to start empty and fill slowly regardless: entries are
         # triggered by a name being mentioned again, so the backlog standing at
         # go-live is never bought.
-        "target_slots": 8,
-        "max_position_pct": 0.20,    # 1/8 = 12.5% binds; the cap is a backstop
-        # A full turnover of an 8-name book is 8 sells + 8 buys.
-        "max_orders_per_run": 20,
+        "target_slots": 4,
+        # 25% rather than the 20% the other strategies carry, so that 1/4 still
+        # binds and the cap stays a backstop. At 20% the cap would quietly
+        # become the real position size and a full book would strand $2,000 in
+        # cash — the concentration is deliberate at four slots, not accidental.
+        "max_position_pct": 0.25,
+        # A full turnover of a 4-name book is 4 sells + 4 buys.
+        "max_orders_per_run": 10,
         "starting_equity": 10_000.0,
         "enabled": True,
     },

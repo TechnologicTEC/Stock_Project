@@ -86,7 +86,7 @@ MIN_DOLLAR_VOLUME = 5_000_000.0
 
 # Slack today by roughly two orders of magnitude, and kept anyway because it is
 # the only gate that scales with the account. At the MIN_DOLLAR_VOLUME floor it
-# starts binding at about $400k of equity across 8 slots; below that the two
+# starts binding at about $200k of equity across 4 slots; below that the two
 # floors above are what decide every case.
 MAX_PARTICIPATION = 0.01
 

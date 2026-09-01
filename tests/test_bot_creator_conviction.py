@@ -42,7 +42,7 @@ def _liquid(close=50.0, volume=1_000_000, bars=60):
     return pd.DataFrame({"close": [close] * bars, "volume": [volume] * bars})
 
 
-def _ctx(board, *, held=(), decisions=None, equity=10_000.0, slots=8, cap=0.20,
+def _ctx(board, *, held=(), decisions=None, equity=10_000.0, slots=4, cap=0.25,
          frames=None, candidates=None, last_run=2):
     """A context that has run before, so entries are possible.
 
@@ -111,7 +111,7 @@ def _prepare(board, *, today=TODAY):
     with patch("engine.creator_signals.mention_leaderboard", return_value=board), \
          patch("engine.bot.journal.recent_decisions", return_value=[]), \
          patch.object(cc.liquidity, "fetch_frames", return_value={}):
-        return cc.prepare({"starting_equity": 10_000.0, "target_slots": 8}, today)
+        return cc.prepare({"starting_equity": 10_000.0, "target_slots": 4}, today)
 
 
 def test_a_stalled_scan_refuses_the_run_rather_than_emptying_the_book():
@@ -153,7 +153,7 @@ def test_prepare_only_prices_the_candidates_not_the_whole_universe():
          patch("engine.bot.journal.recent_decisions", return_value=[]), \
          patch.object(cc.liquidity, "fetch_frames") as fetch:
         fetch.return_value = {}
-        cc.prepare({"starting_equity": 10_000.0, "target_slots": 8}, TODAY)
+        cc.prepare({"starting_equity": 10_000.0, "target_slots": 4}, TODAY)
     assert fetch.call_args[0][0] == ["NVTS"]
 
 
@@ -173,12 +173,12 @@ def test_a_non_qualifying_name_is_not_bought():
 
 def test_free_slots_stay_in_cash_rather_than_reaching_down_the_board():
     board = [_entry("NVTS", bullish=3)] + [_entry(f"N{i}", bullish=1) for i in range(20)]
-    assert len(cc.build(_ctx(board, slots=8))) == 1
+    assert len(cc.build(_ctx(board, slots=4))) == 1
 
 
 def test_the_slot_cap_is_respected():
     board = [_entry(f"T{i:02d}", bullish=5) for i in range(20)]
-    assert len(cc.build(_ctx(board, slots=8))) == 8
+    assert len(cc.build(_ctx(board, slots=4))) == 4
 
 
 def test_the_strongest_conviction_is_bought_first_when_slots_are_scarce():
@@ -187,8 +187,8 @@ def test_the_strongest_conviction_is_bought_first_when_slots_are_scarce():
 
 
 def test_every_target_is_sized_by_the_shared_rule():
-    targets = cc.build(_ctx([_entry("NVTS", bullish=3)], equity=8_000.0, slots=8))
-    assert targets[0].notional == pytest.approx(1_000.0)
+    targets = cc.build(_ctx([_entry("NVTS", bullish=3)], equity=8_000.0, slots=4))
+    assert targets[0].notional == pytest.approx(2_000.0)      # 1/4 binds, not the 25% cap
 
 
 # --------------------------------------------------------------------------
@@ -463,3 +463,13 @@ def test_an_illiquid_name_is_only_reported_once_it_is_actually_eligible():
     fresh = [_entry("FEED", bullish=5, days_ago=1)]
     notes = cc.liquidity_notes(_ctx(fresh, frames=frames, last_run=2))
     assert [n["ticker"] for n in notes] == ["FEED"]
+
+
+def test_the_slot_count_binds_rather_than_the_position_cap():
+    """At four slots 1/4 = 25%, so a 20% cap would quietly become the real
+    position size and strand $2,000 of a full book in cash. The cap is meant to
+    be a backstop, as it is for every other strategy."""
+    targets = cc.build(_ctx([_entry("NVTS", bullish=3)], equity=10_000.0,
+                            slots=4, cap=0.25))
+    assert targets[0].notional == pytest.approx(2_500.0)
+    assert targets[0].notional * 4 == pytest.approx(10_000.0)   # fully invested

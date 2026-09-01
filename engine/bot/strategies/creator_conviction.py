@@ -159,7 +159,7 @@ def _notional_from_config(config: dict) -> float:
 
     return risk.position_notional(
         float(config.get("starting_equity") or 10_000.0),
-        int(config.get("target_slots") or 8),
+        int(config.get("target_slots") or 4),
         float(config.get("max_position_pct") or 1.0),
     )
 
@@ -223,7 +223,7 @@ def build(ctx) -> list[Target]:
     by_ticker = {(e.get("ticker") or "").upper(): e for e in board if e.get("ticker")}
     held = ctx.held_tickers()
     notional = common.notional_for(ctx)
-    slots = int(ctx.config.get("target_slots") or 8)
+    slots = int(ctx.config.get("target_slots") or 4)
 
     targets: list[Target] = []
 
