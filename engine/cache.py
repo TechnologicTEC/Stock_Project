@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 # 1. Generic TTL cache
 # --------------------------------------------------------------------------
 
-def get_or_fetch(cache_key: str, ttl_seconds: int, fetch_fn: Callable[[], Any]) -> Any:
+def get_or_fetch(cache_key: str, ttl_seconds: int, fetch_fn: Callable[[], Any],
+                 *, fallback_to_stale: bool = False) -> Any:
     """
     Return the cached value for `cache_key` if it's younger than
     `ttl_seconds`; otherwise call `fetch_fn()`, store the result, and
@@ -49,17 +50,40 @@ def get_or_fetch(cache_key: str, ttl_seconds: int, fetch_fn: Callable[[], Any]) 
     `fetch_fn`'s return value must be JSON-serializable (plain dicts/lists/
     numbers/strings — exactly what the engine/data_sources/* functions
     already return).
+
+    `fallback_to_stale=True` returns the EXPIRED cached value when the refetch
+    fails, instead of raising. Opt-in, because it is only right where an old
+    answer beats no answer — reference data that barely changes, not a price.
+
+    That distinction has already cost something. The screener reads a company's
+    industry through here on a 7-day TTL, and screening 500 tickers fetches
+    hard enough that the provider refuses some calls. Every refusal threw away
+    a perfectly good 8-day-old industry and dropped the stock onto generic
+    valuation curves instead of its sector's — 45 of 503 names in one run,
+    scored against the wrong benchmark and then traded on. A sector from last
+    week is not stale in any way that matters; sectors essentially never change,
+    which is exactly why the TTL is a week in the first place.
     """
+    stale_value, had_row = None, False
     with get_session() as session:
         row = session.get(ApiCache, cache_key)
-        if row is not None and _utcnow() - row.fetched_at < timedelta(seconds=ttl_seconds):
-            logger.debug("cache hit: %s", cache_key)
-            return json.loads(row.value_json)
+        if row is not None:
+            had_row = True
+            stale_value = json.loads(row.value_json)
+            if _utcnow() - row.fetched_at < timedelta(seconds=ttl_seconds):
+                logger.debug("cache hit: %s", cache_key)
+                return stale_value
         logger.debug("cache miss/stale: %s", cache_key)
 
     # Deliberately fetch outside the `with` block above — never hold a DB
     # session open across a network call.
-    fresh_value = fetch_fn()
+    try:
+        fresh_value = fetch_fn()
+    except Exception:
+        if fallback_to_stale and had_row:
+            logger.warning("fetch failed for %s; serving the expired cached value", cache_key)
+            return stale_value
+        raise
 
     with get_session() as session:
         row = session.get(ApiCache, cache_key)

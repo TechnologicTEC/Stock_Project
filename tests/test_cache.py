@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta
 
+import pytest
+
 from engine.time_utils import utcnow
 
 from db.models import ApiCache
@@ -148,3 +150,66 @@ def test_news_staleness_marker():
         row.fetched_at = utcnow() - timedelta(seconds=7200)
 
     assert cache.is_news_stale("AAPL", ttl_seconds=3600) is True
+
+
+# --------------------------------------------------------------------------
+# fallback_to_stale — an expired answer beats no answer, for reference data
+# --------------------------------------------------------------------------
+
+def _age(cache_key: str, *, days: int) -> None:
+    """Backdate a cached row so it reads as expired."""
+    with get_session() as session:
+        session.get(ApiCache, cache_key).fetched_at = utcnow() - timedelta(days=days)
+
+def test_a_failed_refetch_serves_the_expired_value_when_asked_to():
+    """The bug this exists for: the screener reads a company's INDUSTRY on a
+    7-day TTL, and a refused provider call threw the old one away, dropping the
+    stock onto generic valuation curves. 45 of 503 names in one run."""
+    key = "profile:STALE_OK"
+    cache.set_value(key, {"name": "Old Corp", "sector": "Energy"})
+    _age(key, days=30)
+
+    def boom():
+        raise RuntimeError("rate limited")
+
+    got = cache.get_or_fetch(key, ttl_seconds=60, fetch_fn=boom, fallback_to_stale=True)
+    assert got == {"name": "Old Corp", "sector": "Energy"}
+
+
+def test_without_the_flag_a_failed_refetch_still_raises():
+    """Opt-in on purpose. Serving a stale PRICE would be wrong."""
+    key = "profile:STALE_NO"
+    cache.set_value(key, {"name": "Old Corp"})
+    _age(key, days=30)
+
+    def boom():
+        raise RuntimeError("rate limited")
+
+    with pytest.raises(RuntimeError):
+        cache.get_or_fetch(key, ttl_seconds=60, fetch_fn=boom)
+
+
+def test_the_fallback_cannot_invent_a_value_that_was_never_cached():
+    def boom():
+        raise RuntimeError("rate limited")
+
+    with pytest.raises(RuntimeError):
+        cache.get_or_fetch("profile:NEVER_SEEN", 60, boom, fallback_to_stale=True)
+
+
+def test_a_fresh_value_is_still_preferred_over_the_stale_one():
+    key = "profile:FRESH_WINS"
+    cache.set_value(key, {"name": "Old Corp"})
+    _age(key, days=30)
+    got = cache.get_or_fetch(key, 60, lambda: {"name": "New Corp"}, fallback_to_stale=True)
+    assert got == {"name": "New Corp"}
+    assert cache.get_value(key) == {"name": "New Corp"}      # and it was written back
+
+
+def test_an_unexpired_value_never_calls_the_fetcher():
+    key = "profile:NOT_EXPIRED"
+    cache.set_value(key, {"name": "Current Corp"})
+    calls = []
+    got = cache.get_or_fetch(key, 3600, lambda: calls.append(1) or {"name": "X"},
+                             fallback_to_stale=True)
+    assert got == {"name": "Current Corp"} and calls == []

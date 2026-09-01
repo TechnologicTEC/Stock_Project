@@ -83,6 +83,24 @@ def _render_leaderboard() -> None:
                 icon="🕒",
             )
 
+        # A quiet degradation, surfaced. Valuation and margin are scored against
+        # SECTOR curves, so a name whose industry lookup failed is judged on
+        # generic ones instead — an oil company on a P/E of 25 scores 15 in its
+        # own sector and 55 generically. It used to show up only as a blank
+        # company name in the table, which reads as a cosmetic glitch. One run
+        # had 45 of 503 like this, and the bot traded on that ranking.
+        no_sector = lb.get("n_no_sector")
+        scored = lb.get("n_scored") or len(rows)
+        if no_sector and scored:
+            st.warning(
+                f"**{no_sector} of {scored} names were scored without an industry** "
+                f"({no_sector / scored:.0%}) — their data provider lookup failed on this run, so "
+                "valuation and profitability were judged on generic curves rather than their "
+                "sector's. Those rows show a blank company name. Their scores are still built from "
+                "real financials, but their **ranking is less reliable** than the rest.",
+                icon="⚠️",
+            )
+
         # The measured track record of THIS ranking, pulled from the universe
         # validation. Shown up front so "highest-scoring" can't be misread as
         # "will go up".

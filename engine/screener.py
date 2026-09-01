@@ -605,8 +605,15 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
 
     raw_industry = company_name = None
     try:
+        # An expired profile beats no profile. Losing this call costs the
+        # SECTOR, not just the display name, and a sectorless ticker is scored
+        # against generic valuation and margin curves rather than its own —
+        # see cache.get_or_fetch's docstring for the run where that hit 45 of
+        # 503 names and reached live positions.
         profile = cache.get_or_fetch(
-            f"profile:{ticker}", PROFILE_TTL_SECONDS, lambda: finnhub_client.get_company_profile(ticker)
+            f"profile:{ticker}", PROFILE_TTL_SECONDS,
+            lambda: finnhub_client.get_company_profile(ticker),
+            fallback_to_stale=True,
         )
         raw_industry = (profile or {}).get("sector")  # finnhub_client maps finnhubIndustry -> "sector"
         company_name = (profile or {}).get("name")    # free — same profile call, for display
@@ -1148,8 +1155,35 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
         "generated_at": date.today().isoformat(),
         "n_scored": len(ranked),
         "n_requested": len(results),
+        "n_no_sector": _count_without_sector(scored),
         "rows": ranked,
     }
+
+
+def _count_without_sector(results: list[ScreenerResult]) -> int:
+    """How many names were scored with no sector, so on generic curves.
+
+    Recorded because it is otherwise invisible. The sector picks which
+    valuation and margin curves a ticker is judged against, and a provider that
+    refuses a profile call silently drops it to `DEFAULT_SECTOR_BUCKET` — one
+    run had 45 of 503 scored that way, and the only symptom anywhere was a
+    blank company name in the table, which reads as a display glitch.
+
+    Counted on a MISSING industry, not on the bucket being `General`. Those are
+    different things: Vertiv reports "Electrical Equipment", which matches no
+    keyword list and lands in General legitimately. Counting General would fold
+    those in and report a data failure that never happened.
+
+    Counted from what the scorer actually used rather than from the blank name,
+    so it stays honest if a provider ever returns an industry without a name.
+    """
+    n = 0
+    for r in results:
+        valuation = (r.factors or {}).get("valuation")
+        raw = getattr(valuation, "raw", None) or {}
+        if not raw.get("raw_industry"):
+            n += 1
+    return n
 
 
 def save_leaderboard(payload: dict) -> None:

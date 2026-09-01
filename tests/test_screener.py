@@ -741,3 +741,57 @@ def test_save_results_upserts_same_ticker_same_day():
     history = screener.get_score_history("AAPL")
     assert len(history) == 1  # updated in place, not duplicated
     assert history[0]["overall_score"] == 70.0
+
+
+# --------------------------------------------------------------------------
+# n_no_sector — the quiet degradation, counted
+# --------------------------------------------------------------------------
+
+def _sr_with_industry(ticker, score, industry, bucket):
+    """A result carrying the sector data the valuation scorer actually used."""
+    valuation = screener.FactorResult(
+        score=70.0, reasons=[],
+        raw={"pe": 20.0, "sector_bucket": bucket, "raw_industry": industry},
+    )
+    return screener.ScreenerResult(
+        ticker=ticker, overall_score=score,
+        recommendation=screener._recommendation_for(score),
+        factors={"valuation": valuation}, data_errors=[],
+        company_name=None if industry is None else f"{ticker} Inc",
+    )
+
+
+def test_the_leaderboard_counts_names_scored_without_an_industry():
+    """Invisible otherwise: a failed profile lookup silently drops a stock onto
+    generic valuation curves, and the only symptom was a blank company name."""
+    lb = screener.build_leaderboard([
+        _sr_with_industry("KO", 80.0, "Beverages", "Retail / Consumer"),
+        _sr_with_industry("MPC", 79.0, None, screener.DEFAULT_SECTOR_BUCKET),
+        _sr_with_industry("CRL", 78.0, None, screener.DEFAULT_SECTOR_BUCKET),
+    ])
+    assert lb["n_no_sector"] == 2
+    assert lb["n_scored"] == 3
+
+
+def test_a_legitimate_general_bucket_is_not_counted_as_a_failure():
+    """Vertiv reports 'Electrical Equipment', which matches no keyword list and
+    lands in General honestly. Counting the bucket rather than the missing
+    industry would report a data failure that never happened."""
+    assert screener.classify_sector_bucket("Electrical Equipment") == screener.DEFAULT_SECTOR_BUCKET
+    lb = screener.build_leaderboard([
+        _sr_with_industry("VRT", 80.0, "Electrical Equipment", screener.DEFAULT_SECTOR_BUCKET),
+    ])
+    assert lb["n_no_sector"] == 0
+
+
+def test_the_count_is_zero_when_every_name_has_its_sector():
+    lb = screener.build_leaderboard([
+        _sr_with_industry("KO", 80.0, "Beverages", "Retail / Consumer"),
+        _sr_with_industry("XOM", 70.0, "Oil & Gas", "Energy"),
+    ])
+    assert lb["n_no_sector"] == 0
+
+
+def test_a_result_without_valuation_raw_counts_as_missing_rather_than_crashing():
+    lb = screener.build_leaderboard([_sr("AAPL", 80.0, name="Apple Inc")])
+    assert lb["n_no_sector"] == 1
