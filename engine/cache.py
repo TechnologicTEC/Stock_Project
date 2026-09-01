@@ -97,17 +97,40 @@ def get_or_fetch(cache_key: str, ttl_seconds: int, fetch_fn: Callable[[], Any],
     return fresh_value
 
 
-def get_or_fetch_fundamentals(ticker: str, ttl_seconds: int, fetch_fn: Callable[[], dict]) -> dict:
+def get_or_fetch_fundamentals(ticker: str, ttl_seconds: int, fetch_fn: Callable[[], dict],
+                              *, fallback_to_stale: bool = False) -> dict:
     """Same idea as get_or_fetch(), but against the structured
-    fundamentals_cache table from Section 8 instead of the generic one."""
+    fundamentals_cache table from Section 8 instead of the generic one.
+
+    `fallback_to_stale=True` serves the expired row when the refetch fails.
+    This is where the damage actually was: the TTL is ~20 hours, so a screen of
+    503 names refetches essentially all of them in one burst, the provider
+    refuses a slice of that, and every refusal dropped THREE factors —
+    valuation, growth and profitability, 60% of the composite's weighting.
+    Those names were then scored on the remaining 40%, renormalised, and
+    published in the same column as fully-scored ones.
+
+    Yesterday's fundamentals are a far better estimate of a company's P/E than
+    no fundamentals at all.
+    """
     ticker = ticker.upper()
 
+    stale, had_row = None, False
     with get_session() as session:
         row = session.get(FundamentalsCache, ticker)
-        if row is not None and _utcnow() - row.fetched_at < timedelta(seconds=ttl_seconds):
-            return json.loads(row.data_json)
+        if row is not None:
+            had_row = True
+            stale = json.loads(row.data_json)
+            if _utcnow() - row.fetched_at < timedelta(seconds=ttl_seconds):
+                return stale
 
-    fresh = fetch_fn()
+    try:
+        fresh = fetch_fn()
+    except Exception:
+        if fallback_to_stale and had_row:
+            logger.warning("fundamentals fetch failed for %s; serving the expired row", ticker)
+            return stale
+        raise
 
     with get_session() as session:
         row = session.get(FundamentalsCache, ticker)

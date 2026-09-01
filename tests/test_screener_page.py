@@ -14,6 +14,14 @@ from streamlit.testing.v1 import AppTest
 from engine import cache, screener, screener_validation, watchlist
 
 
+def _full_factors(score: float) -> dict:
+    """Every factor scored. The leaderboard withholds names covering less than
+    MIN_FACTOR_WEIGHT, so a rendering fixture has to be fully scored or it
+    never reaches the table it is meant to be rendering."""
+    return {name: screener.FactorResult(score, []) for name in screener.FACTOR_WEIGHTS}
+
+
+
 @pytest.fixture(autouse=True)
 def _no_news_by_default():
     """The screener's sentiment factor now calls news.analyze_ticker (FinBERT);
@@ -154,9 +162,9 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     # and staple the IC to it so it can't read as a buy list.
     lb = screener.build_leaderboard([
         screener.ScreenerResult("AAA", 88.0, "Strong Buy",
-                                {"valuation": screener.FactorResult(90.0, [])}, []),
+                                _full_factors(90.0), []),
         screener.ScreenerResult("BBB", 55.0, "Hold",
-                                {"valuation": screener.FactorResult(50.0, [])}, []),
+                                _full_factors(50.0), []),
     ])
     screener.save_leaderboard(lb)
     screener_validation.save_universe_result({
@@ -178,9 +186,9 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
 def _two_name_leaderboard():
     screener.save_leaderboard(screener.build_leaderboard([
         screener.ScreenerResult("AAA", 88.0, "Strong Buy",
-                                {"valuation": screener.FactorResult(90.0, [])}, []),
+                                _full_factors(90.0), []),
         screener.ScreenerResult("BBB", 55.0, "Hold",
-                                {"valuation": screener.FactorResult(50.0, [])}, []),
+                                _full_factors(50.0), []),
     ]))
 
 
@@ -255,10 +263,10 @@ def test_watchlist_row_survives_a_ticker_whose_price_cannot_be_resolved():
 def test_leaderboard_shows_the_company_name_beside_the_ticker():
     lb = screener.build_leaderboard([
         screener.ScreenerResult("AAPL", 88.0, "Strong Buy",
-                                {"valuation": screener.FactorResult(90.0, [])}, [],
+                                _full_factors(90.0), [],
                                 company_name="Apple Inc"),
         screener.ScreenerResult("ZZZZ", 55.0, "Hold",
-                                {"valuation": screener.FactorResult(50.0, [])}, []),
+                                _full_factors(50.0), []),
     ])
     screener.save_leaderboard(lb)
 
@@ -278,7 +286,7 @@ def test_leaderboard_flags_stale_scores_instead_of_showing_them_as_current():
     # FX rate. The page must call the age out.
     lb = screener.build_leaderboard([
         screener.ScreenerResult("AAA", 70.0, "Buy",
-                                {"valuation": screener.FactorResult(70.0, [])}, []),
+                                _full_factors(70.0), []),
     ])
     lb["generated_at"] = (date.today() - timedelta(days=17)).isoformat()
     screener.save_leaderboard(lb)
@@ -294,7 +302,7 @@ def test_leaderboard_flags_stale_scores_instead_of_showing_them_as_current():
 def test_leaderboard_does_not_cry_stale_for_a_fresh_run():
     lb = screener.build_leaderboard([
         screener.ScreenerResult("AAA", 70.0, "Buy",
-                                {"valuation": screener.FactorResult(70.0, [])}, []),
+                                _full_factors(70.0), []),
     ])
     lb["generated_at"] = (date.today() - timedelta(days=2)).isoformat()
     screener.save_leaderboard(lb)

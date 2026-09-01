@@ -4,7 +4,7 @@ import pytest
 
 from engine.time_utils import utcnow
 
-from db.models import ApiCache
+from db.models import ApiCache, FundamentalsCache
 from db.session import get_session
 from engine import cache
 
@@ -213,3 +213,29 @@ def test_an_unexpired_value_never_calls_the_fetcher():
     got = cache.get_or_fetch(key, 3600, lambda: calls.append(1) or {"name": "X"},
                              fallback_to_stale=True)
     assert got == {"name": "Current Corp"} and calls == []
+
+
+def test_failed_fundamentals_refetch_serves_the_expired_row():
+    """The 20-hour TTL means a 503-name screen refetches nearly everything at
+    once; the refusals cost valuation, growth AND profitability together."""
+    cache.get_or_fetch_fundamentals("STALEF", 3600, lambda: {"metric": {"peTTM": 21.0}})
+    with get_session() as session:
+        session.get(FundamentalsCache, "STALEF").fetched_at = utcnow() - timedelta(days=3)
+
+    def boom():
+        raise RuntimeError("429")
+
+    got = cache.get_or_fetch_fundamentals("STALEF", 60, boom, fallback_to_stale=True)
+    assert got == {"metric": {"peTTM": 21.0}}
+
+
+def test_fundamentals_without_the_flag_still_raise():
+    cache.get_or_fetch_fundamentals("STALEF2", 3600, lambda: {"metric": {}})
+    with get_session() as session:
+        session.get(FundamentalsCache, "STALEF2").fetched_at = utcnow() - timedelta(days=3)
+
+    def boom():
+        raise RuntimeError("429")
+
+    with pytest.raises(RuntimeError):
+        cache.get_or_fetch_fundamentals("STALEF2", 60, boom)

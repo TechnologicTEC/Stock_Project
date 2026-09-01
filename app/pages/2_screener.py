@@ -89,6 +89,20 @@ def _render_leaderboard() -> None:
         # own sector and 55 generically. It used to show up only as a blank
         # company name in the table, which reads as a cosmetic glitch. One run
         # had 45 of 503 like this, and the bot traded on that ranking.
+        # Names the run could not score on enough real data to rank fairly.
+        # They are absent from the table rather than sitting in it on a partial
+        # score, so the count is the only place their absence is visible.
+        withheld = lb.get("n_withheld")
+        if withheld:
+            st.info(
+                f"**{withheld} name{'s' if withheld != 1 else ''} withheld from this ranking** — "
+                "their data provider lookups failed, leaving under half the scoring weight. A "
+                "score built on momentum and sentiment alone isn't comparable with one built on "
+                "all six factors, so they're left out rather than ranked against names that have "
+                "the full picture.",
+                icon="ℹ️",
+            )
+
         no_sector = lb.get("n_no_sector")
         scored = lb.get("n_scored") or len(rows)
         if no_sector and scored:

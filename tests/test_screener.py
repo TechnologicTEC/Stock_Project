@@ -652,10 +652,19 @@ def test_save_and_retrieve_score_history():
 # --------------------------------------------------------------------------
 
 def _sr(ticker, score, factors=None, name=None):
+    """A scored result with FULL factor coverage unless a test says otherwise.
+
+    The leaderboard now withholds names scored on under MIN_FACTOR_WEIGHT of
+    the weighting, so a fixture has to say what it covered. Full by default
+    keeps these tests about what they were always about — ranking, names,
+    payload shape — while the coverage tests set it deliberately.
+    """
+    scores = {name_: 70.0 for name_ in screener.FACTOR_WEIGHTS}
+    scores.update(factors or {})
     return screener.ScreenerResult(
         ticker=ticker, overall_score=score,
         recommendation=screener._recommendation_for(score) if score is not None else "No data",
-        factors={k: screener.FactorResult(score=v, reasons=[]) for k, v in (factors or {}).items()},
+        factors={k: screener.FactorResult(score=v, reasons=[]) for k, v in scores.items()},
         data_errors=[], company_name=name,
     )
 
@@ -749,14 +758,16 @@ def test_save_results_upserts_same_ticker_same_day():
 
 def _sr_with_industry(ticker, score, industry, bucket):
     """A result carrying the sector data the valuation scorer actually used."""
-    valuation = screener.FactorResult(
+    factors = {name: screener.FactorResult(score=70.0, reasons=[])
+               for name in screener.FACTOR_WEIGHTS}          # full coverage
+    factors["valuation"] = screener.FactorResult(
         score=70.0, reasons=[],
         raw={"pe": 20.0, "sector_bucket": bucket, "raw_industry": industry},
     )
     return screener.ScreenerResult(
         ticker=ticker, overall_score=score,
         recommendation=screener._recommendation_for(score),
-        factors={"valuation": valuation}, data_errors=[],
+        factors=factors, data_errors=[],
         company_name=None if industry is None else f"{ticker} Inc",
     )
 
@@ -795,3 +806,77 @@ def test_the_count_is_zero_when_every_name_has_its_sector():
 def test_a_result_without_valuation_raw_counts_as_missing_rather_than_crashing():
     lb = screener.build_leaderboard([_sr("AAPL", 80.0, name="Apple Inc")])
     assert lb["n_no_sector"] == 1
+
+
+# --------------------------------------------------------------------------
+# MIN_FACTOR_WEIGHT — redistributing weight stops being the same measurement
+# --------------------------------------------------------------------------
+
+def _factors(**scores):
+    return {name: screener.FactorResult(score=scores.get(name), reasons=[])
+            for name in screener.FACTOR_WEIGHTS}
+
+
+def test_a_name_missing_all_three_fundamentals_is_not_scored():
+    """The real case: valuation, growth and profitability are 60% between them,
+    so what is left is a momentum-and-sentiment score wearing the same label.
+    One run ranked such a name 3rd of 503 on a P/E it had never seen."""
+    partial = _factors(momentum=100.0, sentiment=57.0, analyst_confidence=72.9)
+    assert screener.combine_factor_scores(partial) == 77.1          # old behaviour
+    assert screener.combine_factor_scores(
+        partial, min_weight=screener.MIN_FACTOR_WEIGHT) is None
+
+
+def test_a_name_missing_only_valuation_is_still_scored():
+    """Redistributing is sound when one factor is missing — the rule is about
+    how much is gone, not whether anything is."""
+    nearly = _factors(growth=60.0, profitability=70.0, momentum=100.0,
+                      sentiment=57.0, analyst_confidence=72.9)
+    assert screener.combine_factor_scores(
+        nearly, min_weight=screener.MIN_FACTOR_WEIGHT) is not None
+
+
+def test_the_threshold_sits_above_the_broken_case_and_below_the_survivable_one():
+    W = screener.FACTOR_WEIGHTS
+    lost_fundamentals = W["momentum"] + W["sentiment"] + W["analyst_confidence"]
+    lost_valuation_only = 1.0 - W["valuation"]
+    assert lost_fundamentals < screener.MIN_FACTOR_WEIGHT <= lost_valuation_only
+
+
+def test_the_default_keeps_every_existing_caller_unchanged():
+    """Defaulting to 0.0 matters: the historical reconstruction runs without
+    valuation and sentiment BY DESIGN, and must not start returning None."""
+    reconstruction = _factors(growth=60.0, profitability=70.0, momentum=80.0)
+    assert screener.combine_factor_scores(reconstruction) is not None
+
+
+def test_the_historical_scorer_does_not_opt_in_to_the_minimum():
+    """Its coverage is a property of the design, not a data failure."""
+    import inspect
+
+    from engine import screener_history
+    src = inspect.getsource(screener_history)
+    assert "combine_factor_scores(factors)" in src
+    assert "min_weight" not in src
+
+
+def test_nothing_scored_is_still_none():
+    assert screener.combine_factor_scores(_factors()) is None
+    assert screener.combine_factor_scores(_factors(), min_weight=0.5) is None
+
+
+def test_the_leaderboard_withholds_a_name_scored_on_too_little_data():
+    """VRT's case: valuation, growth and profitability all missing, so the
+    published 77.1 was a momentum-and-sentiment score ranked 3rd of 503."""
+    thin = _sr("VRT", 77.1, {"valuation": None, "growth": None, "profitability": None})
+    full = _sr("KO", 70.0)
+    lb = screener.build_leaderboard([thin, full])
+    assert [r["ticker"] for r in lb["rows"]] == ["KO"]
+    assert lb["n_withheld"] == 1
+    assert lb["n_scored"] == 1
+
+
+def test_a_name_missing_one_factor_still_makes_the_leaderboard():
+    lb = screener.build_leaderboard([_sr("KO", 70.0, {"valuation": None})])
+    assert [r["ticker"] for r in lb["rows"]] == ["KO"]
+    assert lb["n_withheld"] == 0

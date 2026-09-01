@@ -89,6 +89,20 @@ INSIDER_LOOKBACK_DAYS = 180
 RSI_LENGTH = 14
 SMA_SHORT = 50
 
+# How much of the composite's weighting must be real data before a name may
+# appear ON THE LEADERBOARD. The three fundamental factors are 60% between
+# them, so losing them leaves a momentum-and-sentiment score that is no longer
+# comparable with a full one. 0.50 rejects that case (0.40 coverage) while
+# still allowing a name missing only valuation, or only sentiment and analyst.
+#
+# Applied at the leaderboard, NOT in screen_tickers. Screening a handful of
+# tickers by hand shows all six factor scores beside the total, so a partial
+# score there is transparent and still useful. A ranking of 503 shows one
+# column, and a name scored on 40% of the evidence sitting above one scored on
+# all of it is the thing that misleads — that is what put a stock with an
+# unseen P/E of 58.9 at rank 3, and into the bot's book.
+MIN_FACTOR_WEIGHT = 0.50
+
 FACTOR_WEIGHTS = {
     "valuation": 0.20,
     "growth": 0.20,
@@ -549,8 +563,14 @@ def _gather_raw_data(ticker: str) -> TickerRawData:
 
     fundamentals = None
     try:
+        # Yesterday's fundamentals beat none. Losing this call costs valuation,
+        # growth AND profitability at once — 60% of the composite — and the
+        # score is then renormalised across what is left, which quietly turns
+        # into a momentum-and-sentiment score wearing the same label.
         bundle = cache.get_or_fetch_fundamentals(
-            ticker, FUNDAMENTALS_TTL_SECONDS, lambda: finnhub_client.get_basic_financials(ticker)
+            ticker, FUNDAMENTALS_TTL_SECONDS,
+            lambda: finnhub_client.get_basic_financials(ticker),
+            fallback_to_stale=True,
         )
         fundamentals = (bundle or {}).get("metric")
     except Exception as exc:
@@ -992,15 +1012,32 @@ def _recommendation_for(score: float | None) -> str:
     return RECOMMENDATION_FLOOR
 
 
-def combine_factor_scores(factors: dict[str, FactorResult]) -> float | None:
+def combine_factor_scores(factors: dict[str, FactorResult],
+                          *, min_weight: float = 0.0) -> float | None:
     """Weight each factor per FACTOR_WEIGHTS, renormalized across only the
     factors that actually produced a score (so a missing factor — sentiment
     pre-Phase-4, or analyst/sentiment in a historical reconstruction — has its
     weight redistributed rather than counted as zero). Shared by the live
     screener and the point-in-time historical scorer so both combine
-    identically. Returns None if nothing scored."""
+    identically. Returns None if nothing scored.
+
+    `min_weight` refuses to score at all below that much real weighting.
+    Redistributing is sound when one factor is missing; past a point it stops
+    being the same measurement. A run that lost the fundamentals for 55 names
+    published them on 40% coverage — momentum, sentiment and analyst only, with
+    momentum's weight effectively rising from 15% to 37.5% — and ranked one of
+    them 3rd of 503 on a P/E it had never seen. Nothing on the page said those
+    numbers meant something different from their neighbours.
+
+    Defaults to 0.0 so no existing caller changes behaviour; the live screener
+    opts in via MIN_FACTOR_WEIGHT. The historical reconstruction deliberately
+    does not, because it is *expected* to run without valuation and sentiment
+    and its coverage is a property of the design rather than a failure.
+    """
     available = {name: fr for name, fr in factors.items() if fr.score is not None and name in FACTOR_WEIGHTS}
     if not available:
+        return None
+    if sum(FACTOR_WEIGHTS[name] for name in available) < min_weight - 1e-9:
         return None
     total_weight = sum(FACTOR_WEIGHTS[name] for name in available)
     overall = sum(FACTOR_WEIGHTS[name] * factors[name].score for name in available) / total_weight
@@ -1136,7 +1173,8 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
     can screen in chunks and concatenate — under ABSOLUTE scoring each ticker's
     score is independent of the others, so chunked results rank identically to one
     big call."""
-    scored = sorted((r for r in results if r.overall_score is not None),
+    scored = sorted((r for r in results
+                     if r.overall_score is not None and _weight_covered(r) >= MIN_FACTOR_WEIGHT - 1e-9),
                     key=lambda r: -r.overall_score)
     ranked = [
         {
@@ -1156,8 +1194,17 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
         "n_scored": len(ranked),
         "n_requested": len(results),
         "n_no_sector": _count_without_sector(scored),
+        "n_withheld": sum(1 for r in results if r.overall_score is not None
+                          and _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9),
         "rows": ranked,
     }
+
+
+def _weight_covered(result: ScreenerResult) -> float:
+    """How much of FACTOR_WEIGHTS this result actually scored."""
+    return sum(w for name, w in FACTOR_WEIGHTS.items()
+               if (result.factors or {}).get(name) is not None
+               and result.factors[name].score is not None)
 
 
 def _count_without_sector(results: list[ScreenerResult]) -> int:
