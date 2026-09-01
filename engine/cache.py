@@ -189,6 +189,40 @@ def get_price_history(ticker: str, source: str, start: date, end: date) -> list[
         ]
 
 
+def get_closes_for(tickers, source: str, start: date, end: date) -> dict:
+    """Closes for MANY tickers in one query: {TICKER: [(date, close), ...]}.
+
+    Same egress argument as `price_history.window`, one level up. The decile
+    spread prices a hundred names across a month, and doing that a ticker at a
+    time is a hundred round trips plus a hundred `ensure_cached` freshness
+    checks — measured at over two minutes against the pooler, which is far too
+    slow for something a page renders. One query is ~100ms.
+
+    A pure cache read, deliberately: it never fetches. A caller that needs a
+    cold ticker warmed should say so explicitly, and a caller that can tolerate
+    a gap (the spread reports what it could not price) should not pay for a
+    network round trip it did not ask for.
+    """
+    wanted = sorted({(t or "").upper() for t in tickers if t})
+    if not wanted:
+        return {}
+    out: dict[str, list] = {t: [] for t in wanted}
+    with get_session() as session:
+        stmt = (
+            select(PriceCache.ticker, PriceCache.date, PriceCache.close)
+            .where(
+                PriceCache.ticker.in_(wanted),
+                PriceCache.source == source,
+                PriceCache.date >= start,
+                PriceCache.date <= end,
+            )
+            .order_by(PriceCache.ticker, PriceCache.date)
+        )
+        for ticker, day, close in session.execute(stmt).all():
+            out.setdefault(ticker.upper(), []).append((day, close))
+    return out
+
+
 # --------------------------------------------------------------------------
 # 3. News — dedup by URL; staleness tracked via a marker key, since
 #    news_cache itself (Section 8) has no fetched_at column

@@ -143,16 +143,23 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     _log(f"  {len(targets)} targets -> {len(orders)} orders "
          f"(rebalance band ${executor.band_for(equity):,.2f})")
 
-    # A name the strategy wanted and declined produces no order, so without
-    # this it would leave no trace at all — and "we never considered it" and
-    # "we considered it and said no" are very different things to read back
-    # months later. Usually empty; that is the expected result.
+    # Journal rows a strategy wants written that aren't orders. Two kinds so
+    # far, and they only look alike from here: a name considered and declined,
+    # which would otherwise leave no trace at all ("we never considered it" and
+    # "we considered it and said no" read very differently months later), and
+    # top_decile_long's record of the decile it is tracking but not trading.
+    # Each note carries its own action/status, so the runner stays generic
+    # rather than growing a branch per strategy.
     for note in strategies.notes(strategy, ctx):
-        _log(f"    declined: {note.get('ticker')} ({note.get('code')})")
+        subject = note.get("ticker") or "recorded"
+        detail = f" ({note['code']})" if note.get("code") else ""
+        _log(f"    note: {subject}{detail}")
         journal.record(
             run_id=run_id, strategy=strategy, ticker=note.get("ticker"),
-            action=journal.SKIP, reason=note.get("reason") or "Declined.",
-            status=_status(dry_run, journal.BLOCKED), blocked_by=risk.LIQUIDITY,
+            action=note.get("action") or journal.SKIP,
+            reason=note.get("reason") or "Declined.",
+            status=_status(dry_run, note.get("status") or journal.BLOCKED),
+            blocked_by=note.get("blocked_by", risk.LIQUIDITY),
             inputs=note,
         )
 

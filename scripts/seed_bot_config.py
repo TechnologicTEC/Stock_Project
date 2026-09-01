@@ -102,6 +102,22 @@ SEED: list[dict] = [
         "starting_equity": 10_000.0,
         "enabled": True,
     },
+    {
+        "strategy": "top_decile_long",
+        "key_env_prefix": "ALPACA_TOP_DECILE_LONG",
+        # A decile of the 503-name leaderboard. Not a coincidence that it is
+        # also the largest book of the five — the point of this strategy is
+        # breadth, so the slot count IS the hypothesis.
+        "target_slots": 50,
+        "max_position_pct": 0.20,    # 1/50 = 2% binds by a mile; the cap is a backstop
+        # A full turnover is 50 sells + 50 buys. 110 leaves headroom so the cap
+        # can never silently truncate a rebalance half way through the book —
+        # a partial rebalance would leave the account holding neither the old
+        # decile nor the new one, which is the worst of both.
+        "max_orders_per_run": 110,
+        "starting_equity": 10_000.0,
+        "enabled": True,
+    },
 ]
 
 

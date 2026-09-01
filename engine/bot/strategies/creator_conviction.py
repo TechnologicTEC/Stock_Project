@@ -321,10 +321,15 @@ def liquidity_notes(ctx) -> list[dict]:
     entrants = eligible_entrants(ctx)
     if not entrants:
         return []
+    from engine.bot import journal, risk
+
     _tradable, excluded = liquidity.screen(
         [e["ticker"] for e in entrants],
         (ctx.extras or {}).get("frames") or {},
         common.notional_for(ctx),
         held=ctx.held_tickers(),
     )
-    return [a.as_note() for a in excluded]
+    # The routing keys travel with the note so the runner doesn't have to know
+    # which strategy sent it — see scripts/run_bot.py.
+    return [{**a.as_note(), "action": journal.SKIP, "status": journal.BLOCKED,
+             "blocked_by": risk.LIQUIDITY} for a in excluded]

@@ -104,6 +104,21 @@ def _notes_creator_conviction(ctx: Context) -> list[dict]:
     return creator_conviction.liquidity_notes(ctx)
 
 
+def _build_top_decile_long(ctx: Context) -> list[Target]:
+    from engine.bot.strategies import top_decile_long
+    return top_decile_long.build(ctx)
+
+
+def _prepare_top_decile_long(config: dict, today: date_) -> dict:
+    from engine.bot.strategies import top_decile_long
+    return top_decile_long.prepare(config, today)
+
+
+def _notes_top_decile_long(ctx: Context) -> list[dict]:
+    from engine.bot.strategies import top_decile_long
+    return top_decile_long.notes(ctx)
+
+
 # name -> (human label, builder, preparer|None). Imports are deferred inside the
 # callables so importing this registry stays cheap for the runner and the page.
 #
@@ -118,6 +133,8 @@ STRATEGIES: dict[str, tuple[str, object, object]] = {
                         _build_score_threshold, _prepare_score_threshold),
     "creator_conviction": ("Creator conviction (repeat bullish coverage)",
                            _build_creator_conviction, _prepare_creator_conviction),
+    "top_decile_long": ("Top decile long (breadth test, tracks the bottom)",
+                        _build_top_decile_long, _prepare_top_decile_long),
 }
 
 # Optional per-strategy observations the runner should journal alongside the
@@ -126,6 +143,7 @@ STRATEGIES: dict[str, tuple[str, object, object]] = {
 # doesn't change the shape every other strategy is read through.
 NOTES: dict[str, object] = {
     "creator_conviction": _notes_creator_conviction,
+    "top_decile_long": _notes_top_decile_long,
 }
 
 
