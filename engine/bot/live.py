@@ -78,4 +78,9 @@ def _position(p) -> dict:
         "market_value": _f(p.market_value) or 0.0,
         "unrealized_pl": _f(p.unrealized_pl),
         "unrealized_plpc": _f(p.unrealized_plpc),
+        # Today's move, which Alpaca has been returning all along — the Paper
+        # Trading page reads it, this reader just never copied it across, so the
+        # bot page could show a position up 6% since entry with no way to see it
+        # was down 3% this morning. Also a fraction, for the same reason.
+        "change_today_pct": _f(getattr(p, "change_today", None)),
     }

@@ -9,6 +9,7 @@ Two behaviours here are safety properties rather than cosmetics, and are tested
 as such: the page must never report an *unset* global switch as "off", and
 resuming a stopped strategy must take a deliberate second action.
 """
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -65,10 +66,23 @@ def _account_view(available=True, **overrides):
             "ticker": "SPY", "qty": 25.4, "avg_entry_price": 393.7,
             "current_price": 409.4, "market_value": 10_398.0,
             "unrealized_pl": 398.0, "unrealized_plpc": 0.0398,
+            "change_today_pct": 0.0072,
         }] if available else [],
     }
     base.update(overrides)
     return base
+
+
+def _fills():
+    """What journal.fills returns — oldest first, only rows that moved something.
+
+    `qty` is None because that is what a real buy looks like: the executor sizes
+    buys as NOTIONAL orders and lets the broker work out the shares. A fixture
+    that put a share count here would be testing a row the bot never writes.
+    """
+    return [{"ticker": "SPY", "decided_at": datetime(2026, 8, 18, 21, 45),
+             "action": journal.BUY, "qty": None, "notional": 9_999.98,
+             "reason": "Harness holds SPY at full weight.", "status": journal.SUBMITTED}]
 
 
 def _leaderboard(n=60):
@@ -99,12 +113,15 @@ _UNSET = object()      # so `spread=None` can mean "no snapshot yet", not "defau
 
 
 def _run(configs=None, curve=None, decisions=None, view=None, env=None,
-         leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET):
+         leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET,
+         fills=_UNSET, names=_UNSET, rebuilt=_UNSET):
     """Render the page with every external read stubbed.
 
     The panel readers are stubbed here too. Without them the strategy panels
     reach the real leaderboard and price cache, which makes the suite depend on
-    a warm database and quietly turns these into integration tests.
+    a warm database and quietly turns these into integration tests. The same
+    applies to the holdings readers added with the redesign — `bot_fills`,
+    `bot_position_names` and `bot_reconstructed_book` all hit the DB.
     """
     configs = [_config()] if configs is None else configs
     curve = _curve() if curve is None else curve
@@ -115,6 +132,12 @@ def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          patch("app._cache.bot_equity_curve", return_value=curve), \
          patch("app._cache.bot_decisions", return_value=decisions), \
          patch("app._cache.bot_account_view", return_value=view), \
+         patch("app._cache.bot_fills",
+               return_value=_fills() if fills is _UNSET else fills), \
+         patch("app._cache.bot_position_names",
+               return_value={"SPY": "SPDR S&P 500 ETF Trust"} if names is _UNSET else names), \
+         patch("app._cache.bot_reconstructed_book",
+               return_value=[] if rebuilt is _UNSET else rebuilt), \
          patch("app._cache.bot_leaderboard",
                return_value=_leaderboard() if leaderboard is _UNSET else leaderboard), \
          patch("app._cache.bot_creator_mentions",
@@ -133,6 +156,19 @@ def _body(at) -> str:
     return " ".join(m.value for m in at.markdown)
 
 
+def _strip(at) -> dict[str, str]:
+    """{label: value} from the quick-numbers strip.
+
+    The six figures used to be st.metric widgets and are now HTML, so the
+    assertions read the rendered page rather than a widget list. That is the
+    right level anyway: the page's job is what it puts on screen, not which
+    Streamlit primitive it reached for.
+    """
+    pairs = re.findall(r'<span class="k">(.*?)</span><span class="v ?[^"]*">(.*?)</span>',
+                       _body(at))
+    return {k: re.sub(r"<[^>]+>", "", v).strip() for k, v in pairs}
+
+
 # --------------------------------------------------------------------------
 # Rendering
 # --------------------------------------------------------------------------
@@ -146,8 +182,8 @@ def test_page_renders_the_comparison_and_a_strategy_tab():
     assert "SPY buy &amp; hold" in body or "SPY buy & hold" in body
     assert "SPY harness" in body                       # the strategy's label
 
-    labels = {m.label for m in at.metric}
-    assert {"Equity", "Return", "vs SPY", "Sharpe", "Max drawdown", "Days live"} <= labels
+    assert {"Equity", "Return", "vs SPY", "Sharpe", "Max drawdown",
+            "Days live"} <= set(_strip(at))
 
 
 def test_empty_config_table_explains_how_to_seed_rather_than_erroring():
@@ -159,9 +195,9 @@ def test_empty_config_table_explains_how_to_seed_rather_than_erroring():
 def test_sharpe_is_blank_on_a_short_run_but_return_still_shows():
     at = _run(curve=_curve(n=5))
     assert not at.exception
-    metrics = {m.label: m.value for m in at.metric}
-    assert metrics["Sharpe"] == "—"                    # withheld, not invented
-    assert metrics["Return"].startswith("+")           # descriptive, still reported
+    strip = _strip(at)
+    assert strip["Sharpe"] == "—"                      # withheld, not invented
+    assert strip["Return"].startswith("+")             # descriptive, still reported
 
 
 def test_banner_quantifies_the_error_bar_instead_of_just_warning():
@@ -227,14 +263,89 @@ def test_positions_carry_the_journalled_reason_as_why_its_held():
 
 
 def test_missing_alpaca_keys_costs_one_panel_not_the_page():
-    at = _run(view=_account_view(available=False))
+    """With no keys AND nothing journalled to rebuild from, the panel says so
+    and the rest of the page is untouched."""
+    at = _run(view=_account_view(available=False), fills=[], rebuilt=[])
     assert not at.exception
     body = _body(at)
-    assert "not connected from here" in body
+    assert "has not bought anything yet" in body
     assert "Missing credentials." in body
     # Everything DB-backed is still there.
     assert "How they compare" in body
-    assert {m.label for m in at.metric} >= {"Equity", "Return"}
+    assert set(_strip(at)) >= {"Equity", "Return"}
+
+
+def test_without_keys_the_book_is_rebuilt_from_the_journal():
+    """The deployed Space holds no bot key pairs, so this is its normal state —
+    and it used to mean an empty panel. The bot writes a quantity on every order
+    it places, so the holdings come back from the journal instead."""
+    at = _run(
+        view=_account_view(available=False),
+        rebuilt=[{"ticker": "SPY", "qty": 25.4, "avg_entry_price": 393.7,
+                  "current_price": 409.4, "market_value": 10_398.0,
+                  "unrealized_pl": 398.0, "unrealized_plpc": 0.0398,
+                  "change_today_pct": None, "priced_at": date(2026, 9, 1)}],
+    )
+    assert not at.exception
+    body = _body(at)
+
+    assert "SPDR S&amp;P 500 ETF Trust" in body or "SPDR S&P 500 ETF Trust" in body
+    assert "10,398.00" in body
+    assert "rebuilt from the journal" in body
+    # And it must never pass itself off as the broker's own numbers.
+    assert "Reconstructed, not live." in body
+    assert "priced 01 Sep" in body
+
+
+def test_a_reconstructed_book_never_claims_an_intraday_move():
+    """A close cannot answer "how is it doing today", so the column drops out
+    rather than rendering a column of dashes that looks like flat performance."""
+    at = _run(
+        view=_account_view(available=False),
+        rebuilt=[{"ticker": "SPY", "qty": 25.4, "avg_entry_price": 393.7,
+                  "current_price": 409.4, "market_value": 10_398.0,
+                  "unrealized_pl": 398.0, "unrealized_plpc": 0.0398,
+                  "change_today_pct": None, "priced_at": date(2026, 9, 1)}],
+    )
+    assert "<th class=\"num\">Today</th>" not in _body(at)
+
+
+def test_holdings_carry_the_company_name_and_todays_move():
+    at = _run()
+    body = _body(at)
+    assert "SPDR S&amp;P 500 ETF Trust" in body or "SPDR S&P 500 ETF Trust" in body
+    assert "<th class=\"num\">Today</th>" in body
+    assert "+0.7%" in body                             # change_today_pct, 0.0072
+
+
+def test_holdings_show_the_score_that_holds_them_where_there_is_a_ranking():
+    """The column that says whether a holding is still earning its slot. It only
+    appears when the strategy trades a ranked universe — golden cross and
+    creator conviction have no leaderboard behind them and get no column."""
+    ranked = _run(leaderboard={"rows": [{"ticker": "SPY", "name": "SPDR S&P 500 ETF Trust",
+                                         "rank": 3, "score": 81.2}]})
+    assert "81.2" in _body(ranked)
+    assert "rank 3" in _body(ranked)
+
+    unranked = _run(leaderboard={"rows": []})
+    assert "<th class=\"num\">Score</th>" not in _body(unranked)
+
+
+def test_holdings_show_how_long_each_name_has_been_held():
+    at = _run()
+    # Bought 18 Aug in _fills(); the page dates from "now", so just assert the
+    # column exists and carries a day count rather than pinning today's date.
+    body = _body(at)
+    assert "<th class=\"num\">Held</th>" in body
+    assert re.search(r'<td class="num dim">\d+d</td>', body)
+
+
+def test_the_decision_journal_is_collapsed_but_still_says_what_happened():
+    """It must not cost information to fold: the label carries the last run."""
+    at = _run()
+    labels = [e.label for e in at.expander]
+    assert any(label.startswith("Decision journal") for label in labels)
+    assert any("Recent decisions —" in label and "1 buy" in label for label in labels)
 
 
 # --------------------------------------------------------------------------

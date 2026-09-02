@@ -190,6 +190,75 @@ def bot_creator_mentions() -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_position_names(tickers: tuple[str, ...]) -> dict[str, str]:
+    """{TICKER: company name} for a strategy's holdings.
+
+    Almost free: the S&P leaderboard and the creator mention table are already
+    loaded above for other reasons and both carry a name, so this is a
+    dictionary join for every S&P or creator holding. Only a name in neither
+    reaches the profile lookup, which is itself DB-cached for 30 days.
+    """
+    from engine import portfolio
+    from engine.bot import positions
+
+    return positions.resolve_names(
+        tickers,
+        leaderboard_rows=(bot_leaderboard().get("rows") or []),
+        mentions=bot_creator_mentions(),
+        lookup=portfolio.get_profile_cached,
+    )
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_fills(strategy: str) -> list[dict]:
+    """Every journalled trade for one strategy, oldest first — the history the
+    holding dates and the reconstructed book are both replayed from."""
+    from engine.bot import journal
+
+    return journal.fills(strategy)
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_reconstructed_book(strategy: str) -> list[dict]:
+    """The book rebuilt from the journal and priced at the last cached close.
+
+    This is what the holdings panel falls back to when the Alpaca keys aren't in
+    the environment — which is the normal case on the deployed Space, where only
+    GitHub Actions holds them. Weaker than the broker's own numbers and labelled
+    as such on the page, but it is the bot's own trade history rather than an
+    empty panel.
+    """
+    from datetime import date as _date
+
+    from engine import cache as _price_cache
+    from engine import price_history
+    from engine.bot import positions
+
+    try:
+        fills = bot_fills(strategy)
+        if not fills:
+            return []
+
+        # Two passes over the same bars. The FIRST fill's date sets the window,
+        # because a dollar order has to be sized at the price it filled at —
+        # today's close cannot say how many shares $500 bought in September.
+        tickers = {(f.get("ticker") or "").upper() for f in fills if f.get("ticker")}
+        first = min((f["decided_at"] for f in fills if f.get("decided_at")), default=None)
+        start = first.date() if hasattr(first, "date") else (first or _date.today())
+        bars = _price_cache.get_bars_for(
+            tickers, price_history.canonical_source(), start, _date.today())
+
+        book = positions.book_from_fills(
+            fills, fill_price=positions.fill_price_lookup(bars))
+        if not book:
+            return []
+        closes = {t: [(d, c) for d, _o, c in series] for t, series in bars.items()}
+        return positions.price_book(book, closes)
+    except Exception:                        # noqa: BLE001 — a panel, not the page
+        return []
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def bot_sma_frame(ticker: str, lookback_days: int) -> list[dict]:
     """Closes plus the two SMAs golden_cross decides on, oldest first.
 

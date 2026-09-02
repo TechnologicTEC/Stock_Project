@@ -375,6 +375,13 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-table tbody tr:hover td {{ background: rgba(255,255,255,.015); }}
 .cp-table .tick {{ font-family: var(--cp-mono); font-weight: 600; letter-spacing:.02em; }}
 .cp-table .co {{ color: var(--cp-dim); font-size: 12px; }}
+/* A holdings row's headline number, so the value you came for isn't the same
+   13px as the caveat beside it. */
+.cp-table .big {{ font-size: 14.5px; font-weight: 600; }}
+/* The second line of a two-line cell — company name under a ticker, dollars
+   under a percentage. NOT .co, which is used inline in single-line cells on
+   four other pages and would start breaking lines there. */
+.cp-table .sub {{ display:block; color: var(--cp-muted); font-size: 11.5px; line-height: 1.3; margin-top: 1px; }}
 .cp-table .val {{ font-family: var(--cp-mono); font-variant-numeric: tabular-nums; }}
 .cp-table .up {{ color: var(--cp-up); }} .cp-table .down {{ color: var(--cp-down); }}
 /* keep the mono/tabular figures, but don't re-introduce right alignment */
@@ -385,6 +392,43 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 .cp-table .dim {{ color: var(--cp-muted); }}
 .cp-wbar {{ height: 5px; border-radius: 3px; background: var(--cp-line); overflow: hidden; min-width: 46px; display:inline-block; vertical-align: middle; }}
 .cp-wbar > i {{ display:block; height:100%; background: linear-gradient(90deg, var(--cp-accent-dim), var(--cp-accent)); }}
+
+/* ---------- stat strip ----------
+   Six st.metric cards cost 110px of height to say six things, and half of them
+   (Sharpe, drawdown, days) already sit in the comparison table further up the
+   page. The strip says the same six in 66px, which is what buys the holdings
+   table its place above the fold. A single flex row, not st.columns: the cells
+   size to their content and wrap as a group, where columns would hold six
+   fixed widths and squeeze "$11,605" into an ellipsis on a laptop. */
+.cp-strip {{
+  display: flex; flex-wrap: wrap; align-items: stretch;
+  background: linear-gradient(180deg, var(--cp-panel), var(--cp-panel-2));
+  border: 1px solid var(--cp-line); border-radius: 8px;
+  margin-bottom: 14px; overflow: hidden;
+}}
+.cp-strip .st {{ padding: 11px 18px; border-right: 1px solid var(--cp-line-soft); flex: 1 1 auto; min-width: 108px; }}
+.cp-strip .st:last-child {{ border-right: none; }}
+.cp-strip .st .k {{
+  font-family: var(--cp-mono); font-size: 9.5px; letter-spacing:.13em;
+  text-transform: uppercase; color: var(--cp-muted); display:block; margin-bottom: 3px;
+}}
+.cp-strip .st .v {{
+  font-family: var(--cp-mono); font-variant-numeric: tabular-nums; font-size: 19px;
+  font-weight: 600; letter-spacing: -.02em; color: var(--cp-text); display:block; line-height: 1.2;
+}}
+.cp-strip .st .v.up {{ color: var(--cp-up); }}
+.cp-strip .st .v.down {{ color: var(--cp-down); }}
+.cp-strip .st .v.dim {{ color: var(--cp-muted); }}
+/* the error bar / unit that rides along with a headline number */
+.cp-strip .st .se {{ font-family: var(--cp-mono); font-size: 11px; font-weight: 400; color: var(--cp-muted); }}
+
+/* One pip per slot: a 20-slot book holding 7 is a fact you should be able to
+   read without doing arithmetic on "7 / 20". The bar underneath a percentage
+   could only say *how full*; the pips say how full AND how big. */
+.cp-slots {{ display:flex; align-items:center; gap: 13px; padding: 11px 18px; flex: 1 1 250px; }}
+.cp-pips {{ display:flex; gap: 3px; flex-wrap: wrap; max-width: 190px; }}
+.cp-pip {{ width: 9px; height: 16px; border-radius: 2px; background: var(--cp-line); }}
+.cp-pip.f {{ background: linear-gradient(180deg, var(--cp-accent), #c9932f); }}
 
 /* ---------- signal confidence (uncertainty rendered as faintness) ---------- */
 .cp-conf .ic {{ display:flex; align-items:baseline; gap:10px; }}

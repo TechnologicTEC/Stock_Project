@@ -39,6 +39,7 @@ from app import _bot_panels, _cache, _theme
 from app._auth import gate
 from db.session import init_db
 from engine.bot import journal, performance, risk
+from engine.bot import positions as bot_positions
 from engine.bot import strategies as bot_strategies
 
 st.set_page_config(page_title="Trading Bot — Investment Co-Pilot", page_icon="📊", layout="wide")
@@ -58,7 +59,18 @@ JOURNAL_LIMIT = 400                          # per strategy, for the trade count
 # --------------------------------------------------------------------------
 
 def _money(v, dp: int = 0) -> str:
-    return f"${v:,.{dp}f}" if v is not None else "—"
+    """The sign goes OUTSIDE the dollar sign — "-$4.02", not "$-4.02". Cosmetic
+    everywhere else on the page, but the holdings table now puts a signed dollar
+    P&L under every percentage, so it appears on every row."""
+    if v is None:
+        return "—"
+    return f"{'-' if v < 0 else ''}${abs(v):,.{dp}f}"
+
+
+def _tidy_pct(v: float) -> str:
+    """A percentage with a decimal only where it earns one: 5% and 6.7%, not
+    "5.0%" beside "6.7%"."""
+    return f"{v:.1%}".replace(".0%", "%")
 
 
 def _pct(v, dp: int = 1) -> str:
@@ -128,6 +140,142 @@ _STATUS_BADGE = {
 
 def _status_badge(status: str) -> str:
     return _theme.badge_html(status or "—", _STATUS_BADGE.get(status, "h"))
+
+
+# --------------------------------------------------------------------------
+# The stat strip — six numbers in one band, replacing six metric cards.
+# --------------------------------------------------------------------------
+
+def _stat(key: str, value: str, *, cls: str = "", se: str | None = None) -> str:
+    """One cell. `value` and `se` are pre-formatted HTML, `key` is escaped."""
+    se_html = f' <span class="se">{se}</span>' if se else ""
+    return (f'<div class="st"><span class="k">{_esc(key)}</span>'
+            f'<span class="v {cls}">{value}{se_html}</span></div>')
+
+
+def _strip(*cells: str) -> None:
+    st.markdown(f'<div class="cp-strip">{"".join(c for c in cells if c)}</div>',
+                unsafe_allow_html=True)
+
+
+# Above this many slots the pips stop being countable and become a texture —
+# 50 of them wrap to five rows and say less than the bar they replaced. The
+# threshold is where "how many are filled" is still answerable at a glance.
+MAX_PIPS = 30
+
+
+def _slots_cell(held: int, slots: int) -> str:
+    """One pip per slot where they can be counted, the old bar where they can't."""
+    if slots and slots <= MAX_PIPS:
+        pips = "".join(f'<i class="cp-pip{" f" if i < held else ""}"></i>' for i in range(slots))
+        inner = f'<div class="cp-pips">{pips}</div>'
+    else:
+        fill = min(100.0, (held / slots * 100.0) if slots else 0.0)
+        inner = (f'<span class="cp-wbar" style="width:150px">'
+                 f'<i style="width:{fill:.0f}%"></i></span>')
+    return ('<div class="cp-slots"><div>'
+            '<span class="k" style="font-family:var(--cp-mono);font-size:9.5px;'
+            'letter-spacing:.13em;text-transform:uppercase;color:var(--cp-muted);'
+            'display:block;margin-bottom:5px">Slots</span>'
+            f'{inner}</div></div>')
+
+
+# --------------------------------------------------------------------------
+# The holdings table. Columns appear only when some row can fill them: a
+# strategy with no ranking behind it (golden cross, creator conviction) would
+# otherwise carry a Score column of em dashes, and a book rebuilt from the
+# journal has no intraday move to report.
+# --------------------------------------------------------------------------
+
+def _positions_table(rows: list[dict]) -> str:
+    has_today = any(r.get("change_today_pct") is not None for r in rows)
+    has_score = any(r.get("score") is not None for r in rows)
+    has_reason = any(r.get("reason") for r in rows)
+    has_held = any(r.get("days_held") is not None for r in rows)
+
+    head = ['<th>Holding</th>', '<th class="num">Value</th>', '<th class="num">P&amp;L</th>']
+    if has_today:
+        head.append('<th class="num">Today</th>')
+    head.append('<th class="num">Weight</th>')
+    head.append('<th class="num">Shares</th>')
+    head.append('<th class="num">Entry &rarr; now</th>')
+    if has_held:
+        head.append('<th class="num">Held</th>')
+    if has_score:
+        head.append('<th class="num">Score</th>')
+    if has_reason:
+        head.append("<th>Why it's held</th>")
+
+    body = []
+    for r in rows:
+        name = r.get("name")
+        weight = r.get("weight")
+        cells = [
+            f'<td><span class="tick">{_esc(r["ticker"])}</span>'
+            + (f'<span class="sub">{_esc(name)}</span>' if name else "")
+            + "</td>",
+            f'<td class="num big">{_money(r.get("market_value"), 2)}</td>',
+            f'<td class="num {_cls(r.get("unrealized_pl"))}">'
+            f'{_signed_pct(r.get("unrealized_plpc"), 2)}'
+            f'<span class="sub {_cls(r.get("unrealized_pl"))}">'
+            f'{_money(r.get("unrealized_pl"), 2)}</span></td>',
+        ]
+        if has_today:
+            cells.append(f'<td class="num {_cls(r.get("change_today_pct"))}">'
+                         f'{_signed_pct(r.get("change_today_pct"), 1)}</td>')
+        # The weight bar is scaled to a QUARTER of the book, not to 100%: at
+        # 50 slots every position is 2% and a bar scaled to the whole book would
+        # be one pixel on every row, encoding nothing.
+        bar = (f'<div class="cp-wbar" style="display:block;width:54px;margin-top:5px">'
+               f'<i style="width:{min(100.0, weight * 400):.0f}%"></i></div>'
+               ) if weight is not None else ""
+        cells.append(f'<td class="num dim">{_pct(weight, 1)}{bar}</td>')
+        cells.append(f'<td class="num dim">{_num(r.get("qty"), 4)}</td>')
+        cells.append(f'<td class="num dim">{_money(r.get("avg_entry_price"), 2)} &rarr; '
+                     f'{_money(r.get("current_price"), 2)}</td>')
+        if has_held:
+            days = r.get("days_held")
+            cells.append(f'<td class="num dim">{days}d</td>' if days is not None
+                         else '<td class="num dim">—</td>')
+        if has_score:
+            score, rank = r.get("score"), r.get("rank")
+            if score is None:
+                cells.append('<td class="num dim">—</td>')
+            else:
+                rank_html = f'<span class="sub">rank {rank}</span>' if rank else ""
+                cells.append(f'<td class="num">{_theme.badge_html(f"{score:.1f}", "sb")}'
+                             f"{rank_html}</td>")
+        if has_reason:
+            cells.append(f'<td class="dim" style="max-width:230px;font-size:12px">'
+                         f'{_esc(r.get("reason") or "—")}</td>')
+        body.append(f"<tr>{''.join(cells)}</tr>")
+
+    return ('<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+            f'{"".join(head)}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
+
+
+def _last_run_summary(decisions: list[dict]) -> str:
+    """What the newest run did, in one line — so a COLLAPSED journal still
+    answers the daily question. Hiding the panel must not hide the fact that it
+    ran, or the fold saves pixels by costing information."""
+    if not decisions:
+        return "no runs yet"
+    newest = decisions[0]
+    run = [d for d in decisions if d.get("run_id") == newest.get("run_id")]
+    traded = [d for d in run if d["status"] in (journal.SUBMITTED, journal.FILLED)]
+    buys = sum(1 for d in traded if (d.get("action") or "").lower() == "buy")
+    sells = len(traded) - buys
+    blocked = sum(1 for d in run if d["status"] in (journal.BLOCKED, journal.ERROR))
+
+    did = []
+    if buys:
+        did.append(f"{buys} buy{'s' if buys != 1 else ''}")
+    if sells:
+        did.append(f"{sells} sell{'s' if sells != 1 else ''}")
+    if blocked:
+        did.append(f"{blocked} blocked")
+    return (f"last run {newest['decided_at']:%d %b %H:%M} UTC · "
+            + (", ".join(did) if did else "nothing to do"))
 
 
 # --------------------------------------------------------------------------
@@ -402,6 +550,13 @@ st.markdown("### Per strategy")
 tab_rows = sorted(rows, key=lambda r: bot_strategies.display_index(r["name"]))
 tabs = st.tabs([bot_strategies.short_label(r["name"]) for r in tab_rows])
 
+# The ranking the screener strategies trade off, fetched once for all tabs. It
+# carries a company name, score and rank per ticker, which is what turns the
+# holdings table from a list of symbols into something you can read. Strategies
+# that don't trade the S&P (golden cross, creator conviction) simply find no
+# match and their columns drop out.
+leaderboard_rows = list(_cache.bot_leaderboard().get("rows") or [])
+
 for tab, r in zip(tabs, tab_rows):
     with tab:
         name, cfg, s, curve = r["name"], r["config"], r["summary"], r["curve"]
@@ -414,24 +569,28 @@ for tab, r in zip(tabs, tab_rows):
         elif not cfg.get("enabled"):
             st.info(f"**{r['label']} is disabled** in `bot_config` and won't run.")
 
-        m = st.columns(6)
-        # Whole dollars: six metric columns leave ~190px each, and at the card's
-        # 1.7rem value size "$11,605.94" ellipsises to "$11,605...". Cents on a
-        # $10k paper account are worth less than the truncation costs.
-        m[0].metric("Equity", _money(s["equity"], 0))
-        m[1].metric("Return", _signed_pct(s["total_return"]))
-        m[2].metric("vs SPY", _signed_pct(s["excess_return"]),
-                    help="Percentage points against SPY bought on this strategy's first day.")
-        m[3].metric(
-            "Sharpe", _num(s["sharpe"]),
-            delta=f"±{s['sharpe_se']:.1f} SE" if s["sharpe_se"] else None,
-            delta_color="off",
-            help=f"Annualised, zero risk-free rate. Not estimated below "
-                 f"{performance.MIN_POINTS_FOR_SHARPE} daily returns — at short samples the error "
-                 "bar is wider than the estimate.",
+        # ---- quick numbers ----
+        # Six st.metric cards became one strip. Same six figures, 66px instead
+        # of 110, and the height is what buys the holdings table its place. The
+        # Sharpe keeps its error bar inline rather than in a delta slot, so the
+        # estimate and its uncertainty stay one number rather than two rows.
+        if s["sharpe"] is None:
+            sharpe_html, sharpe_cls, sharpe_se = "—", "dim", None
+        else:
+            se = s["sharpe_se"]
+            sharpe_html = f'{s["sharpe"]:.2f}'
+            sharpe_cls = "dim" if (se is not None and se >= abs(s["sharpe"])) else ""
+            sharpe_se = f"±{se:.1f}" if se is not None else None
+
+        _strip(
+            _stat("Equity", _money(s["equity"], 0)),
+            _stat("Return", _signed_pct(s["total_return"]), cls=_cls(s["total_return"])),
+            _stat("vs SPY", _signed_pct(s["excess_return"]), cls=_cls(s["excess_return"])),
+            _stat("Sharpe", sharpe_html, cls=sharpe_cls, se=sharpe_se),
+            _stat("Max drawdown", _pct(s["max_drawdown"]),
+                  cls="down" if s["max_drawdown"] else "dim"),
+            _stat("Days live", f"{s['days']}"),
         )
-        m[4].metric("Max drawdown", _pct(s["max_drawdown"]))
-        m[5].metric("Days live", f"{s['days']}")
 
         # ---- this strategy's own account value, with SPY dashed behind it ----
         if len(curve) >= 2:
@@ -478,13 +637,11 @@ for tab, r in zip(tabs, tab_rows):
                                   legend=dict(orientation="h", y=-0.2))
                 fig.update_yaxes(title_text="Account value (USD)",
                                  range=[lo - pad, hi + pad])
+                # The caption that used to sit here now lives in "How this
+                # strategy works" at the foot of the tab. It explains the chart
+                # rather than reading it, and an explanation you have already
+                # read is just something between you and the next panel.
                 st.plotly_chart(fig, width="stretch", key=f"bot_curve_{name}", theme=None)
-                st.caption(
-                    "The same y-axis convention on every tab, so flipping between them is a fair "
-                    "visual comparison. This answers a different question from the chart above — "
-                    "not *which is ahead* but *how this one got here*: whether the return came from "
-                    "a steady grind or one lucky week, and where the drawdown actually happened."
-                )
         else:
             _theme.panel("Account value",
                          '<p class="cp-note">Needs at least two daily snapshots to draw a line. '
@@ -504,88 +661,131 @@ for tab, r in zip(tabs, tab_rows):
             held_now = s["positions_count"] or 0
             cash_now, equity_now = s["cash"], s["equity"]
         cash_pct = (cash_now / equity_now) if (cash_now is not None and equity_now) else None
-        fill = min(100.0, held_now / slots * 100.0)
+        invested_pct = (1.0 - cash_pct) if cash_pct is not None else None
 
-        _theme.panel(
-            "Slot usage",
-            f'<div class="cp-conf"><span class="cp-wbar" style="width:100%">'
-            f'<i style="width:{fill:.0f}%"></i></span></div>'
-            f'<p class="cp-note"><b>{held_now} of {slots}</b> slots filled · '
-            f'{_money(cash_now)} cash ({_pct(cash_pct, 0)}) · position size is '
-            f'<b>equity × min(1/{slots}, {(cfg.get("max_position_pct") or 1.0):.0%})</b>. '
-            "Unfilled slots are held as cash — the same sizing rule runs on every strategy, so "
-            "these curves test the <i>signals</i> rather than a different sizing scheme each."
-            "</p>",
-            tag=f"{fill:.0f}% invested",
+        # ---- slots, filled, cash ----
+        _strip(
+            _slots_cell(held_now, slots),
+            _stat("Filled", f"{held_now}", se=f"/ {slots}"),
+            _stat("Cash", _money(cash_now, 0), se=_pct(cash_pct, 0)),
+            _stat("Invested", _pct(invested_pct, 0)),
+            _stat("Position size",
+                  f'equity × {_tidy_pct(min(1 / slots, cfg.get("max_position_pct") or 1.0))}'
+                  if slots else "—"),
         )
 
-        if view["available"] and view["positions"]:
-            # "Why it's held" comes from the most recent journalled reason for
-            # that ticker — the strategy explaining itself in its own vocabulary,
-            # which is the column that makes this page worth opening.
-            reason_by_ticker: dict[str, str] = {}
-            for d in r["decisions"]:                       # newest first, first hit wins
-                if d["ticker"] and d["ticker"] not in reason_by_ticker and d["reason"]:
-                    reason_by_ticker[d["ticker"]] = d["reason"]
+        # ---- open positions ----
+        # Two sources, one table. Live from the broker where the key pair is in
+        # the environment; otherwise replayed from the journal and priced at the
+        # last cached close, which is what the deployed Space gets — it holds no
+        # bot keys, only GitHub Actions does. The reconstruction is weaker (it
+        # assumes a submitted order filled, and a close is not "now") so it is
+        # labelled as such rather than passed off as live.
+        if view["available"]:
+            raw, live_book = view["positions"], True
+        else:
+            raw, live_book = _cache.bot_reconstructed_book(name), False
 
-            body = "".join(
-                f'<tr><td><span class="tick">{_esc(p["ticker"])}</span></td>'
-                f'<td class="num">{p["qty"]:g}</td>'
-                f'<td class="num dim">{_money(p["avg_entry_price"], 2)}</td>'
-                f'<td class="num">{_money(p["current_price"], 2)}</td>'
-                f'<td class="num">{_money(p["market_value"], 2)}</td>'
-                f'<td class="num {_cls(p["unrealized_pl"])}">{_money(p["unrealized_pl"], 2)}</td>'
-                f'<td class="num {_cls(p["unrealized_plpc"])}">{_signed_pct(p["unrealized_plpc"])}</td>'
-                f'<td class="dim">{_esc(reason_by_ticker.get(p["ticker"], "—"))}</td></tr>'
-                for p in sorted(view["positions"], key=lambda x: -x["market_value"])
+        if raw:
+            fills = _cache.bot_fills(name)
+            enriched = bot_positions.enrich(
+                raw,
+                equity=equity_now,
+                names=_cache.bot_position_names(tuple(p["ticker"] for p in raw)),
+                ranks=bot_positions.rank_index(leaderboard_rows),
+                reasons=bot_positions.latest_reasons(r["decisions"]),
+                since=bot_positions.held_since(fills),
+                today=now.date(),
             )
-            _theme.panel(
-                "Open positions",
-                '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-                '<th>Ticker</th><th class="num">Shares</th><th class="num">Entry</th>'
-                '<th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th>'
-                '<th class="num">P&amp;L %</th><th>Why it\'s held</th></tr></thead>'
-                f"<tbody>{body}</tbody></table></div>",
-                tag=f"{len(view['positions'])} open · live from Alpaca",
-            )
+            invested = sum(p.get("market_value") or 0.0 for p in enriched)
+
+            if live_book:
+                tag = f"{len(enriched)} held · {_money(invested)} invested · live from Alpaca"
+                footer = ""
+            else:
+                priced = next((p.get("priced_at") for p in raw if p.get("priced_at")), None)
+                tag = (f"{len(enriched)} held · rebuilt from the journal"
+                       + (f" · priced {priced:%d %b}" if priced else ""))
+                footer = (
+                    '<p class="cp-foot"><b>Reconstructed, not live.</b> No Alpaca key pair for '
+                    "this strategy in this environment, so these are the bot's own filled "
+                    "quantities priced at the last cached close — not the broker's position "
+                    "list, and not an intraday value. Everything else on this tab is read from "
+                    f'the database and is unaffected.</p><p class="cp-foot">'
+                    f'{_esc(view["error"])}</p>')
+
+            _theme.panel("Open positions", _positions_table(enriched) + footer, tag=tag)
         elif view["available"]:
             _theme.panel("Open positions",
                          '<p class="cp-note">The account holds nothing right now — all cash.</p>')
         else:
             _theme.panel(
                 "Open positions",
-                '<p class="cp-note">Live position detail needs this strategy\'s Alpaca key pair in '
-                "the environment. Everything above is read from the database and is unaffected."
+                '<p class="cp-note">No Alpaca key pair for this strategy here, and the journal '
+                "has no filled orders to rebuild a book from — so this strategy has not bought "
+                "anything yet. Everything above is read from the database and is unaffected."
                 f'</p><p class="cp-foot">{_esc(view["error"])}</p>',
-                tag="not connected from here",
+                tag="nothing to show",
             )
 
         # ---- the panel only this strategy can have ----
         _bot_panels.render(name, cfg, view)
 
         # ---- what it decided, including the runs where nothing happened ----
+        # Folded away, but the LABEL carries the last run's outcome. Collapsing
+        # a panel is only free if the collapsed state still answers the question
+        # the panel existed for — "did it run today, and what did it do" —
+        # otherwise the fold saves pixels by costing information.
         recent = r["decisions"][:15]
-        if recent:
-            body = "".join(
-                f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
-                f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
-                f'<td>{_esc((d["action"] or "").title())}</td>'
-                f'<td>{_esc(d["reason"])}</td>'
-                f'<td>{_status_badge(d["status"])}'
-                + (f' <span class="dim">{_esc(d["blocked_by"])}</span>' if d["blocked_by"] else "")
-                + "</td></tr>"
-                for d in recent
+        with st.expander(f"Recent decisions — {_last_run_summary(r['decisions'])}"):
+            if recent:
+                body = "".join(
+                    f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
+                    f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
+                    f'<td>{_esc((d["action"] or "").title())}</td>'
+                    f'<td>{_esc(d["reason"])}</td>'
+                    f'<td>{_status_badge(d["status"])}'
+                    + (f' <span class="dim">{_esc(d["blocked_by"])}</span>'
+                       if d["blocked_by"] else "")
+                    + "</td></tr>"
+                    for d in recent
+                )
+                _theme.panel(
+                    "Recent decisions",
+                    '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+                    '<th>When</th><th>Ticker</th><th>Action</th><th>Reason</th><th>Result</th>'
+                    f"</tr></thead><tbody>{body}</tbody></table></div>",
+                    tag=f"{len(recent)} of {len(r['decisions'])}",
+                )
+            else:
+                _theme.panel("Recent decisions",
+                             '<p class="cp-note">This strategy hasn\'t run yet.</p>')
+
+        # ---- the prose that used to sit between every panel ----
+        # Six explanatory captions per tab were six things to scroll past on the
+        # 250th day of reading the same tab. Gathered here so the tab is numbers
+        # by default and an explanation on request.
+        with st.expander("How this strategy works"):
+            st.markdown(
+                f"**Sizing.** Every position is `equity × min(1/{slots}, "
+                f"{(cfg.get('max_position_pct') or 1.0):.0%})`, so it grows with the account "
+                "instead of being pinned to a dollar figure. The same rule runs on all six "
+                "strategies on purpose — these curves are meant to test the *signals*, not six "
+                "different sizing schemes.\n\n"
+                f"**Unfilled slots stay in cash.** {held_now} of {slots} are working; the rest "
+                "isn't idle by accident, it's the strategy declining to buy something it doesn't "
+                "rate.\n\n"
+                "**The chart.** Every tab uses the same y-axis convention — framed on the data, "
+                "not on zero — so flipping between tabs is a fair visual comparison. It answers a "
+                "different question from the chart at the top of the page: not *which is ahead* "
+                "but *how this one got here* — a steady grind or one lucky week, and where the "
+                "drawdown actually happened.\n\n"
+                "**Holdings.** Value, P&L and today's move come from the broker. The company "
+                "name, score and rank come from the cached S&P ranking the bot trades off, so "
+                "the score you see is the one it will act on next run. *Held* counts from the "
+                "first buy of the current holding — a name bought, sold and bought again dates "
+                "from the second buy."
             )
-            _theme.panel(
-                "Recent decisions",
-                '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-                '<th>When</th><th>Ticker</th><th>Action</th><th>Reason</th><th>Result</th>'
-                f"</tr></thead><tbody>{body}</tbody></table></div>",
-                tag=f"{len(recent)} of {len(r['decisions'])}",
-            )
-        else:
-            _theme.panel("Recent decisions",
-                         '<p class="cp-note">This strategy hasn\'t run yet.</p>')
 
         # ---- the one control on the page ----
         with st.expander("Controls"):
@@ -621,54 +821,68 @@ for tab, r in zip(tabs, tab_rows):
 
 
 # --------------------------------------------------------------------------
-# The global journal. The rows worth having are the ones where nothing happened.
+# The global journal. The rows worth having are the ones where nothing happened
+# — but that is a question you ask occasionally, not a table you want between
+# you and the page every day. Folded, with the last run named on the label so
+# the collapsed state still says whether the bot ran at all.
+#
+# Worth knowing: Streamlit runs an expander's body whether or not it is open, so
+# this saves screen space rather than query time. That's fine — every read
+# inside it goes through _cache — but it does mean the filters below are
+# evaluated on every rerun regardless.
 # --------------------------------------------------------------------------
 
-st.markdown("### Decision journal")
-st.caption(
-    "Every strategy, newest first. The interesting rows are the ones where **nothing happened** — "
-    "an order blocked by a full slot list, a name skipped by a filter, a duplicate refused on a "
-    "workflow retry. A log of fills tells you what the bot did; this tells you what it decided."
-)
+# Deliberately NOT _last_run_summary here: that summarises one run_id, which
+# belongs to a single strategy. "7 buys" on a label that says "every strategy"
+# would be a wrong number rather than a short one.
+_journal_label = (f"newest {last_decided:%d %b %H:%M} UTC" if last_decided
+                  else "nothing journalled yet")
 
-f1, f2, f3 = st.columns([2, 2, 1])
-pick = f1.selectbox("Strategy", ["All strategies"] + [r["label"] for r in rows], index=0)
-statuses = f2.multiselect(
-    "Result",
-    [journal.SUBMITTED, journal.FILLED, journal.BLOCKED, journal.SKIPPED,
-     journal.DRY_RUN, journal.ERROR],
-    default=[],
-    placeholder="Any result",
-)
-limit = f3.number_input("Rows", min_value=10, max_value=500, value=60, step=10)
-
-_selected = next((r["name"] for r in rows if r["label"] == pick), None)
-entries = _cache.bot_decisions(_selected, int(limit) * (1 if _selected else 3))
-if statuses:
-    entries = [d for d in entries if d["status"] in statuses]
-entries = entries[: int(limit)]
-
-_label_by_name = {r["name"]: r["label"] for r in rows}
-
-if entries:
-    body = "".join(
-        f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
-        f'<td class="dim">{_esc(_label_by_name.get(d["strategy"], d["strategy"]))}</td>'
-        f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
-        f'<td>{_esc((d["action"] or "").title())}</td>'
-        f'<td>{_esc(d["reason"])}</td>'
-        f'<td>{_status_badge(d["status"])}'
-        + (f' <span class="dim">{_esc(d["blocked_by"])}</span>' if d["blocked_by"] else "")
-        + "</td></tr>"
-        for d in entries
+with st.expander(f"Decision journal — every strategy · {_journal_label}"):
+    st.caption(
+        "Newest first. The interesting rows are the ones where **nothing happened** — an order "
+        "blocked by a full slot list, a name skipped by a filter, a duplicate refused on a "
+        "workflow retry. A log of fills tells you what the bot did; this tells you what it decided."
     )
-    _theme.panel(
-        "All decisions",
-        '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-        '<th>When</th><th>Strategy</th><th>Ticker</th><th>Action</th><th>Reason</th>'
-        f"<th>Result</th></tr></thead><tbody>{body}</tbody></table></div>",
-        tag=f"{len(entries)} rows",
+
+    f1, f2, f3 = st.columns([2, 2, 1])
+    pick = f1.selectbox("Strategy", ["All strategies"] + [r["label"] for r in rows], index=0)
+    statuses = f2.multiselect(
+        "Result",
+        [journal.SUBMITTED, journal.FILLED, journal.BLOCKED, journal.SKIPPED,
+         journal.DRY_RUN, journal.ERROR],
+        default=[],
+        placeholder="Any result",
     )
-else:
-    _theme.panel("All decisions",
-                 '<p class="cp-note">No decisions match those filters yet.</p>')
+    limit = f3.number_input("Rows", min_value=10, max_value=500, value=60, step=10)
+
+    _selected = next((r["name"] for r in rows if r["label"] == pick), None)
+    entries = _cache.bot_decisions(_selected, int(limit) * (1 if _selected else 3))
+    if statuses:
+        entries = [d for d in entries if d["status"] in statuses]
+    entries = entries[: int(limit)]
+
+    _label_by_name = {r["name"]: r["label"] for r in rows}
+
+    if entries:
+        body = "".join(
+            f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
+            f'<td class="dim">{_esc(_label_by_name.get(d["strategy"], d["strategy"]))}</td>'
+            f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
+            f'<td>{_esc((d["action"] or "").title())}</td>'
+            f'<td>{_esc(d["reason"])}</td>'
+            f'<td>{_status_badge(d["status"])}'
+            + (f' <span class="dim">{_esc(d["blocked_by"])}</span>' if d["blocked_by"] else "")
+            + "</td></tr>"
+            for d in entries
+        )
+        _theme.panel(
+            "All decisions",
+            '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
+            '<th>When</th><th>Strategy</th><th>Ticker</th><th>Action</th><th>Reason</th>'
+            f"<th>Result</th></tr></thead><tbody>{body}</tbody></table></div>",
+            tag=f"{len(entries)} rows",
+        )
+    else:
+        _theme.panel("All decisions",
+                     '<p class="cp-note">No decisions match those filters yet.</p>')

@@ -270,6 +270,35 @@ def get_closes_for(tickers, source: str, start: date, end: date) -> dict:
     return out
 
 
+def get_bars_for(tickers, source: str, start: date, end: date) -> dict:
+    """`{TICKER: [(date, open, close), ...]}` — same bulk read as
+    `get_closes_for`, with the open alongside.
+
+    The open earns its place for one reason: the bot submits after the close and
+    fills at the NEXT open, so reconstructing what a dollar order actually
+    bought needs the open, not the close of the day it was decided. Also a pure
+    cache read — it never fetches.
+    """
+    wanted = sorted({(t or "").upper() for t in tickers if t})
+    if not wanted:
+        return {}
+    out: dict[str, list] = {t: [] for t in wanted}
+    with get_session() as session:
+        stmt = (
+            select(PriceCache.ticker, PriceCache.date, PriceCache.open, PriceCache.close)
+            .where(
+                PriceCache.ticker.in_(wanted),
+                PriceCache.source == source,
+                PriceCache.date >= start,
+                PriceCache.date <= end,
+            )
+            .order_by(PriceCache.ticker, PriceCache.date)
+        )
+        for ticker, day, open_, close in session.execute(stmt).all():
+            out.setdefault(ticker.upper(), []).append((day, open_, close))
+    return out
+
+
 # --------------------------------------------------------------------------
 # 3. News — dedup by URL; staleness tracked via a marker key, since
 #    news_cache itself (Section 8) has no fetched_at column

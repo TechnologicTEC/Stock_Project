@@ -211,6 +211,46 @@ def recent_decisions(strategy: str | None = None, limit: int = 50) -> list[dict]
         ]
 
 
+def fills(strategy: str) -> list[dict]:
+    """Every row that moved shares, OLDEST first — the trade history a book is
+    made of.
+
+    Deliberately unlimited, unlike `recent_decisions`. Rebuilding a position
+    from its buys and sells is not approximately right when the earliest buy has
+    scrolled off the end of a limit — it is wrong, and silently so. Filtering to
+    rows that moved something keeps the query small anyway: the journal's bulk
+    is blocked and skipped rows, which never touched a share.
+
+    A row qualifies on qty OR notional, and it has to be both: the executor buys
+    in DOLLARS (`notional` set, `qty` null) and sells in SHARES (`qty` set, so a
+    full exit leaves no dust). Requiring a quantity here would silently drop
+    every buy the bot has ever made and rebuild every book as empty.
+
+    SUBMITTED counts as a trade because the journal has no filled state to move
+    to — `scripts/check_fills.py` grades fills by reading Alpaca and does not
+    write back. So SUBMITTED means "reached the broker and was not pulled";
+    CANCELLED and ERROR rows are excluded by the same filter.
+    """
+    with get_session() as session:
+        rows = session.execute(
+            select(BotDecision)
+            .where(
+                BotDecision.strategy == strategy,
+                BotDecision.status.in_((SUBMITTED, FILLED)),
+                (BotDecision.qty.is_not(None)) | (BotDecision.notional.is_not(None)),
+            )
+            .order_by(BotDecision.decided_at)
+        ).scalars().all()
+        return [
+            {
+                "ticker": d.ticker, "decided_at": d.decided_at, "action": d.action,
+                "qty": d.qty, "notional": d.notional, "reason": d.reason,
+                "status": d.status,
+            }
+            for d in rows
+        ]
+
+
 # --------------------------------------------------------------------------
 # Equity snapshots
 # --------------------------------------------------------------------------
