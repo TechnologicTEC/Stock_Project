@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date as date_
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,18 +41,40 @@ from engine.bot import accounts, journal                    # noqa: E402
 DEFAULT_TOLERANCE_PCT = 0.5
 
 OK, WIDE, IMPOSSIBLE, UNGRADED = "ok", "wide", "impossible", "ungraded"
+INTRADAY = "intraday"
+
+# How long after the opening bell a fill can still be called an opening fill.
+# The auction itself prints within seconds; five minutes is slack for the
+# broker stamping `filled_at` and for a slow paper simulator.
+OPEN_WINDOW_MINUTES = 5
 
 
 def compare(fill_price: float, bar: dict | None, *,
-            tolerance_pct: float = DEFAULT_TOLERANCE_PCT) -> dict:
+            tolerance_pct: float = DEFAULT_TOLERANCE_PCT,
+            minutes_after_open: float | None = None) -> dict:
     """Grade one fill against its day's bar. Pure — no I/O, so it's unit tested.
 
-    Two distinct failures, deliberately not merged:
-      WIDE       the fill is off the open by more than the spread should allow.
-      IMPOSSIBLE the fill is outside the day's low-high range entirely, which
-                 means the fill and the bar disagree about what happened — a
-                 wrong day, wrong symbol, or wrong price source. That is a
+    Three outcomes that are NOT failures and three that are, kept apart because
+    they mean different things:
+
+      OK         filled at the open, within tolerance.
+      INTRADAY   filled mid-session, and at a price that actually traded that
+                 day. Not a fault: only an order queued before the bell is
+                 supposed to match the open, and a manual daytime run fills
+                 whenever it fills. Grading those against the open reported
+                 "52 of 74 fills are off their open — that is a plumbing
+                 problem" about a bot that was working perfectly.
+      UNGRADED   no bar for that day.
+
+      WIDE       filled at the OPEN but off it by more than the spread should
+                 allow — a wrong session, a stale price source, bad routing.
+      IMPOSSIBLE outside the day's low-high range entirely, whenever it filled.
+                 The fill and the bar disagree about what happened, which is a
                  harder error than a wide fill and reads differently.
+
+    `minutes_after_open=None` means "assume it filled at the open" — the bot's
+    normal case, since it submits after the close and those orders queue for
+    the bell.
     """
     if not bar or not bar.get("open"):
         return {"verdict": UNGRADED, "diff_pct": None,
@@ -65,6 +87,13 @@ def compare(fill_price: float, bar: dict | None, *,
     if low is not None and high is not None and not (float(low) <= fill_price <= float(high)):
         return {"verdict": IMPOSSIBLE, "diff_pct": diff_pct,
                 "note": f"outside the day's range ${float(low):,.2f}-${float(high):,.2f}"}
+
+    # Inside the day's range, but not an opening fill — there is no reason it
+    # should match the open, so the range check above is the whole test.
+    if minutes_after_open is not None and minutes_after_open > OPEN_WINDOW_MINUTES:
+        return {"verdict": INTRADAY, "diff_pct": diff_pct,
+                "note": f"filled {minutes_after_open:.0f} min into the session, "
+                        "inside the day's range"}
 
     if abs(diff_pct) <= tolerance_pct:
         return {"verdict": OK, "diff_pct": diff_pct, "note": "at the open"}
@@ -85,6 +114,51 @@ def _filled_orders(client, since: date_) -> list:
             continue
         out.append(o)
     return sorted(out, key=lambda o: o.filled_at)
+
+
+def _session_opens(client, since: date_) -> dict:
+    """{date: opening bell as an aware UTC datetime} from Alpaca's own calendar.
+
+    Read rather than assumed: the bell is 13:30 UTC in summer and 14:30 in
+    winter, and a half-day trading session still opens at the usual time but a
+    hardcoded guess would drift twice a year. Returns {} on any failure — every
+    fill then grades as an opening fill, which is the previous behaviour.
+    """
+    try:
+        from alpaca.trading.requests import GetCalendarRequest
+
+        days = client.get_calendar(GetCalendarRequest(start=since, end=date_.today()))
+        out = {}
+        for d in days:
+            when = getattr(d, "open", None)
+            if when is None:
+                continue
+            # alpaca-py hands back a naive market-local DATETIME here, not a
+            # time — combining it as though it were a time raises, and an
+            # over-broad except then turned that into "no calendar at all",
+            # which silently graded every mid-session fill against the open.
+            # Accept either shape rather than trusting one.
+            out[d.date] = (when.replace(tzinfo=None) if isinstance(when, datetime)
+                           else datetime.combine(d.date, when))
+        return out
+    except Exception:                            # noqa: BLE001 — a diagnostic
+        return {}
+
+
+def _minutes_after_open(filled_at, opens: dict) -> float | None:
+    """How long after the bell this filled, or None if we cannot tell."""
+    bell = opens.get(filled_at.date())
+    if bell is None:
+        return None
+    # `filled_at` is UTC-aware; the calendar's time is market-local. Compare in
+    # market-local terms by shifting the fill into the same frame.
+    try:
+        from zoneinfo import ZoneInfo
+
+        local = filled_at.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    except Exception:                            # noqa: BLE001
+        return None
+    return (local - bell).total_seconds() / 60.0
 
 
 def _bars_for(ticker: str, days: list[date_]) -> dict[date_, dict]:
@@ -110,7 +184,7 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
         print(f"No bot_config rows{f' for {strategy!r}' if strategy else ''}.")
         return 2
 
-    graded = failures = 0
+    counts = {OK: 0, WIDE: 0, IMPOSSIBLE: 0, INTRADAY: 0, UNGRADED: 0}
 
     for config in configs:
         name = config["strategy"]
@@ -119,6 +193,7 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
         try:
             client, _ = accounts.clients_for(config["key_env_prefix"])
             orders = _filled_orders(client, since)
+            opens = _session_opens(client, since)
         except accounts.BotAccountError as exc:
             print(f"  skipped — {exc}")          # a missing key pair is not a failure
             continue
@@ -138,12 +213,11 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
         for o in orders:
             ticker, day = o.symbol.upper(), o.filled_at.date()
             price = float(o.filled_avg_price)
-            result = compare(price, bars.get(ticker, {}).get(day), tolerance_pct=tolerance)
+            result = compare(price, bars.get(ticker, {}).get(day),
+                             tolerance_pct=tolerance,
+                             minutes_after_open=_minutes_after_open(o.filled_at, opens))
 
-            if result["verdict"] != UNGRADED:
-                graded += 1
-            if result["verdict"] in (WIDE, IMPOSSIBLE):
-                failures += 1
+            counts[result["verdict"]] = counts.get(result["verdict"], 0) + 1
 
             diff = f"{result['diff_pct']:+.4f}%" if result["diff_pct"] is not None else "     —"
             side = str(getattr(o.side, "value", o.side)).upper()
@@ -152,14 +226,38 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
                   f"[{result['verdict']}] {result['note']}")
 
     print()
+    graded = sum(n for v, n in counts.items() if v != UNGRADED)
     if not graded:
         print("Nothing gradeable yet — no fills with a cached bar for their day.")
         return 2
-    if failures:
-        print(f"{failures} of {graded} fills are off their open. That is a plumbing "
-              "problem — routing, session, or price source — not a bad strategy.")
+
+    # Only OK and WIDE were judged against the open. An IMPOSSIBLE fill may have
+    # happened at any time of day — counting it as an opening fill would have
+    # read "1 of 3 opening fills are off their open" about one that filled 50
+    # minutes into the session.
+    at_open = counts[OK] + counts[WIDE]
+
+    if counts[INTRADAY]:
+        print(f"{counts[INTRADAY]} of {graded} fills happened mid-session, not at the "
+              "open — graded against the day's range instead, because only an order "
+              "queued before the bell is meant to match the opening price.")
+    if counts[IMPOSSIBLE]:
+        print(f"{counts[IMPOSSIBLE]} fill(s) landed OUTSIDE the day's high-low range. "
+              "The fill and the price bar disagree about what happened — a wrong "
+              "symbol or day, a different price source, or a paper fill at a price "
+              "nobody could actually have got.")
+    if counts[WIDE]:
+        print(f"{counts[WIDE]} of {at_open} opening fill(s) are off their open by more "
+              f"than {tolerance}%. That is a plumbing problem — routing, session, or "
+              "price source — not a bad strategy.")
+    if counts[WIDE] or counts[IMPOSSIBLE]:
         return 1
-    print(f"All {graded} fills landed at the open, within {tolerance}%. Execution is sound.")
+
+    if at_open:
+        print(f"All {at_open} opening fill(s) landed at the open, within {tolerance}%. "
+              "Execution is sound.")
+    else:
+        print("No opening fills to grade — every fill in this window was mid-session.")
     return 0
 
 

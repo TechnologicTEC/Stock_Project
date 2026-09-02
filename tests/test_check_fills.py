@@ -7,6 +7,7 @@ into a verdict; the Alpaca and price-history plumbing around it is thin and
 covered by the integration path.
 """
 import importlib.util
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -77,3 +78,103 @@ def test_a_sell_fill_is_graded_the_same_way():
 def test_a_bar_without_a_range_still_grades_against_the_open():
     result = check_fills.compare(100.1, {"open": 100.0})
     assert result["verdict"] == check_fills.OK
+
+
+# --------------------------------------------------------------------------
+# Intraday fills. Only an order queued before the bell is meant to match the
+# open — grading a mid-session fill against it reported "52 of 74 fills are off
+# their open, that is a plumbing problem" about a bot that was working fine.
+# --------------------------------------------------------------------------
+
+BAR = {"open": 100.0, "high": 104.0, "low": 98.0, "close": 103.0}
+
+
+def test_a_mid_session_fill_is_not_judged_against_the_open():
+    r = check_fills.compare(103.5, BAR, minutes_after_open=50)
+    assert r["verdict"] == check_fills.INTRADAY
+    assert "50 min into the session" in r["note"]
+
+
+def test_a_mid_session_fill_is_still_caught_if_it_never_traded_there():
+    """The range check is the whole test for an intraday fill — CINF filled 19
+    cents above the day's high, which is a real finding at any time of day."""
+    r = check_fills.compare(104.5, BAR, minutes_after_open=50)
+    assert r["verdict"] == check_fills.IMPOSSIBLE
+
+
+def test_a_fill_inside_the_opening_window_is_still_graded_on_the_open():
+    assert check_fills.compare(103.5, BAR, minutes_after_open=2)["verdict"] == check_fills.WIDE
+    assert check_fills.compare(100.2, BAR, minutes_after_open=2)["verdict"] == check_fills.OK
+
+
+def test_the_window_boundary_is_inclusive():
+    at_edge = check_fills.OPEN_WINDOW_MINUTES
+    assert check_fills.compare(103.5, BAR, minutes_after_open=at_edge)["verdict"] == check_fills.WIDE
+    assert check_fills.compare(
+        103.5, BAR, minutes_after_open=at_edge + 0.1)["verdict"] == check_fills.INTRADAY
+
+
+def test_an_unknown_fill_time_still_grades_against_the_open():
+    """The bot's normal case: it submits after the close, so those orders queue
+    for the bell. Not knowing the time must not silently excuse a wide fill."""
+    assert check_fills.compare(103.5, BAR)["verdict"] == check_fills.WIDE
+    assert check_fills.compare(103.5, BAR, minutes_after_open=None)["verdict"] == check_fills.WIDE
+
+
+def test_minutes_after_open_is_none_when_the_calendar_is_unavailable():
+    from datetime import datetime, timezone
+    filled = datetime(2026, 9, 1, 14, 20, tzinfo=timezone.utc)
+    assert check_fills._minutes_after_open(filled, {}) is None
+
+
+def test_minutes_after_open_measures_from_the_real_bell():
+    from datetime import datetime, time, timezone
+    filled = datetime(2026, 9, 1, 14, 20, tzinfo=timezone.utc)   # 10:20 ET
+    opens = {date(2026, 9, 1): datetime.combine(date(2026, 9, 1), time(9, 30))}
+    mins = check_fills._minutes_after_open(filled, opens)
+    assert mins == pytest.approx(50.0, abs=1.0)
+
+
+def test_session_opens_accepts_the_shape_alpaca_actually_returns():
+    """alpaca-py returns `open` as a naive market-local DATETIME, not a time.
+    Assuming a time raised, the broad except swallowed it, and every intraday
+    fill was silently graded against the open — the exact bug this replaced."""
+    from datetime import datetime as _dt
+
+    class _Day:
+        def __init__(self, d):
+            self.date = d
+            self.open = _dt(d.year, d.month, d.day, 9, 30)      # a datetime
+            self.close = _dt(d.year, d.month, d.day, 16, 0)
+
+    class _Client:
+        def get_calendar(self, req):
+            return [_Day(date(2026, 9, 1))]
+
+    opens = check_fills._session_opens(_Client(), date(2026, 8, 25))
+    assert opens[date(2026, 9, 1)] == _dt(2026, 9, 1, 9, 30)
+
+
+def test_session_opens_also_accepts_a_plain_time():
+    from datetime import datetime as _dt
+    from datetime import time as _time
+
+    class _Day:
+        date = date(2026, 9, 1)
+        open = _time(9, 30)
+        close = _time(16, 0)
+
+    class _Client:
+        def get_calendar(self, req):
+            return [_Day()]
+
+    opens = check_fills._session_opens(_Client(), date(2026, 8, 25))
+    assert opens[date(2026, 9, 1)] == _dt(2026, 9, 1, 9, 30)
+
+
+def test_a_failing_calendar_degrades_to_grading_against_the_open():
+    class _Client:
+        def get_calendar(self, req):
+            raise RuntimeError("403")
+
+    assert check_fills._session_opens(_Client(), date(2026, 8, 25)) == {}
