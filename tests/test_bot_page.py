@@ -245,6 +245,33 @@ def test_short_history_gets_the_not_enough_data_banner():
     assert "Not enough history to compare yet" in _body(at)
 
 
+@pytest.mark.parametrize("days", [1, 2, 3, 4, 5])
+def test_the_banner_survives_every_length_of_short_history(days):
+    """The bug this covers had a one-day window. `sharpe_stderr` needs two
+    returns and N snapshots give N-1 of them, so on the single day the bot had
+    exactly two snapshots the banner formatted a None and took the whole page
+    down. Day 1 was fine and day 3 would have been — which is why it survived
+    every run until the morning it didn't.
+
+    Swept rather than pinned at 2: an off-by-one is not usually alone, and the
+    interesting lengths here are all cheap to render.
+    """
+    at = _run(curve=_curve(n=days))
+    assert not at.exception, at.exception
+    body = _body(at)
+    # Whichever branch it takes, it has to say something about the sample size.
+    assert ("Not enough history to compare yet" in body) or (f"Day {days}." in body)
+
+
+def test_the_error_bar_appears_as_soon_as_it_can_be_estimated():
+    """Three snapshots is two returns, which is the first point sharpe_stderr
+    answers — so that is the first day the real banner should appear rather
+    than the placeholder."""
+    body = _body(_run(curve=_curve(n=3)))
+    assert "Day 3." in body
+    assert "±" in body and "trading days" in body
+
+
 def test_decision_journal_shows_blocked_rows_with_the_rail_that_refused():
     at = _run(decisions=[
         _decision(status=journal.BLOCKED, blocked_by=risk.DUPLICATE,

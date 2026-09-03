@@ -399,8 +399,15 @@ _theme.panel(
 # The honesty banner — computed, not asserted.
 # --------------------------------------------------------------------------
 
-if max_days >= 2:
-    se_at_one = performance.sharpe_stderr(max_days - 1, 1.0)
+# Gate on the NUMBER, not on a day count that stands in for it. `max_days >= 2`
+# looked like the same condition and wasn't: `sharpe_stderr` needs two returns,
+# and `max_days` days give `max_days - 1` of them, so on the single day the bot
+# had exactly two snapshots this branch ran with se_at_one None and took the
+# whole page down formatting it. Day 1 was safe and day 3 would have been; the
+# window was one day wide, which is why it survived every run before today.
+se_at_one = performance.sharpe_stderr(max_days - 1, 1.0) if max_days >= 2 else None
+
+if se_at_one is not None:
     days_needed = performance.days_for_sharpe_precision(0.5, 1.0)
     # One <span> wrapper, not bare text: .cp-advice is display:flex, so each
     # top-level child becomes its own column — several <b>s would lay the
