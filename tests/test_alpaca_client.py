@@ -243,3 +243,29 @@ def test_a_window_entirely_inside_the_delay_returns_nothing_rather_than_erroring
         assert alpaca_client.get_historical_bars(
             "SPY", today + timedelta(days=5), today + timedelta(days=5)) == []
         client.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# The paper-endpoint rail. paper=True is hardcoded, so this can only pass today
+# — which is the point: it is what stops a future refactor, config change or SDK
+# default from quietly pointing the manual Paper Trading page at real money. The
+# bot has had the same check since it was built (engine/bot/accounts.assert_paper);
+# the manual path places orders through the same SDK and had none.
+# --------------------------------------------------------------------------
+
+def test_the_real_trading_client_resolves_to_the_paper_endpoint(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+    alpaca_client._trading_client.cache_clear()
+    client = alpaca_client._trading_client()
+    assert alpaca_client.PAPER_HOST in str(getattr(client._base_url, "value", client._base_url))
+    alpaca_client._trading_client.cache_clear()
+
+
+def test_a_client_pointed_at_live_money_is_refused():
+    class LiveClient:
+        _base_url = "https://api.alpaca.markets"
+        _sandbox = False
+
+    with pytest.raises(alpaca_client.AlpacaConfigError, match="not the paper endpoint"):
+        alpaca_client._assert_paper(LiveClient())

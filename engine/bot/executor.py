@@ -208,10 +208,21 @@ def submit(
     day: date_ | None = None,
     dry_run: bool = False,
 ) -> bool:
-    """Place one order, after every rail. Returns True if it reached Alpaca.
+    """Place one order, after every rail. True if the order CLEARED every rail —
+    meaning it reached Alpaca on a live run, or would have on a dry run.
 
     Each refusal is journalled with the rail that caused it — the blocked rows
     are the ones you'll actually want when something looks wrong later.
+
+    A dry run returning True (rather than False for "did not reach Alpaca") is
+    what makes `--dry-run` a faithful preview. The caller feeds this straight
+    back in as `orders_this_run`, so it is the counter the ORDER_CAP rail reads.
+    While a dry run returned False for everything, that counter never left zero
+    and the cap never fired: with `max_orders_per_run` 2, a live run placed 2 and
+    blocked 3, and the dry run reported all 5 as "would place". The flag whose
+    only job is to predict a live run was overstating it. Whether an order
+    actually reached the broker is not lost — it is the journal status, DRY_RUN
+    against SUBMITTED, and `client.submitted` in the tests.
     """
     accounts.assert_paper(client)          # never trust paper=True; verify the endpoint
 
@@ -255,7 +266,7 @@ def submit(
             status=journal.DRY_RUN, order_id=order_id,
             qty=order.qty, notional=order.notional,
         )
-        return False
+        return True          # cleared the rails; see the docstring on why not False
 
     req = MarketOrderRequest(
         symbol=order.ticker.upper(),

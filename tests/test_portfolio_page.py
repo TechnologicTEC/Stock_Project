@@ -41,6 +41,7 @@ def test_portfolio_page_renders_empty_state_without_error():
 
 
 def test_portfolio_page_renders_with_holdings_without_error():
+    portfolio.deposit_to_wallet(2_500.0)   # funds the buy(s), which now debit
     portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
     portfolio.add_holding("VTI", 5, 200.0, date(2025, 1, 1), asset_type="etf")
 
@@ -59,6 +60,7 @@ def test_portfolio_page_renders_with_holdings_without_error():
 
 def test_portfolio_page_shows_holdings_value_distinct_from_cost_basis():
     # Paid $1,500 (10 × $150); now worth $1,000 (10 × $100) — a $500 loss.
+    portfolio.deposit_to_wallet(1_500.0)   # funds the buy(s), which now debit
     portfolio.add_holding("AAPL", 10, 150.0, date(2025, 6, 1))
     fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
 
@@ -99,6 +101,7 @@ def test_portfolio_page_screener_ratings_are_opt_in_and_add_a_column():
 
 
 def test_portfolio_page_currency_toggle_converts_displayed_values_to_nzd():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy(s), which now debit
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
     fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
     fx = {"value": 0.5, "date": "2026-06-30", "source": "ECB (frankfurter.app)"}  # USD/NZD 0.5 -> 1 USD = 2 NZD
@@ -181,6 +184,7 @@ def test_portfolio_page_delete_holding_round_trip():
 
 
 def test_portfolio_page_undo_a_sell_from_history_round_trip():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy(s), which now debit
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
     portfolio.sell_holding(holding_id, 4, 150.0, date(2025, 6, 2))  # 6 left, $600 in wallet
     sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
@@ -249,6 +253,7 @@ def test_portfolio_page_wallet_deposit_and_withdraw_round_trip():
 
 
 def test_portfolio_page_sell_holding_round_trip():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
 
     with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t, price=150.0)):
@@ -274,6 +279,7 @@ def test_portfolio_page_still_renders_after_selling_everything():
     # Once all positions are sold there are no current holdings, but the
     # page must still show the value chart and the cash proceeds rather than
     # falling back to the "no holdings yet" getting-started state.
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2025, 6, 1))
     portfolio.sell_holding(holding_id, 10, 150.0, date(2025, 6, 2))
     assert portfolio.list_holdings() == []

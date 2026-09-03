@@ -151,3 +151,67 @@ def test_auth_secrets_toml_from_env_parses_and_escapes(monkeypatch):
     assert parsed["client_secret"] == 'has"a"quote'
     assert parsed["redirect_uri"] == "https://x.hf.space/oauth2callback"
     assert parsed["server_metadata_url"].endswith("/.well-known/openid-configuration")
+
+
+# --------------------------------------------------------------------------
+# Failing CLOSED when OIDC is configured but not working.
+#
+# `_ensure_auth_secrets` builds the [auth] block at import from AUTH_* env vars
+# and writes it to disk. Both halves can fail quietly: one missing var (a
+# rotated or mistyped secret) skips the write entirely, and a read-only home
+# directory makes it raise into a caught handler. Either way st.secrets ends up
+# with no [auth] block.
+#
+# Login used to be demanded only when that block WAS present, so a broken
+# provider meant no login at all — and `_current_email()`'s fallback resolves to
+# an OWNER. On a public Space that hands Settings and the bot's kill switches to
+# anyone with the URL. These pin the safe direction.
+# --------------------------------------------------------------------------
+
+def _set_oidc_env(monkeypatch, *, omit=()):
+    for k in ("AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET", "AUTH_REDIRECT_URI", "AUTH_COOKIE_SECRET"):
+        if k in omit:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, "x")
+
+
+def test_login_is_required_when_oidc_is_configured_but_did_not_load(monkeypatch):
+    """The secrets file could not be written — st.secrets has no [auth]."""
+    from app import _auth
+    _set_oidc_env(monkeypatch)
+    monkeypatch.setattr(_auth, "_oidc_configured", lambda: False)
+    assert _auth._login_required() is True
+
+
+def test_login_is_required_when_one_auth_var_is_missing(monkeypatch):
+    """A rotated or mistyped secret: _auth_secrets_toml() returns None entirely."""
+    from app import _auth
+    _set_oidc_env(monkeypatch, omit=("AUTH_COOKIE_SECRET",))
+    monkeypatch.setattr(_auth, "_oidc_configured", lambda: False)
+    assert _auth._auth_secrets_toml() is None      # the shim really does give up
+    assert _auth._login_required() is True
+
+
+def test_a_broken_provider_does_not_hand_out_owner_access(monkeypatch):
+    """The whole point: an anonymous visitor must not reach a restricted page."""
+    from streamlit.testing.v1 import AppTest
+
+    from app import _auth
+    _set_oidc_env(monkeypatch)
+    monkeypatch.setattr(_auth, "_oidc_configured", lambda: False)
+    at = AppTest.from_file(str(_PAGES / "9_settings.py"))   # owner/friend only
+    at.run(timeout=30)
+    assert not at.exception
+    # Stopped at the login screen, so the page body never rendered.
+    assert any("Sign-in is temporarily unavailable" in w.value for w in at.warning)
+    assert not any("Sign in with Google" in b.label for b in at.button)  # st.login would raise
+
+
+def test_no_auth_config_at_all_still_runs_as_the_local_owner(monkeypatch):
+    """Local dev must be untouched: no AUTH_* vars means no login prompt."""
+    from app import _auth
+    _set_oidc_env(monkeypatch, omit=("AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET",
+                                     "AUTH_REDIRECT_URI", "AUTH_COOKIE_SECRET"))
+    monkeypatch.delenv("REQUIRE_LOGIN", raising=False)
+    assert _auth._login_required() is False

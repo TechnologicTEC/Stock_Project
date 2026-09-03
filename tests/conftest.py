@@ -15,7 +15,13 @@ from engine import credentials
 # Env vars that change *who the app thinks you are*. `app/_auth.gate()` reads
 # these on every page, so a developer's .env would otherwise silently re-point
 # the pages at a different user than the fixtures seed data for.
-_IDENTITY_ENV = ("DEV_LOGIN_EMAIL", "REQUIRE_LOGIN", "OWNER_EMAILS", "FRIEND_EMAILS")
+# AUTH_* is in here because `_login_required()` now treats the mere PRESENCE of
+# an AUTH_* var as "this deployment wants a login" (fail-closed). A developer
+# whose .env carries the Space's OIDC config would otherwise send every page test
+# to the sign-in screen.
+_IDENTITY_ENV = ("DEV_LOGIN_EMAIL", "REQUIRE_LOGIN", "OWNER_EMAILS", "FRIEND_EMAILS",
+                 "AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET", "AUTH_REDIRECT_URI",
+                 "AUTH_COOKIE_SECRET")
 
 
 @pytest.fixture(autouse=True)

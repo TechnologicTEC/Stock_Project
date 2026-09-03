@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from db.models import Holding, Transaction, Wallet
+from db.models import CashFlow, Holding, Transaction, Wallet
 from db.session import get_session
 from engine import portfolio
 
@@ -73,6 +73,7 @@ def test_add_holding_also_writes_a_matching_buy_transaction():
 # --------------------------------------------------------------------------
 
 def test_sell_partial_reduces_shares_keeps_holding_and_credits_wallet():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2025, 1, 1))
 
     result = portfolio.sell_holding(holding_id, 4, 180.0, date(2025, 6, 1))
@@ -92,6 +93,7 @@ def test_sell_partial_reduces_shares_keeps_holding_and_credits_wallet():
 
 
 def test_sell_all_shares_removes_the_holding():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2025, 1, 1))
 
     result = portfolio.sell_holding(holding_id, 10, 150.0, date(2025, 6, 1))
@@ -247,10 +249,15 @@ def test_wallet_cash_flow_backfill_is_idempotent():
 
 
 def test_wallet_cash_flow_backfill_dates_missing_cash_at_the_end_not_the_start():
-    # Anomalous legacy state: sale proceeds were recorded but the wallet is
-    # empty (cash already left). The reconciling withdrawal must be dated at
-    # the latest activity, so the chart's cash pile isn't dragged negative
-    # for the whole history before the sale.
+    # Anomalous legacy state: a round trip is recorded but the wallet is empty
+    # (cash already left). The reconciling withdrawal must be dated at the
+    # latest activity, so the chart's cash pile isn't dragged negative for the
+    # whole history before the sale.
+    #
+    # The unexplained amount is the round trip's PROFIT — $1,200 in, $1,000 of
+    # it already debited by the buy — not the gross proceeds. Before buys
+    # debited, this reconciled the full $1,200 and invented a withdrawal six
+    # times larger than the cash that actually went missing.
     with get_session() as session:
         session.add(Transaction(ticker="AAPL", type="buy", shares=10, price=100.0, date=date(2026, 1, 5)))
         session.add(Transaction(ticker="AAPL", type="sell", shares=10, price=120.0, date=date(2026, 6, 1)))
@@ -261,7 +268,7 @@ def test_wallet_cash_flow_backfill_dates_missing_cash_at_the_end_not_the_start()
     assert created == 1
     flow = portfolio.list_cash_flows()[0]
     assert flow["type"] == "withdraw"
-    assert flow["amount"] == 1200.0
+    assert flow["amount"] == 200.0   # $1,200 proceeds less the $1,000 buy
     assert flow["date"] == date(2026, 6, 1)  # latest activity, not the 2026-01-05 buy
 
 
@@ -301,6 +308,7 @@ def test_delete_activity_undoes_a_buy_and_removes_it_from_history():
 
 
 def test_delete_activity_undoes_a_sell_restoring_shares_and_debiting_the_wallet():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # 6 shares left, $600 in wallet
     sell = next(e for e in portfolio.list_activity() if e["action"] == "Sell")
@@ -312,7 +320,9 @@ def test_delete_activity_undoes_a_sell_restoring_shares_and_debiting_the_wallet(
     assert holdings[0]["shares"] == 10            # shares restored
     assert holdings[0]["cost_basis"] == 100.0      # average cost unchanged
     assert portfolio.get_wallet_balance() == 0.0   # proceeds removed from the wallet
-    assert [e["action"] for e in portfolio.list_activity()] == ["Buy"]  # only the buy remains
+    # Only the buy and the deposit that funded it remain; the sale is gone.
+    # Newest first, and the deposit is undated so it lands today.
+    assert [e["action"] for e in portfolio.list_activity()] == ["Deposit", "Buy"]
 
 
 def test_delete_activity_undoes_a_deposit():
@@ -339,6 +349,7 @@ def test_delete_activity_refuses_to_orphan_a_later_sell():
 
 
 def test_delete_activity_refuses_when_it_would_make_the_wallet_negative():
+    portfolio.deposit_to_wallet(1_000.0, when=date(2026, 1, 1))   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # +$600
     portfolio.withdraw_from_wallet(600.0, when=date(2026, 3, 1))    # wallet back to $0
@@ -348,10 +359,11 @@ def test_delete_activity_refuses_when_it_would_make_the_wallet_negative():
         portfolio.delete_activity(sell["kind"], sell["id"])
 
     assert portfolio.get_wallet_balance() == 0.0  # unchanged
-    assert {e["action"] for e in portfolio.list_activity()} == {"Buy", "Sell", "Withdraw"}
+    assert {e["action"] for e in portfolio.list_activity()} == {"Buy", "Sell", "Withdraw", "Deposit"}
 
 
 def test_delete_activity_undo_leaves_the_value_chart_as_if_it_never_happened():
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))   # funds the buy, which now debits
     holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
     fake_bars = [
         {"date": date(2026, 1, 5), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1},
@@ -370,6 +382,7 @@ def test_delete_activity_undo_leaves_the_value_chart_as_if_it_never_happened():
 
 
 def test_delete_position_purges_holding_and_its_transactions():
+    portfolio.deposit_to_wallet(2_000.0)   # funds both buys, which now debit
     holding_id = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
     portfolio.add_holding("MSFT", 5, 200.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 4, 150.0, date(2026, 2, 1))  # AAPL: $600 proceeds in wallet
@@ -378,7 +391,9 @@ def test_delete_position_purges_holding_and_its_transactions():
 
     assert {h["ticker"] for h in portfolio.list_holdings()} == {"MSFT"}
     assert portfolio.list_transactions("AAPL") == []
-    assert portfolio.get_wallet_balance() == 0.0  # AAPL's sale proceeds removed with it
+    # $2,000 in, less MSFT's $1,000 buy. AAPL's buy AND its proceeds both left
+    # with the position, so neither side of that round trip is still counted.
+    assert portfolio.get_wallet_balance() == 1000.0
     assert {e["ticker"] for e in portfolio.list_activity() if e["kind"] == "transaction"} == {"MSFT"}
 
 
@@ -516,6 +531,7 @@ def test_get_live_valuation_reports_per_holding_error_without_failing_others():
 
 
 def test_portfolio_summary_aggregates_across_holdings():
+    portfolio.deposit_to_wallet(1_400.0)   # funds both buys, which now debit
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 1, 1))
     portfolio.add_holding("MSFT", 2, 200.0, date(2025, 1, 1))
 
@@ -533,6 +549,7 @@ def test_portfolio_summary_aggregates_across_holdings():
 
 
 def test_portfolio_summary_total_value_includes_wallet_balance():
+    portfolio.deposit_to_wallet(1_000.0)   # funds the buy, which now debits
     portfolio.add_holding("AAPL", 10, 100.0, date(2025, 1, 1))
     portfolio.deposit_to_wallet(500.0)
 
@@ -620,6 +637,9 @@ def test_value_history_uses_transactions_when_present():
     # Section 6.10: add_holding() now writes its own matching "buy"
     # transaction, so this is enough on its own — no separate
     # record_transaction() call needed (that would double-count shares).
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(1_000.0, when=date(2026, 1, 5))
     portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))  # a Monday
 
     fake_bars = [
@@ -661,6 +681,9 @@ def test_value_history_empty_when_no_holdings():
 # --------------------------------------------------------------------------
 
 def test_value_history_keeps_sold_position_as_a_flat_cash_pile():
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
     holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))   # Mon, buy 10 @ $10
     portfolio.sell_holding(holding_id, 10, 12.0, date(2026, 1, 7))            # Wed, sell all 10 @ $12 → $120 cash
 
@@ -681,6 +704,9 @@ def test_value_history_keeps_sold_position_as_a_flat_cash_pile():
 
 
 def test_value_history_is_flat_when_everything_is_sold_even_with_no_current_holdings():
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
     holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 10, 12.0, date(2026, 1, 6))
     assert portfolio.list_holdings() == []  # nothing currently held
@@ -700,6 +726,9 @@ def test_value_history_is_flat_when_everything_is_sold_even_with_no_current_hold
 
 
 def test_value_history_partial_sell_keeps_remaining_shares_plus_cash():
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
     holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 4, 12.0, date(2026, 1, 6))   # sell 4 @ $12 → $48 cash, 6 shares left
 
@@ -718,6 +747,9 @@ def test_value_history_partial_sell_keeps_remaining_shares_plus_cash():
 
 
 def test_value_history_includes_manual_wallet_deposit():
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
     portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
     portfolio.deposit_to_wallet(500.0, when=date(2026, 1, 6))
 
@@ -750,6 +782,9 @@ def test_value_history_endpoint_matches_invested_plus_wallet():
 
 
 def test_value_history_window_starting_after_a_sale_shows_cash_from_the_start():
+    # The buy debits the wallet now, so fund it on the same day: the money
+    # arrives and is spent, leaving the chart exactly where it was before.
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
     holding_id = portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 5))
     portfolio.sell_holding(holding_id, 10, 12.0, date(2026, 1, 6))  # sold before the window below
 
@@ -829,3 +864,106 @@ def test_value_history_markers_handle_empty_inputs():
     assert portfolio.value_history_markers([], []) == []
     assert portfolio.value_history_markers([], _history([(date(2026, 1, 5), 1.0)])) == []
     assert portfolio.value_history_markers([_activity_event("Deposit", date(2026, 1, 5), amount=1.0)], []) == []
+
+
+# --------------------------------------------------------------------------
+# Buys debit the wallet
+#
+# Before this, only sells moved cash. Depositing $10,000 and buying $5,000 of
+# stock left $10,000 of cash beside $5,000 of shares — $15,000 of net worth
+# from $10,000 of money, in the summary totals and in the value chart.
+# --------------------------------------------------------------------------
+
+def test_depositing_then_buying_does_not_double_count():
+    portfolio.deposit_to_wallet(10_000.0)
+    portfolio.add_holding("AAPL", 50, 100.0, date(2026, 1, 5))
+
+    cost = sum(h["shares"] * h["cost_basis"] for h in portfolio.list_holdings())
+    assert portfolio.get_wallet_balance() == 5_000.0
+    assert portfolio.get_wallet_balance() + cost == 10_000.0   # no money invented
+
+
+def test_a_buy_may_take_the_wallet_negative():
+    """Recording a portfolio you already own must not be blocked.
+
+    A CSV import, or entering last year's purchases, has no matching deposit —
+    refusing would make the app unable to describe reality. A negative balance
+    is the honest reading: purchases recorded, funding not.
+    """
+    portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    assert portfolio.get_wallet_balance() == -1_000.0
+
+
+def test_the_incremental_balance_always_equals_the_recomputed_one():
+    """The two must never disagree, or a deletion silently restates the wallet."""
+    portfolio.deposit_to_wallet(5_000.0)
+    hid = portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    portfolio.add_holding("MSFT", 5, 200.0, date(2026, 1, 6))
+    portfolio.sell_holding(hid, 4, 150.0, date(2026, 2, 1))
+    portfolio.withdraw_from_wallet(100.0, when=date(2026, 2, 2))
+    incremental = portfolio.get_wallet_balance()
+
+    # Delete the WITHDRAWAL to force a recompute: removing it can only raise the
+    # balance, so the negative-balance guard has no opinion and the recompute
+    # itself is what is under test.
+    withdrawal = next(e for e in portfolio.list_activity() if e["action"] == "Withdraw")
+    portfolio.delete_activity(withdrawal["kind"], withdrawal["id"])
+    portfolio.withdraw_from_wallet(100.0, when=date(2026, 2, 2))   # put it back
+
+    assert portfolio.get_wallet_balance() == incremental
+
+
+def test_the_value_chart_does_not_step_up_when_a_purchase_is_entered():
+    """Cash converting into stock is not a change in net worth."""
+    portfolio.deposit_to_wallet(100.0, when=date(2026, 1, 5))
+    bars = [{"date": date(2026, 1, 5), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1},
+            {"date": date(2026, 1, 6), "open": 10, "high": 10, "low": 10, "close": 10.0, "volume": 1}]
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=bars):
+        before = portfolio.get_value_history(date(2026, 1, 5), date(2026, 1, 6))
+        portfolio.add_holding("AAPL", 10, 10.0, date(2026, 1, 6))   # spend it all
+        after = portfolio.get_value_history(date(2026, 1, 5), date(2026, 1, 6))
+
+    assert [p["value"] for p in before] == [100.0, 100.0]
+    assert [p["value"] for p in after] == [100.0, 100.0]
+
+
+# --------------------------------------------------------------------------
+# The one-off migration for portfolios recorded before buys debited
+# --------------------------------------------------------------------------
+
+def _legacy_portfolio():
+    """A portfolio as the OLD rule left it: buys recorded, wallet untouched."""
+    with get_session() as session:
+        session.add(Transaction(ticker="AAPL", type="buy", shares=10, price=100.0, date=date(2026, 1, 5)))
+        session.add(Holding(ticker="AAPL", shares=10, cost_basis=100.0, purchase_date=date(2026, 1, 5)))
+        session.add(CashFlow(type="deposit", amount=1_333.06, date=date(2026, 1, 1)))
+        session.add(Wallet(balance=1_333.06))     # deposits only — the buy never debited
+
+
+def test_the_migration_keeps_the_balance_where_it_was():
+    _legacy_portfolio()
+    assert portfolio.backfill_purchase_funding() == 1
+    # Unmoved, rather than dropping to -$1,000 the moment the rule changed.
+    assert portfolio.get_wallet_balance() == 1_333.06
+
+
+def test_the_migration_runs_once_and_then_leaves_things_alone():
+    _legacy_portfolio()
+    portfolio.backfill_purchase_funding()
+    assert portfolio.backfill_purchase_funding() == 0      # self-detecting, no marker row
+    assert portfolio.backfill_purchase_funding() == 0
+    assert portfolio.get_wallet_balance() == 1_333.06
+    assert len([c for c in portfolio.list_cash_flows() if c["amount"] == 1_000.0]) == 1
+
+
+def test_the_migration_is_a_no_op_on_a_portfolio_built_under_the_new_rule():
+    portfolio.deposit_to_wallet(1_000.0)
+    portfolio.add_holding("AAPL", 10, 100.0, date(2026, 1, 5))
+    assert portfolio.backfill_purchase_funding() == 0
+    assert portfolio.get_wallet_balance() == 0.0
+
+
+def test_the_migration_does_nothing_without_a_wallet_or_purchases():
+    assert portfolio.backfill_purchase_funding() == 0
+    portfolio.deposit_to_wallet(50.0)
+    assert portfolio.backfill_purchase_funding() == 0

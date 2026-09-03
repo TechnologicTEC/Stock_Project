@@ -30,6 +30,10 @@ init_db()  # safe to call every run - no-op if the schema's already current
 gate("portfolio")  # resolve the signed-in user and scope the DB to them (Phase B)
 portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
 portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
+portfolio.backfill_purchase_funding()      # ...and the purchases that predate buys debiting the wallet
+# Order matters: the two above must settle the ledger first, because this one
+# reconciles the wallet AGAINST that ledger and would otherwise bank a deposit
+# for buys backfill_missing_transactions has not written yet.
 
 _theme.page_header("Holdings", eyebrow="Portfolio")
 st.caption(

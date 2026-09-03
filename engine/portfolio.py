@@ -37,7 +37,19 @@ def add_holding(
     """Adds a holding and (Section 6.10) writes a matching "buy" transaction
     in the same commit, so the transactions ledger is guaranteed complete
     going forward — this is what closes the Phase 3.5 gap where most
-    holdings used to have no transaction history at all."""
+    holdings used to have no transaction history at all.
+
+    The purchase is DEBITED from the wallet, mirroring the credit `sell_holding`
+    has always made. Without it, depositing $10,000 and then buying $5,000 of
+    stock showed $10,000 of cash beside $5,000 of shares — $15,000 of net worth
+    from $10,000 of money, in the totals and in the value-over-time chart.
+
+    The balance is allowed to go negative, and that is deliberate: refusing the
+    buy would make it impossible to record a portfolio you already own (CSV
+    import, or entering last year's purchases), and a negative wallet is the
+    honest reading — it says you have recorded purchases whose funding you have
+    not. `backfill_purchase_funding` is what settles that for existing data.
+    """
     asset_type = (asset_type or "stock").strip().lower()
     if asset_type not in VALID_ASSET_TYPES:
         asset_type = "other"
@@ -57,6 +69,7 @@ def add_holding(
         )
         session.add(holding)
         session.add(Transaction(ticker=ticker, type="buy", shares=shares, price=cost_basis, date=purchase_date))
+        _credit_wallet(session, -round(shares * cost_basis, 2))
         session.flush()
         return holding.id
 
@@ -96,6 +109,12 @@ def record_transaction(ticker: str, type_: str, shares: float, price: float, txn
     with get_session() as session:
         txn = Transaction(ticker=ticker.strip().upper(), type=type_, shares=shares, price=price, date=txn_date)
         session.add(txn)
+        # Move the cash too, so the incrementally-maintained balance always
+        # equals what `_recompute_wallet` derives from the ledger. A ledger row
+        # written without its cash leg would make an unrelated later deletion —
+        # which recomputes — silently restate the balance.
+        amount = round(shares * price, 2)
+        _credit_wallet(session, amount if type_ == "sell" else -amount)
         session.flush()
         return txn.id
 
@@ -213,6 +232,54 @@ def sell_holding(holding_id: int, shares_to_sell: float, price: float, sell_date
         }
 
 
+def backfill_purchase_funding() -> int:
+    """One-off (safe-to-repeat) reconciliation for the day buys began debiting.
+
+    Before that change the wallet tracked deposits − withdrawals + sale
+    proceeds, and purchases never touched it. So every portfolio recorded under
+    the old rule has holdings that were bought with money the ledger never saw:
+    switching the formula over would drop the balance by the whole purchase
+    history at once (on the author's own account, $1,333.06 to −$7,193.39).
+
+    The money was obviously real, so this records it — one deposit equal to the
+    purchases to date, dated before the earliest activity, which leaves today's
+    balance and the portfolio total exactly where they were while making every
+    future buy debit correctly.
+
+    Idempotent WITHOUT a marker row: it fires only while the stored balance
+    disagrees with what the new formula derives, and running it once makes
+    those agree. A wallet that is already consistent — a fresh account, or one
+    migrated on a previous page load — is a no-op, which is what makes it safe
+    on every page load. Returns the number of rows created.
+    """
+    with get_session() as session:
+        wallet = session.execute(select(Wallet)).scalars().first()
+        if wallet is None:
+            return 0                     # nothing banked yet; nothing to reconcile
+
+        txns = session.execute(select(Transaction)).scalars().all()
+        purchases = sum(round(t.shares * t.price, 2) for t in txns if t.type == "buy")
+        if purchases <= 0:
+            return 0
+
+        proceeds = sum(round(t.shares * t.price, 2) for t in txns if t.type == "sell")
+        deposits = sum(c.amount for c in session.execute(
+            select(CashFlow).where(CashFlow.type == "deposit")).scalars())
+        withdrawals = sum(c.amount for c in session.execute(
+            select(CashFlow).where(CashFlow.type == "withdraw")).scalars())
+
+        derived = round(deposits - withdrawals + proceeds - purchases, 2)
+        if abs(derived - wallet.balance) < 0.01:
+            return 0                     # already on the new rule
+
+        when = _earliest_activity_date(session) or date.today()
+        session.add(CashFlow(type="deposit", amount=purchases, date=when))
+        session.flush()
+        _recompute_wallet(session)
+        session.flush()
+        return 1
+
+
 def backfill_missing_transactions() -> int:
     """One-time (but safe-to-repeat) backfill: for any holding whose ticker
     has no transaction history at all, create a synthetic "buy" transaction
@@ -325,7 +392,15 @@ def backfill_wallet_cash_flows() -> int:
             round(t.shares * t.price, 2)
             for t in session.execute(select(Transaction).where(Transaction.type == "sell")).scalars()
         )
-        residual = round(balance - sale_proceeds, 2)
+        # Purchases add back because they are already DEBITED from `balance`.
+        # Without this the residual counts them as unexplained cash gone missing
+        # and invents a withdrawal to match — a wallet holding nothing but the
+        # proceeds of a funded round trip reported a phantom outflow.
+        purchases = sum(
+            round(t.shares * t.price, 2)
+            for t in session.execute(select(Transaction).where(Transaction.type == "buy")).scalars()
+        )
+        residual = round(balance - sale_proceeds + purchases, 2)
         if abs(residual) < 0.01:
             return 0
 
@@ -519,24 +594,39 @@ def _recompute_ticker_holding(session, ticker: str) -> None:
 
 def _recompute_wallet(session) -> None:
     """Recompute the wallet balance from the ledger: deposits − withdrawals +
-    sale proceeds. Matches how the balance is maintained incrementally, so a
-    plain recompute is exact. Raises if the result is negative (cash that's
-    been withdrawn depended on the entry being deleted)."""
+    sale proceeds − purchase costs. Matches how the balance is maintained
+    incrementally, so a plain recompute is exact.
+
+    Purchases are in that sum because `add_holding` now debits them. Leaving
+    them out was what let a deposit and the shares it bought both count toward
+    net worth.
+
+    A negative result is no longer clamped to zero, because it is now a
+    meaningful state rather than a corruption: it means purchases are recorded
+    whose funding is not. What is still refused is a deletion that makes the
+    balance *worse* — the case this guard was written for, where cash has
+    already been withdrawn that depended on the row being removed. Comparing
+    against the balance before the recompute is what separates the two; a flat
+    `balance < 0` test would refuse every deletion for a user who is legitimately
+    in the red.
+    """
     deposits = sum(c.amount for c in session.execute(
         select(CashFlow).where(CashFlow.type == "deposit")).scalars())
     withdrawals = sum(c.amount for c in session.execute(
         select(CashFlow).where(CashFlow.type == "withdraw")).scalars())
     proceeds = sum(round(t.shares * t.price, 2) for t in session.execute(
         select(Transaction).where(Transaction.type == "sell")).scalars())
+    purchases = sum(round(t.shares * t.price, 2) for t in session.execute(
+        select(Transaction).where(Transaction.type == "buy")).scalars())
 
-    balance = round(deposits - withdrawals + proceeds, 2)
-    if balance < -0.005:
+    wallet = _get_or_create_wallet(session)
+    balance = round(deposits - withdrawals + proceeds - purchases, 2)
+    if balance < -0.005 and balance < wallet.balance - 0.005:
         raise ValueError(
             "Can't delete that — it would make your wallet balance negative, because cash that "
             "depended on it has already been withdrawn. Undo the later withdrawal first."
         )
-    wallet = _get_or_create_wallet(session)
-    wallet.balance = max(balance, 0.0)
+    wallet.balance = balance
     wallet.updated_at = utcnow()
 
 
@@ -747,14 +837,24 @@ def _price_series(ticker: str, start: date, end: date, business_days) -> pd.Seri
 
 def _cash_series(transactions: list[dict], cash_flows: list[dict], business_days) -> pd.Series:
     """Cash held on each business day: cumulative sale proceeds (from "sell"
-    transactions) plus manual deposits, minus manual withdrawals. Events
-    dated on or before a day are included on that day — events before the
-    window are all folded into its first day, so the pile starts at the
-    right height even when the chart starts mid-history."""
+    transactions) minus purchase costs (from "buy" transactions), plus manual
+    deposits, minus manual withdrawals. Events dated on or before a day are
+    included on that day — events before the window are all folded into its
+    first day, so the pile starts at the right height even when the chart
+    starts mid-history.
+
+    Buys subtract here for the same reason they debit the wallet: the chart adds
+    this to the market value of the holdings, so counting a deposit AND the
+    shares it bought made the line step upward the moment a purchase was
+    entered. Now the cash converts into stock and the total stays continuous,
+    which is what a purchase actually does.
+    """
     events: list[tuple[date, float]] = []
     for t in transactions:
         if t["type"] == "sell":
             events.append((t["date"], round(t["shares"] * t["price"], 2)))
+        else:
+            events.append((t["date"], -round(t["shares"] * t["price"], 2)))
     for c in cash_flows:
         events.append((c["date"], c["amount"] if c["type"] == "deposit" else -c["amount"]))
 

@@ -3,12 +3,19 @@ Streamlit auth glue (Phase B). Each page calls `gate("<page_key>")` right after
 init_db(): it resolves the signed-in identity, scopes the DB to that user, shows
 a sidebar identity + sign-out, and stops guests on restricted pages.
 
-Login is **enforced only when configured** — i.e. when `.streamlit/secrets.toml`
-has an `[auth]` section (Google OIDC) or `REQUIRE_LOGIN` is set. Then anonymous
+Login is **enforced when configured OR merely intended** — when
+`.streamlit/secrets.toml` has an `[auth]` section (Google OIDC), when
+`REQUIRE_LOGIN` is set, or when any `AUTH_*` env var is present. Then anonymous
 visitors get a "Sign in with Google" prompt or can "Continue as guest" (the
-shared demo). With no OIDC configured — local dev and tests — it falls back to
-the bootstrap owner (override with DEV_LOGIN_EMAIL), so the app behaves like the
-old single-user version.
+shared demo). With none of those — local dev and tests — it falls back to the
+bootstrap owner (override with DEV_LOGIN_EMAIL), so the app behaves like the old
+single-user version.
+
+That third condition is a safety rail, not a convenience: the `[auth]` block is
+materialised at import from those env vars, and both halves of that can fail
+quietly (a read-only filesystem, one rotated secret). Keying the login prompt
+only on the RESULT meant a broken provider let every visitor in as an owner. See
+`_login_required`.
 """
 import os
 import sys
@@ -61,6 +68,26 @@ def _auth_secrets_toml() -> str | None:
 
 
 _AUTH_ENV_VARS = ("AUTH_CLIENT_ID", "AUTH_CLIENT_SECRET", "AUTH_REDIRECT_URI", "AUTH_COOKIE_SECRET")
+
+
+def _oidc_intended() -> bool:
+    """Was this deployment MEANT to require a login?
+
+    True as soon as any AUTH_* var is present. Read separately from whether OIDC
+    actually works, because those two can disagree and the difference decides
+    who gets in — see `_login_required`.
+    """
+    return any(os.environ.get(k) for k in _AUTH_ENV_VARS)
+
+
+def _oidc_broken() -> bool:
+    """Configured for Google login, but the `[auth]` block never resolved.
+
+    The misconfiguration case specifically: a missing or mistyped AUTH_* var, or
+    a secrets.toml that could not be written. `st.login()` raises here, so the UI
+    must not offer it.
+    """
+    return _oidc_intended() and not _oidc_configured()
 
 
 def _ensure_auth_secrets() -> None:
@@ -128,7 +155,26 @@ def _oidc_configured() -> bool:
 
 
 def _login_required() -> bool:
-    return bool(os.environ.get("REQUIRE_LOGIN")) or _oidc_configured()
+    """Whether anonymous visitors must sign in (or explicitly choose guest).
+
+    `_oidc_intended()` is in here deliberately, and it is the difference between
+    failing open and failing closed. Login used to be demanded only when OIDC was
+    actually WORKING — `[auth]` present in st.secrets. But that block is written
+    at import by `_ensure_auth_secrets`, from env vars, on a host whose filesystem
+    may be read-only; and it is skipped entirely when one AUTH_* var is missing,
+    which is what a rotated or mistyped secret looks like. Either way the write
+    fails silently, `st.secrets` has no `[auth]`, no login is required — and a
+    PUBLIC deployment resolves every visitor to `_current_email()`'s local
+    fallback, whose role is OWNER. That opens Settings and the bot's kill
+    switches to anyone with the URL.
+
+    So a deployment that MEANT to have login keeps demanding it even when the
+    OIDC plumbing is broken. The worst case becomes guest-only (read-only demo)
+    rather than owner-for-everyone — the same asymmetry `engine/bot/risk.py`
+    applies to the trading switch: the state you reach by accident must be the
+    safe one.
+    """
+    return bool(os.environ.get("REQUIRE_LOGIN")) or _oidc_configured() or _oidc_intended()
 
 
 def _guest_mode() -> bool:
@@ -154,12 +200,28 @@ def _render_login_and_stop() -> None:
         "Sign in to see and manage **your own** portfolio and API keys, or continue as a guest to explore a "
         "read-only demo."
     )
-    c1, c2 = st.columns(2)
-    if c1.button("🔑 Sign in with Google", type="primary", use_container_width=True):
-        st.login()  # single [auth] provider; use st.login("google") for a named provider
-    if c2.button("👀 Continue as guest", use_container_width=True):
-        st.session_state[_GUEST_FLAG] = True
-        st.rerun()
+    # A deployment that MEANT to have OIDC but whose [auth] block did not resolve
+    # is misconfigured: st.login() would raise, so the page says what is wrong
+    # rather than presenting a button that cannot work. Guest stays available,
+    # which keeps a broken provider a degraded app rather than a locked-out one.
+    # REQUIRE_LOGIN on its own is NOT this case — it is the documented way to
+    # preview the prompt locally, and it keeps the button it has always had.
+    if not _oidc_broken():
+        c1, c2 = st.columns(2)
+        if c1.button("🔑 Sign in with Google", type="primary", use_container_width=True):
+            st.login()  # single [auth] provider; use st.login("google") for a named provider
+        if c2.button("👀 Continue as guest", use_container_width=True):
+            st.session_state[_GUEST_FLAG] = True
+            st.rerun()
+    else:
+        st.warning(
+            "Sign-in is temporarily unavailable — this deployment is configured for Google "
+            "login but the provider settings could not be loaded. You can still explore the "
+            "read-only demo."
+        )
+        if st.button("👀 Continue as guest", type="primary", use_container_width=True):
+            st.session_state[_GUEST_FLAG] = True
+            st.rerun()
     st.stop()
 
 
@@ -172,7 +234,10 @@ def _render_identity(identity: auth.Identity) -> None:
     if identity.role == auth.GUEST:
         _theme.top_bar(email="Guest", role="demo portfolio")
         with st.sidebar:
-            if _login_required() and st.button("Sign in", key="_auth_signin", use_container_width=True):
+            # Not _login_required() alone: that is now true on a deployment whose
+            # provider failed to load, where st.login() would raise.
+            if _login_required() and not _oidc_broken() \
+                    and st.button("Sign in", key="_auth_signin", use_container_width=True):
                 st.session_state[_GUEST_FLAG] = False
                 st.login()
     else:

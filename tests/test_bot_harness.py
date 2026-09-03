@@ -289,11 +289,42 @@ def test_a_replayed_run_does_not_buy_twice():
 def test_dry_run_submits_nothing_but_still_journals():
     client = FakeClient()
     order = executor.Order(ticker="SPY", side="buy", notional=5_000.0, reason="target")
-    assert _submit(client, order, dry_run=True) is False
+    # The return value says "cleared every rail", not "reached Alpaca" — the
+    # counter the ORDER_CAP rail reads is fed from it, so a dry run has to move
+    # it the same way a live run does. What must not happen is an actual order,
+    # and that is asserted directly rather than through the return value.
+    assert _submit(client, order, dry_run=True) is True
     assert client.submitted == []
 
     rows = journal.recent_decisions("spy_harness")
     assert rows[0]["status"] == journal.DRY_RUN
+
+
+def test_the_order_cap_fires_identically_on_a_dry_run():
+    """`--dry-run` exists to predict a live run, so every rail must bind the same.
+
+    ORDER_CAP counts orders already placed this run, and the runner feeds it
+    `submit`'s own return value. While a dry run returned False for everything
+    that counter never left zero: with a cap of 2, a live run placed 2 and
+    blocked 3, and the dry run cheerfully reported all 5 as "would place".
+    """
+    outcomes = {}
+    for label, dry in (("live", False), ("dry", True)):
+        client = FakeClient()
+        cleared = 0
+        for i in range(5):
+            # A distinct ticker per attempt, and a distinct day per mode, so it is
+            # the ORDER_CAP rail that stops this and not DUPLICATE.
+            one = executor.Order(ticker=f"T{i}", side="buy", notional=100.0, reason="target")
+            if _submit(client, one, dry_run=dry, day=date(2026, 9, 1 if dry else 2),
+                       config=_config(max_orders_per_run=2), orders_this_run=cleared):
+                cleared += 1
+        outcomes[label] = cleared
+
+    assert outcomes["dry"] == outcomes["live"] == 2, outcomes
+    capped = [r for r in journal.recent_decisions("spy_harness")
+              if r["blocked_by"] == risk.ORDER_CAP]
+    assert len(capped) == 6, "3 refusals in each mode"
 
 
 def test_submit_refuses_a_client_pointed_at_the_live_endpoint():

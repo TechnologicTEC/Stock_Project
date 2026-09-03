@@ -58,7 +58,7 @@ def test_wallet_and_transactions_are_per_user():
         assert portfolio.list_transactions() == []
 
     with db_session.using_user(a):
-        assert portfolio.get_wallet_balance() == 500.0
+        assert portfolio.get_wallet_balance() == 300.0   # $500 in, less the $200 buy
         assert [t["ticker"] for t in portfolio.list_transactions()] == ["MSFT"]
 
 

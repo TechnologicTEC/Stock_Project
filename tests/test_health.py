@@ -152,6 +152,18 @@ def test_trailing_annualized_return_none_when_starting_value_is_zero():
     assert annualized is None
 
 
+def test_trailing_annualized_return_none_when_starting_value_is_negative():
+    """`(1 + total_return) ** (1/years)` on a negative base is not a real number.
+
+    numpy answers nan instead of raising, so the old guard — which only caught a
+    zero start, via the division — returned nan from a function annotated
+    `float | None`, and the page rendered "nan%".
+    """
+    values = pd.Series([-500.0] + [100.0] * 25)
+    annualized, _ = health.compute_trailing_annualized_return(values)
+    assert annualized is None
+
+
 def test_trailing_annualized_return_negative_for_a_loss():
     values = pd.Series(np.linspace(100, 50, health.TRADING_DAYS_PER_YEAR))  # halved over a year
     annualized, _ = health.compute_trailing_annualized_return(values)

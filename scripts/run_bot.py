@@ -237,7 +237,11 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
             equity=equity, config=config, orders_this_run=submitted,
             day=today, dry_run=dry_run,
         )
-        verb = "submitted" if ok else ("would place" if dry_run else "refused")
+        # Read `ok` first, THEN the mode. The old order — "submitted" if ok else
+        # ("would place" if dry_run else "refused") — could never say "refused"
+        # on a dry run, because every dry-run order returned False. An order a
+        # rail had just rejected was logged as one that would be placed.
+        verb = ("would place" if dry_run else "submitted") if ok else "refused"
         _log(f"    {verb}: {order.side} {executor.describe(order)}")
         submitted += 1 if ok else 0
 
@@ -256,8 +260,12 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     # asks the broker for those directly rather than believing this row. Do not
     # "fix" it by sleeping here — an after-close run would wait forever, since
     # those orders cannot fill until the market opens.
-    final = executor.account_snapshot(trading_client) if submitted else account
-    final_positions = executor.current_positions(trading_client) if submitted else positions
+    # `submitted` counts orders that cleared the rails, which on a dry run is
+    # every order it would have placed — so re-read the account only when
+    # something actually moved.
+    placed = submitted and not dry_run
+    final = executor.account_snapshot(trading_client) if placed else account
+    final_positions = executor.current_positions(trading_client) if placed else positions
     journal.snapshot_equity(
         strategy,
         equity=final["equity"],
@@ -266,7 +274,8 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
         benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], today),
         day=today,
     )
-    _log(f"  done — {submitted} order(s) submitted, equity ${final['equity']:,.2f}")
+    _log(f"  done — {submitted} order(s) {'would be placed' if dry_run else 'submitted'}, "
+         f"equity ${final['equity']:,.2f}")
     return 0
 
 

@@ -56,10 +56,42 @@ def _data_client() -> StockHistoricalDataClient:
     return StockHistoricalDataClient(*_require_keys())
 
 
+# The only endpoint the trading half may ever talk to. Verified at runtime
+# rather than inferred from paper=True — the same rail `engine/bot/accounts.py`
+# applies to the bot's own accounts, kept here as a local constant because
+# engine/data_sources must not import from engine/bot.
+PAPER_HOST = "paper-api.alpaca.markets"
+
+
+def _assert_paper(client: TradingClient) -> TradingClient:
+    """Fail loudly unless this client resolved to the paper endpoint.
+
+    paper=True is hardcoded below, so today this can only pass. It exists so that
+    no future refactor, config change, or alpaca-py default can quietly point the
+    Paper Trading page at real money — the bot has had exactly this check since it
+    was built, and the manual page places orders through the same SDK.
+
+    alpaca-py stores the URL as a BaseURL enum whose str() is the MEMBER NAME, so
+    unwrap .value first. Getting that wrong fails closed (every call refused),
+    which is the right direction but still a bug.
+    """
+    raw = getattr(client, "_base_url", "") or ""
+    base_url = str(getattr(raw, "value", raw))
+    sandbox = getattr(client, "_sandbox", None)
+    if PAPER_HOST not in base_url or sandbox is False:
+        raise AlpacaConfigError(
+            f"Refusing to trade: client endpoint is {base_url!r} (sandbox={sandbox!r}), "
+            f"which is not the paper endpoint ({PAPER_HOST}). This is a bug, not a "
+            "config problem."
+        )
+    return client
+
+
 @lru_cache(maxsize=1)
 def _trading_client() -> TradingClient:
-    # paper=True: this client can only ever hit the paper endpoint.
-    return TradingClient(*_require_keys(), paper=True)
+    # paper=True: this client can only ever hit the paper endpoint — and
+    # _assert_paper verifies that rather than trusting the flag.
+    return _assert_paper(TradingClient(*_require_keys(), paper=True))
 
 
 def get_latest_quote(ticker: str, feed: str = "delayed_sip") -> dict:

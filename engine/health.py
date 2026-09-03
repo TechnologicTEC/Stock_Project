@@ -248,7 +248,15 @@ def compute_trailing_annualized_return(value_series_trimmed: pd.Series) -> tuple
     if n < MIN_DATA_POINTS:
         return None, n
     first, last = value_series_trimmed.iloc[0], value_series_trimmed.iloc[-1]
-    if not first:
+    # A non-positive starting value has no growth rate. Zero was already caught
+    # (division), but a NEGATIVE one raises the growth factor `1 + total_return`
+    # to a fractional power, and a negative base there is not a real number —
+    # numpy returns nan rather than raising, so without this the function
+    # silently breaks its own `float | None` contract and the page renders
+    # "nan%". A portfolio can only be worth less than nothing through
+    # back-dated cash movements (the UI dates them today, so this is a guard on
+    # the engine's own API rather than on anything reachable from a click).
+    if not first or first < 0:
         return None, n
     total_return = last / first - 1.0
     years = n / TRADING_DAYS_PER_YEAR
