@@ -612,3 +612,80 @@ def test_it_falls_back_to_the_snapshot_when_the_broker_is_unreachable():
               curve=curve, view=_account_view(available=False))
     assert not at.exception
     assert "12 / 15" in _body(at)
+
+
+# --------------------------------------------------------------------------
+# The slots strip and the holdings table must agree
+#
+# They read different sources on the no-keys path: the strip takes the last
+# snapshot's positions_count, the table replays the journal. The journal never
+# marks a SUBMITTED row FILLED, so an order placed in the latest run counted as
+# a holding immediately — and the bot submits after the close, where those
+# orders sit until the next open. Real case, 2026-09-07: score_threshold
+# ordered ADI, FSLR and HPE, and the tab showed a 10-row holdings table above
+# "Filled 7 / 20", for an account Alpaca said held seven.
+# --------------------------------------------------------------------------
+
+def _rebuilt(ticker, **over):
+    row = {"ticker": ticker, "qty": 1.0, "avg_entry_price": 100.0,
+           "current_price": 110.0, "market_value": 110.0, "unrealized_pl": 10.0,
+           "unrealized_plpc": 0.1, "change_today_pct": None,
+           "priced_at": date(2026, 8, 30)}
+    row.update(over)
+    return row
+
+
+def _fills_at(*pairs):
+    return [{"ticker": t, "decided_at": datetime(d.year, d.month, d.day, 21, 45),
+             "action": journal.BUY, "qty": None, "notional": 500.0,
+             "reason": "Score is above the threshold.", "status": journal.SUBMITTED}
+            for t, d in pairs]
+
+
+def test_an_order_from_the_latest_run_is_not_counted_as_a_holding():
+    curve = _curve(n=30)                       # last snapshot is 2026-08-30
+    at = _run(
+        curve=curve,
+        view=_account_view(available=False),
+        fills=_fills_at(("MU", date(2026, 8, 20)), ("FSLR", date(2026, 8, 30))),
+        names={},
+        rebuilt=[_rebuilt("MU"), _rebuilt("FSLR")],
+    )
+    assert not at.exception
+    body = _body(at)
+
+    assert "1 held · 1 ordered, not filled yet" in body
+    assert "ordered</span>" in body                     # the row carries a badge
+    assert "not counted as holdings above" in body
+
+
+def test_a_settled_book_says_nothing_about_orders():
+    """No pending rows means no badge and no extra clause — the panel stays as
+    it was for every strategy that did not trade in its last run."""
+    at = _run(
+        curve=_curve(n=30),
+        view=_account_view(available=False),
+        fills=_fills_at(("MU", date(2026, 8, 20)), ("FSLR", date(2026, 8, 21))),
+        names={},
+        rebuilt=[_rebuilt("MU"), _rebuilt("FSLR")],
+    )
+    body = _body(at)
+    assert "2 held · rebuilt from the journal" in body
+    assert "ordered, not filled yet" not in body
+    assert "cp-badge faint\">ordered" not in body
+
+
+def test_the_holdings_count_agrees_with_the_slots_strip():
+    """The whole point: one book, two readouts, and they must not contradict."""
+    at = _run(
+        configs=[_config(target_slots=20)],          # as score_threshold is set up
+        curve=_curve(n=30),
+        view=_account_view(available=False),
+        fills=_fills_at(("MU", date(2026, 8, 20)), ("FSLR", date(2026, 8, 30))),
+        names={},
+        rebuilt=[_rebuilt("MU"), _rebuilt("FSLR")],
+    )
+    # _curve() writes positions_count=1 on every snapshot, which is what the
+    # strip reads; the table must land on the same number rather than on 2.
+    assert _strip(at)["Filled"] == "1 / 20"
+    assert "1 held ·" in _body(at)

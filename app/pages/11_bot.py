@@ -212,6 +212,7 @@ def _positions_table(rows: list[dict]) -> str:
         weight = r.get("weight")
         cells = [
             f'<td><span class="tick">{_esc(r["ticker"])}</span>'
+            + (' <span class="cp-badge faint">ordered</span>' if r.get("pending") else "")
             + (f'<span class="sub">{_esc(name)}</span>' if name else "")
             + "</td>",
             f'<td class="num big">{_money(r.get("market_value"), 2)}</td>',
@@ -703,23 +704,38 @@ for tab, r in zip(tabs, tab_rows):
                 reasons=bot_positions.latest_reasons(r["decisions"]),
                 since=bot_positions.held_since(fills),
                 today=now.date(),
+                # Live rows are positions by definition; only a replayed book can
+                # be holding an order that hasn't filled.
+                confirmed_through=None if live_book else s["last_date"],
             )
-            invested = sum(p.get("market_value") or 0.0 for p in enriched)
+            held_rows, pending_rows = bot_positions.split_pending(enriched)
+            invested = sum(p.get("market_value") or 0.0 for p in held_rows)
 
             if live_book:
                 tag = f"{len(enriched)} held · {_money(invested)} invested · live from Alpaca"
                 footer = ""
             else:
                 priced = next((p.get("priced_at") for p in raw if p.get("priced_at")), None)
-                tag = (f"{len(enriched)} held · rebuilt from the journal"
+                # Count what is HELD, so this agrees with the slots strip above
+                # rather than contradicting it. Orders still in flight get their
+                # own clause instead of being folded into the holdings count.
+                tag = (f"{len(held_rows)} held"
+                       + (f" · {len(pending_rows)} ordered, not filled yet" if pending_rows else "")
+                       + " · rebuilt from the journal"
                        + (f" · priced {priced:%d %b}" if priced else ""))
                 footer = (
                     '<p class="cp-foot"><b>Reconstructed, not live.</b> No Alpaca key pair for '
                     "this strategy in this environment, so these are the bot's own filled "
                     "quantities priced at the last cached close — not the broker's position "
                     "list, and not an intraday value. Everything else on this tab is read from "
-                    f'the database and is unaffected.</p><p class="cp-foot">'
-                    f'{_esc(view["error"])}</p>')
+                    "the database and is unaffected.</p>"
+                    + ('<p class="cp-foot"><b>Ordered</b> marks a buy from the latest run, which '
+                       "no account snapshot has confirmed yet — the run writes its snapshot "
+                       "after submitting and before anything can fill. The bot places its "
+                       "orders after the close, so they normally sit until the next open. "
+                       "They are not counted as holdings above; the next run settles it."
+                       "</p>" if pending_rows else "")
+                    + f'<p class="cp-foot">{_esc(view["error"])}</p>')
 
             _theme.panel("Open positions", _positions_table(enriched) + footer, tag=tag)
         elif view["available"]:

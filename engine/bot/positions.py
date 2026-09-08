@@ -255,15 +255,32 @@ def rank_index(leaderboard_rows=()) -> dict[str, dict]:
     return out
 
 
-def enrich(positions, *, equity=None, names=None, ranks=None,
-           reasons=None, since=None, today: date_ | None = None) -> list[dict]:
+def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
+           since=None, today: date_ | None = None,
+           confirmed_through: date_ | None = None) -> list[dict]:
     """Join broker (or reconstructed) positions to everything else the page knows.
 
     Adds `name`, `weight` (share of equity), `days_held`, `score`/`rank`/
-    `recommendation` and `reason`. Every one of them is optional — a name that
-    isn't in the ranking, a strategy with no ranking at all, and a book read
-    before the journal has a matching row all have to render, so a missing join
-    is None rather than an omitted key.
+    `recommendation`, `reason` and `pending`. Every one of them is optional — a
+    name that isn't in the ranking, a strategy with no ranking at all, and a
+    book read before the journal has a matching row all have to render, so a
+    missing join is None rather than an omitted key.
+
+    `confirmed_through` is the date of the last equity snapshot, and it is what
+    separates a holding from an order still in flight. A reconstructed book
+    replays SUBMITTED rows, and the journal never marks them FILLED — so a buy
+    placed in the most recent run is counted as owned the moment it is placed.
+    The bot runs after the close and its orders queue until the next open, so
+    that is wrong for as long as the market stays shut: on 2026-09-07
+    score_threshold placed three orders, and the panel listed ten holdings for
+    an account that held seven, beside a slots strip that correctly said 7/20.
+
+    The rule is the snapshot's own timing. The runner writes it at the END of a
+    run, after submitting but before anything can fill, so a position opened on
+    or after that date has never been seen by a snapshot. Marked `pending`
+    rather than hidden: an order the bot has placed is real and worth showing —
+    it just isn't a holding yet. Pass None (the live broker path, where every
+    row IS a position) and nothing is ever flagged.
 
     Returned largest-position-first, which is the order that answers "is one
     name taking over".
@@ -284,11 +301,23 @@ def enrich(positions, *, equity=None, names=None, ranks=None,
         row["reason"] = reasons.get(ticker)
         row["since"] = opened
         row["days_held"] = (today - opened).days if (opened and today) else None
+        row["pending"] = bool(confirmed_through and opened and opened >= confirmed_through)
         row.update(ranks.get(ticker) or
                    {"score": None, "rank": None, "recommendation": None})
         rows.append(row)
 
     return sorted(rows, key=lambda r: -(r.get("market_value") or 0.0))
+
+
+def split_pending(rows) -> tuple[list[dict], list[dict]]:
+    """(held, pending) — what the account owns, and what it has only ordered.
+
+    Kept separate so a count of holdings never silently includes an order that
+    has not filled. See `enrich` for how `pending` is decided.
+    """
+    held = [r for r in rows or () if not r.get("pending")]
+    pending = [r for r in rows or () if r.get("pending")]
+    return held, pending
 
 
 def latest_reasons(decisions) -> dict[str, str]:

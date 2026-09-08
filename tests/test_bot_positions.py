@@ -360,3 +360,79 @@ def test_latest_reasons_keeps_the_newest_explanation_per_ticker():
         {"ticker": None, "reason": "Book already matches"},
     ])
     assert reasons == {"MU": "Score 79.4 — still Strong Buy"}
+
+
+# --------------------------------------------------------------------------
+# Orders in flight are not holdings
+#
+# A reconstructed book replays SUBMITTED rows and the journal never marks them
+# FILLED, so a buy counted as owned the instant it is placed. The bot submits
+# after the close and its orders queue until the next open — so on 2026-09-07
+# score_threshold placed three, and the panel listed ten holdings for an
+# account Alpaca said held seven, beside a slots strip correctly reading 7/20.
+# --------------------------------------------------------------------------
+
+def _row(ticker, market_value=100.0):
+    return {"ticker": ticker, "market_value": market_value}
+
+
+def test_a_position_opened_after_the_last_snapshot_is_pending():
+    rows = positions.enrich(
+        [_row("FSLR")],
+        since={"FSLR": date(2026, 9, 7)},
+        confirmed_through=date(2026, 9, 7),      # the snapshot from that same run
+    )
+    assert rows[0]["pending"] is True
+
+
+def test_a_position_the_snapshot_has_seen_is_not_pending():
+    rows = positions.enrich(
+        [_row("MU")],
+        since={"MU": date(2026, 9, 1)},
+        confirmed_through=date(2026, 9, 7),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_the_next_run_confirms_it():
+    """The flag has to clear on its own, or a filled position stays 'ordered'."""
+    rows = positions.enrich(
+        [_row("FSLR")],
+        since={"FSLR": date(2026, 9, 7)},
+        confirmed_through=date(2026, 9, 8),      # tonight's snapshot
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_the_live_broker_path_never_flags_anything():
+    """Every row from Alpaca IS a position — there is nothing to be unsure about."""
+    rows = positions.enrich([_row("SPY")], since={"SPY": date(2026, 9, 7)},
+                            confirmed_through=None)
+    assert rows[0]["pending"] is False
+
+
+def test_a_name_topped_up_in_the_latest_run_is_still_held():
+    """`since` dates the CURRENT holding, so an add to an existing position does
+    not turn the whole position back into an order."""
+    rows = positions.enrich(
+        [_row("MU")],
+        since={"MU": date(2026, 9, 1)},          # opened long ago, added to today
+        confirmed_through=date(2026, 9, 7),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_split_pending_partitions_the_book():
+    rows = positions.enrich(
+        [_row("MU"), _row("FSLR"), _row("ADI")],
+        since={"MU": date(2026, 9, 1), "FSLR": date(2026, 9, 7), "ADI": date(2026, 9, 7)},
+        confirmed_through=date(2026, 9, 7),
+    )
+    held, pending = positions.split_pending(rows)
+    assert [r["ticker"] for r in held] == ["MU"]
+    assert sorted(r["ticker"] for r in pending) == ["ADI", "FSLR"]
+
+
+def test_split_pending_tolerates_rows_that_were_never_enriched():
+    held, pending = positions.split_pending([{"ticker": "SPY"}])
+    assert [r["ticker"] for r in held] == ["SPY"] and pending == []
