@@ -243,6 +243,15 @@ def recent_signals(limit_videos: int = 12) -> list[dict]:
 LEADERBOARD_DAYS = 90        # "the past 3 months"
 LEADERBOARD_MIN_MENTIONS = 2  # a single mention is noise; twice is a pattern
 
+# The shorter window shown beside the 90-day one. It is 30 because that is the
+# window `creator_conviction` actually decides in — the page's job here is to
+# show what the bot sees, so a name can be read as "nine mentions, but only two
+# that count". Reading a 3-month tally as the bot's evidence is a live source of
+# confusion: MU had nine mentions on record and two inside the bot's window, and
+# of the nine, three were bearish. A test pins this equal to the strategy's
+# WINDOW_DAYS rather than an import, which would drag alpaca-py into this page.
+BOT_WINDOW_DAYS = 30
+
 _STANCES = ("bullish", "bearish", "neutral", "unknown")
 
 
@@ -254,15 +263,24 @@ def _naive(value: datetime | None) -> datetime | None:
 
 
 def mention_leaderboard(days: int = LEADERBOARD_DAYS,
-                        min_mentions: int = LEADERBOARD_MIN_MENTIONS) -> list[dict]:
+                        min_mentions: int = LEADERBOARD_MIN_MENTIONS,
+                        recent_days: int | None = None) -> list[dict]:
     """Tickers a creator keeps coming back to. `video_mentions` holds one row per
     (video, ticker), so the count *is* the number of distinct videos that
     discussed it, within `days` of the video's publish date.
 
     Repetition is attention, not conviction — the page says so. Nothing is
     backfilled: the window simply covers whatever has been scanned.
+
+    `recent_days` adds a SECOND, shorter tally to every row — `recent_mentions`
+    and `recent_stances`, counted the same way over the last `recent_days`. It
+    is a parameter rather than a second call because this query reads every
+    mention row and windows them in Python, so asking twice would double the
+    scan to re-derive numbers the first pass already had in hand. Left None,
+    the extra keys are absent and existing callers are untouched.
     """
     cutoff = utcnow() - timedelta(days=days)
+    recent_cutoff = (utcnow() - timedelta(days=recent_days)) if recent_days else None
     with get_session() as s:
         rows = s.execute(
             select(VideoMention, CreatorVideo.published_at, CreatorVideo.processed_at,
@@ -281,9 +299,15 @@ def mention_leaderboard(days: int = LEADERBOARD_DAYS,
             "stances": dict.fromkeys(_STANCES, 0), "last_seen": None,
             "screener_score": None, "recommendation": None, "videos": [],
             "_scored_at": None,
+            **({"recent_mentions": 0, "recent_stances": dict.fromkeys(_STANCES, 0)}
+               if recent_cutoff else {}),
         })
+        stance = mention.stance if mention.stance in _STANCES else "unknown"
         entry["mentions"] += 1
-        entry["stances"][mention.stance if mention.stance in _STANCES else "unknown"] += 1
+        entry["stances"][stance] += 1
+        if recent_cutoff and when >= recent_cutoff:
+            entry["recent_mentions"] += 1
+            entry["recent_stances"][stance] += 1
         if not entry["company_name"] and mention.company_name:
             entry["company_name"] = mention.company_name
         if entry["last_seen"] is None or when > entry["last_seen"]:

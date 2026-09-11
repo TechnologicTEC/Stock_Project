@@ -315,3 +315,85 @@ def test_scan_sends_no_digest_when_no_mentions_found():
 
     digest.assert_not_called()
     assert "digest_sent" not in summary
+
+
+# --------------------------------------------------------------------------
+# The second, shorter window.
+#
+# The Creator Signals table is a 3-month tally, but creator_conviction decides
+# on 30 days — so a name could sit near the top of that table with nothing
+# recent enough for the bot to act on, and the page gave no way to see it. MU
+# was the real case: nine mentions on record, two inside the bot's window, and
+# three of the nine bearish.
+# --------------------------------------------------------------------------
+
+def _two_window_board():
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    now = utcnow()
+    # Inside both windows.
+    _seed_video(cid, "R1", now - timedelta(days=2))
+    _seed_mention("R1", "MU", "bullish")
+    # Inside 90 days, outside 30.
+    _seed_video(cid, "R2", now - timedelta(days=45))
+    _seed_mention("R2", "MU", "bearish")
+    _seed_video(cid, "R3", now - timedelta(days=60))
+    _seed_mention("R3", "MU", "bullish")
+    return creator_signals.mention_leaderboard(recent_days=creator_signals.BOT_WINDOW_DAYS)
+
+
+def test_the_recent_window_counts_only_what_falls_inside_it():
+    board = _two_window_board()
+    mu = next(e for e in board if e["ticker"] == "MU")
+
+    assert mu["mentions"] == 3                                   # the 3-month tally
+    assert mu["stances"]["bullish"] == 2 and mu["stances"]["bearish"] == 1
+    assert mu["recent_mentions"] == 1                            # the bot's window
+    assert mu["recent_stances"]["bullish"] == 1
+    assert mu["recent_stances"]["bearish"] == 0                  # the old bear is out of it
+
+
+def test_the_recent_keys_are_absent_unless_asked_for():
+    """Existing callers — creator_conviction among them — must see no change."""
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    _seed_video(cid, "V1", utcnow() - timedelta(days=1))
+    _seed_video(cid, "V2", utcnow() - timedelta(days=2))
+    _seed_mention("V1", "NVDA", "bullish")
+    _seed_mention("V2", "NVDA", "bullish")
+
+    entry = creator_signals.mention_leaderboard()[0]
+    assert "recent_mentions" not in entry and "recent_stances" not in entry
+
+
+def test_a_name_with_nothing_recent_still_appears_with_a_zero():
+    """The row must not vanish — "he has stopped talking about it" is the point."""
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+    _seed_video(cid, "O1", utcnow() - timedelta(days=50))
+    _seed_video(cid, "O2", utcnow() - timedelta(days=70))
+    _seed_mention("O1", "CRM", "bullish")
+    _seed_mention("O2", "CRM", "bullish")
+
+    crm = next(e for e in creator_signals.mention_leaderboard(recent_days=30)
+               if e["ticker"] == "CRM")
+    assert crm["mentions"] == 2
+    assert crm["recent_mentions"] == 0
+    assert sum(crm["recent_stances"].values()) == 0
+
+
+def test_the_page_window_matches_the_strategy_that_decides_on_it():
+    """Pinned by a test rather than an import.
+
+    The page shows BOT_WINDOW_DAYS beside the 3-month tally and tells the reader
+    it is the window the bot decides in. Importing creator_conviction to prove
+    that would drag executor and alpaca-py into a read-only page, so the two
+    constants are kept in step here instead — where a change to either fails
+    loudly rather than quietly making the page's claim untrue.
+    """
+    from engine.bot.strategies import creator_conviction
+
+    assert creator_signals.BOT_WINDOW_DAYS == creator_conviction.WINDOW_DAYS

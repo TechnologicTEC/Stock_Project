@@ -70,7 +70,12 @@ def _add_button(column, ticker: str, key: str) -> None:
 
 
 # --- Repeat mentions: the "he keeps talking about this" signal ----------------
-board = creator_signals.mention_leaderboard()
+# Two windows, not one. The 3-month tally is the "keeps coming back to it"
+# signal this section was built for; the 30-day one is the window the trading
+# bot actually decides in, and the two routinely disagree — a name can sit near
+# the top on three months of attention while carrying almost nothing recent.
+_RECENT = creator_signals.BOT_WINDOW_DAYS
+board = creator_signals.mention_leaderboard(recent_days=_RECENT)
 
 # Kept as a column grid rather than a .cp-table: each row carries a real
 # "add to watchlist" button, and Streamlit widgets can't live inside raw HTML.
@@ -79,30 +84,49 @@ with _theme.section("Mentioned more than once", tag="last 3 months"):
         "How often a creator comes back to a stock. Repetition is **attention, not conviction** — "
         "he may be bearish, or just chasing views. Stocks mentioned only once are hidden."
     )
+    st.caption(
+        f"Each cell shows **3 months** on top and the **past {_RECENT} days** beneath it. The "
+        f"shorter window is the one the trading bot decides in, and it counts *bullish* mentions, "
+        "not mentions — a stock can be named nine times in three months and still carry only two "
+        "recent calls to act on."
+    )
 
     if not board:
         st.caption("Nothing has been mentioned twice yet — tickers appear here as new videos are scanned.")
     else:
-        _WIDTHS = [1.2, 2.6, 1.1, 2.0, 1.3, 1.5, 1.3]
+        _WIDTHS = [1.2, 2.4, 1.2, 2.6, 1.2, 1.4, 1.2]
         head = st.columns(_WIDTHS)
         for col, label in zip(head, ["Ticker", "Company", "Mentions", "Creator's takes",
                                      "Last seen", "Screener", ""]):
             col.markdown(f'<div class="cp-eyebrow">{label}</div>', unsafe_allow_html=True)
 
+        def _takes(stances: dict) -> str:
+            """Stance as labelled badges, not bare coloured circles — the count
+            alone gave no clue which colour meant what."""
+            return " ".join(
+                _theme.badge_html(f"{stances[k]} {k}", _STANCE_CLASS[k])
+                for k in ("bullish", "bearish", "neutral") if stances[k]
+            ) or '<span class="cp-dim">—</span>'
+
         for entry in board:
             c = st.columns(_WIDTHS)
             c[0].markdown(f'<span class="cp-tick">{entry["ticker"]}</span>', unsafe_allow_html=True)
             c[1].write(entry["company_name"] or "—")
-            c[2].markdown(f'<span class="cp-num">{entry["mentions"]}×</span>', unsafe_allow_html=True)
 
-            # Stance as labelled badges, not bare coloured circles — the count
-            # alone gave no clue which colour meant what.
-            stances = entry["stances"]
-            takes = " ".join(
-                _theme.badge_html(f"{stances[k]} {k}", _STANCE_CLASS[k])
-                for k in ("bullish", "bearish", "neutral") if stances[k]
-            )
-            c[3].markdown(takes or '<span class="cp-dim">—</span>', unsafe_allow_html=True)
+            # 3 months on top, the bot's window beneath. A row whose second line
+            # is empty is one the creator has stopped talking about — which is
+            # the thing a 3-month count alone actively hides.
+            recent = entry.get("recent_mentions", 0)
+            c[2].markdown(
+                f'<span class="cp-num">{entry["mentions"]}×</span>'
+                f'<div class="cp-dim" style="font-size:11.5px;margin-top:2px">'
+                f'{recent}× in {_RECENT}d</div>',
+                unsafe_allow_html=True)
+            c[3].markdown(
+                f'<div>{_takes(entry["stances"])}</div>'
+                f'<div style="margin-top:4px;opacity:.72">'
+                f'{_takes(entry.get("recent_stances") or {k: 0 for k in _STANCE_CLASS})}</div>',
+                unsafe_allow_html=True)
             c[4].markdown(
                 f'<span class="cp-dim">{entry["last_seen"].strftime("%b %d") if entry["last_seen"] else "—"}</span>',
                 unsafe_allow_html=True)
