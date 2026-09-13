@@ -19,12 +19,32 @@ name: Trading bot
 
 on:
   schedule:
-    # 21:45 UTC on weekdays — 15 minutes after warm-cache's 21:30, so the day's
-    # prices and fundamentals are already in Supabase and the bot reads a warm
-    # cache instead of re-fetching. Both are shortly after the 4pm ET close
+    # 21:45 UTC, SUNDAY THROUGH THURSDAY — 15 minutes after warm-cache's 21:30,
+    # so the day's prices and fundamentals are already in Supabase and the bot
+    # reads a warm cache instead of re-fetching. Shortly after the 4pm ET close
     # (works for EST and EDT). Orders placed after the close queue for the next
     # open, which is the intended behaviour for a daily bot.
-    - cron: "45 21 * * 1-5"
+    #
+    # Sun-Thu, not Mon-Fri, and the day that moved is the one that mattered.
+    # Both schedules place five orders a week into the same five sessions —
+    # every run fills at the next open, and the Friday and Sunday runs both fill
+    # at MONDAY's open, because no session exists in between. What differs is
+    # what the run can see when it decides:
+    #
+    #   Friday 21:45 UTC   fills Mon open, 3 days queued, leaderboard 5 days old
+    #   Sunday 21:45 UTC   fills Mon open, 1 day  queued, leaderboard ~6h old
+    #
+    # The S&P 500 leaderboard is rebuilt weekly at Sunday 13:10 UTC and takes
+    # 1.5-3h, so a Sunday-evening run is the first one that can act on it. The
+    # old Friday run read a ranking from the PREVIOUS Sunday and was the
+    # staleest of the week; now the freshest ranking feeds the run whose orders
+    # open the trading week. Friday's closes are not skipped — they are still
+    # the newest data on Sunday, so that run acts on exactly what the Friday run
+    # would have, with a better ranking and two fewer days in flight.
+    #
+    # In NZ (UTC+12/13) this reads as weekday mornings, Mon-Fri, instead of
+    # Tue-Sat. Runs land ~100-120 min late in practice, so ~11:30 NZ.
+    - cron: "45 21 * * 0-4"
   workflow_dispatch:
     inputs:
       dry_run:

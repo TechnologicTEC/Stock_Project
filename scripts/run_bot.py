@@ -55,6 +55,32 @@ def _status(dry_run: bool, live_status: str) -> str:
     return journal.DRY_RUN if dry_run else live_status
 
 
+def sessions_behind(newest: date_, today: date_) -> int:
+    """How many trading sessions the newest cached bar is missing.
+
+    Weekdays strictly after `newest`, up to and including `today`. 0 means the
+    cache is current. Counted in weekdays rather than calendar days because the
+    schedule now includes a Sunday run, where Friday's close IS the newest data
+    that can exist — a calendar-day count called that two days stale and fired
+    the warning below every single week.
+
+    Skipping the weekend days is all it takes; there is no need to first walk
+    `today` back to the last weekday, because a Saturday or Sunday contributes
+    nothing to the count either way.
+
+    Weekdays, not Alpaca's calendar: a US market holiday leaves no bar, so the
+    run after one reports 1 session behind when nothing is actually wrong. That
+    is a benign over-warning a few times a year, and it keeps this diagnostic
+    free of the network call that grading fills needs.
+    """
+    behind, day = 0, newest + timedelta(days=1)
+    while day <= today:
+        if day.weekday() < 5:           # 5 = Saturday, 6 = Sunday
+            behind += 1
+        day += timedelta(days=1)
+    return behind
+
+
 def _log_price_freshness(today: date_) -> None:
     """Say how old the newest cached price bar is, and complain if it is stale.
 
@@ -79,13 +105,14 @@ def _log_price_freshness(today: date_) -> None:
             _log(f"  price cache: no recent {BENCHMARK_TICKER} bars at all")
             return
         newest = max(dates)
-        age = (today - newest).days
-        if age == 0:
-            _log(f"  price cache: current (newest {BENCHMARK_TICKER} bar is today)")
+        behind = sessions_behind(newest, today)
+        if behind == 0:
+            _log(f"  price cache: current (newest {BENCHMARK_TICKER} bar is {newest}, "
+                 f"the latest close there should be)")
         else:
-            _log(f"  price cache: newest {BENCHMARK_TICKER} bar is {newest} ({age} day(s) old) "
-                 "— warm-cache may not have run yet; price-driven signals are reading "
-                 "older closes than intended.")
+            _log(f"  price cache: newest {BENCHMARK_TICKER} bar is {newest}, {behind} "
+                 f"session(s) behind — warm-cache may not have run yet (or it was a market "
+                 "holiday); price-driven signals are reading older closes than intended.")
     except Exception as exc:                 # noqa: BLE001 — diagnostics never break a run
         _log(f"  price cache: freshness unknown ({type(exc).__name__})")
 

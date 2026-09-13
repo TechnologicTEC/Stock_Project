@@ -186,11 +186,11 @@ def test_no_row_a_dry_run_writes_ever_counts_as_a_run(recorded):
 # ordering is an assumption, and a stale read has to be visible.
 # --------------------------------------------------------------------------
 
-def _freshness_log(bars):
+def _freshness_log(bars, today=date(2026, 9, 1)):      # a Tuesday
     lines = []
     with patch("engine.cache.get_closes_for", return_value=bars), \
          patch.object(run_bot, "_log", lines.append):
-        run_bot._log_price_freshness(date(2026, 9, 1))
+        run_bot._log_price_freshness(today)
     return " ".join(lines)
 
 
@@ -202,9 +202,14 @@ def test_a_current_cache_says_so_plainly():
 
 def test_a_stale_cache_names_the_age_and_the_likely_cause():
     """golden_cross would compute its 50/200 cross from yesterday's closes and
-    nothing would say so."""
-    out = _freshness_log({"SPY": [(date(2026, 8, 28), 600.0)]})
-    assert "2026-08-28" in out and "4 day(s) old" in out
+    nothing would say so.
+
+    Counted in SESSIONS: Friday 28 Aug to Tuesday 1 Sep is four calendar days
+    but only two missed closes, and the number worth printing is how many the
+    strategies are actually behind.
+    """
+    out = _freshness_log({"SPY": [(date(2026, 8, 28), 600.0)]})       # a Friday
+    assert "2026-08-28" in out and "2 session(s) behind" in out
     assert "warm-cache may not have run yet" in out
 
 
@@ -220,3 +225,35 @@ def test_a_failing_freshness_check_never_breaks_the_run():
          patch.object(run_bot, "_log", lines.append):
         run_bot._log_price_freshness(date(2026, 9, 1))
     assert "freshness unknown" in " ".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Freshness across the weekend.
+#
+# The schedule moved from Mon-Fri UTC to Sun-Thu, so the bot now runs on a day
+# with no close of its own. Friday's bar IS the newest data then, and a
+# calendar-day count called that two days stale on every Sunday run — a warning
+# that fires every week is one nobody reads.
+# --------------------------------------------------------------------------
+
+def test_fridays_close_is_current_on_a_sunday_run():
+    out = _freshness_log({"SPY": [(date(2026, 9, 11), 600.0)]},      # Friday
+                         today=date(2026, 9, 13))                    # Sunday
+    assert "current" in out
+    assert "may not have run" not in out
+
+
+def test_fridays_close_is_stale_once_monday_has_closed():
+    """The same bar, one day later, is genuinely a session behind."""
+    out = _freshness_log({"SPY": [(date(2026, 9, 11), 600.0)]},      # Friday
+                         today=date(2026, 9, 14))                    # Monday
+    assert "1 session(s) behind" in out
+
+
+def test_sessions_behind_ignores_weekends_entirely():
+    friday, sunday = date(2026, 9, 11), date(2026, 9, 13)
+    assert run_bot.sessions_behind(friday, friday) == 0
+    assert run_bot.sessions_behind(friday, date(2026, 9, 12)) == 0    # Saturday
+    assert run_bot.sessions_behind(friday, sunday) == 0
+    assert run_bot.sessions_behind(friday, date(2026, 9, 14)) == 1    # Monday
+    assert run_bot.sessions_behind(friday, date(2026, 9, 18)) == 5    # the next Friday
