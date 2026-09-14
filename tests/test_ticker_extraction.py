@@ -68,3 +68,41 @@ def test_dictionary_path_ignores_single_word_common_names():
 
 def test_empty_text_returns_nothing():
     assert ticker_extraction.extract_mentions("   ") == []
+
+
+# --------------------------------------------------------------------------
+# Server-side failures are retryable too.
+#
+# Extraction runs ONCE per video and what it stores is permanent — the video is
+# stamped `mentions_extracted_at` and never revisited. So the set of errors that
+# defer has to cover more than quota. Gemini returned 503 on 2026-09-14, matched
+# nothing, and the run stored six dictionary mentions with `unknown` stance for
+# a video that was bullish on all six — mentions creator_conviction can never
+# act on, because it counts BULLISH ones.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("message", [
+    "503 Service Unavailable",                      # the one that actually happened
+    "ServerError: 500 INTERNAL",
+    "502 Bad Gateway",
+    "504 Gateway Timeout",
+    "UNAVAILABLE: connection refused",
+    "model is overloaded, try again later",
+    "DEADLINE_EXCEEDED",
+    "request timed out",
+])
+def test_server_side_failures_defer_instead_of_storing_the_fallback(message):
+    with patch("engine.ticker_extraction._llm_available", return_value=True), \
+         patch("engine.ticker_extraction._extract_llm", side_effect=RuntimeError(message)):
+        with pytest.raises(ticker_extraction.TransientExtractionError):
+            ticker_extraction.extract_mentions("some transcript text")
+
+
+def test_a_genuine_bug_still_falls_back_rather_than_blocking_forever():
+    """Not everything is retryable. A broken SDK would otherwise mean a video
+    is deferred on every scan and never extracted at all."""
+    with patch("engine.ticker_extraction._llm_available", return_value=True), \
+         patch("engine.ticker_extraction._extract_llm",
+               side_effect=TypeError("got an unexpected keyword argument")):
+        got = {m.ticker for m in ticker_extraction.extract_mentions("I like AAPL and $TSLA")}
+    assert got == {"AAPL", "TSLA"}

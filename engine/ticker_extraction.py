@@ -41,13 +41,41 @@ class Mention:
 
 
 class TransientExtractionError(RuntimeError):
-    """The LLM was configured but failed for a *transient* reason (quota / rate
-    limit). Callers should retry later rather than accept the sparse dictionary
-    result as final — see engine/creator_signals.py's retry flag."""
+    """The LLM was configured but failed for a *transient* reason — quota, rate
+    limit, or the service itself being down (5xx / UNAVAILABLE / timeout).
+    Callers should retry later rather than accept the sparse dictionary result
+    as final — see engine/creator_signals.py's retry flag."""
 
 
-# Substrings that mark a retryable LLM failure (same set as the chat responder).
-_TRANSIENT = ("429", "resource_exhausted", "quota", "rate limit", "rate-limit")
+# Substrings that mark a retryable LLM failure.
+#
+# Quota/rate-limit was the original set, borrowed from the chat responder. That
+# was too narrow, because the two have opposite consequences: chat falls back,
+# shows a note, and the user can just ask again, while extraction runs ONCE per
+# video and whatever it stores is permanent — `mentions_extracted_at` is set and
+# the video is never revisited.
+#
+# Gemini returned **503 Service Unavailable** on 2026-09-14. A 503 is the
+# textbook retryable error, but it matched nothing here, so the failure was
+# treated as permanent: the run fell through to the dictionary, stored six
+# mentions with `unknown` stance, and marked the video done. The stance is what
+# creator_conviction counts — `unknown` contributes to `mentions` but not to
+# `bullish` — so a bullish roundup of six names became six mentions the bot can
+# never act on. It also mis-tickered two of them, because captions garble spoken
+# symbols ("Fortinet ... FTNT" came through as FT, "Cloudflare ... NET" as NE)
+# and both truncations happen to be real tickers of unrelated companies, so SEC
+# validation passes them. Reading the NAME in context is exactly what the LLM
+# path is for, which is why deferring beats accepting the fallback.
+#
+# 5xx, UNAVAILABLE, DEADLINE_EXCEEDED and timeouts all mean "the service failed,
+# not the request" — retry in six hours and the next scan picks it up.
+_TRANSIENT = (
+    "429", "resource_exhausted", "quota", "rate limit", "rate-limit",
+    "500", "502", "503", "504",
+    "unavailable", "overloaded", "internal server error", "internal error",
+    "deadline_exceeded", "deadline exceeded", "timeout", "timed out",
+    "try again later", "temporarily",
+)
 
 
 def _is_transient(exc: Exception) -> bool:
