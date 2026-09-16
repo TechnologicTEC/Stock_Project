@@ -81,6 +81,59 @@ def sessions_behind(newest: date_, today: date_) -> int:
     return behind
 
 
+UNAPPLIED_SPLIT = "unapplied_split"
+
+
+def _check_unapplied_splits(strategy: str, run_id: str, config: dict, today: date_,
+                            *, dry_run: bool = False) -> None:
+    """Journal any split the broker recorded but never applied to the position.
+
+    Alpaca's paper accounts do not process corporate actions — confirmed with
+    their support on 2026-09-16 — so a split silently rewrites a position's
+    value: APH's 2-for-1 left 1.268 shares priced at the post-split $77.66, a
+    $197 holding reported as $98.
+
+    This cannot fix it. The shares are absent from the broker's ledger and no
+    order recovers them; buying the difference spends cash to rebuild exposure
+    rather than undoing the write-down. Journalling it keeps the five equity
+    curves comparable, which is the entire point of running five accounts — an
+    unexplained -1% in one of them is otherwise read as strategy performance.
+
+    Never raises. A diagnostic that can stop a trading run is worse than no
+    diagnostic.
+    """
+    from engine.bot import corporate_actions, live
+    from engine.bot import positions as bot_positions
+
+    try:
+        view = live.account_view(config["key_env_prefix"])
+        if not view.get("available") or not view.get("positions"):
+            return
+        held = view["positions"]
+        opened = bot_positions.held_since(journal.fills(strategy))
+        # A year is comfortably wider than any position's life so far, and the
+        # feed is queried per run, not per position.
+        splits = corporate_actions.fetch_splits(
+            config["key_env_prefix"], [p["ticker"] for p in held],
+            today - timedelta(days=365), today)
+        rows = corporate_actions.unapplied(held, splits, opened=opened)
+    except Exception as exc:                 # noqa: BLE001 — see docstring
+        _log(f"  split check: unavailable ({type(exc).__name__})")
+        return
+
+    if not rows:
+        return
+    for row in rows:
+        message = corporate_actions.describe(row)
+        _log(f"  SPLIT NOT APPLIED: {message}")
+        journal.record(
+            run_id=run_id, strategy=strategy, ticker=row["ticker"],
+            action=journal.SKIP, reason=message,
+            status=_status(dry_run, journal.SKIPPED), blocked_by=UNAPPLIED_SPLIT,
+            inputs={k: (str(v) if k == "ex_dates" else v) for k, v in row.items()},
+        )
+
+
 def _log_price_freshness(today: date_) -> None:
     """Say how old the newest cached price bar is, and complain if it is stale.
 
@@ -182,6 +235,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
     _log_price_freshness(today)
+    _check_unapplied_splits(strategy, run_id, config, today, dry_run=dry_run)
 
     # Gather, then decide. `prepare` is the only place a strategy does I/O; if it
     # can't see its inputs, `build` raises rather than returning an empty book —

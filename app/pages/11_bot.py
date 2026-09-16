@@ -655,6 +655,32 @@ for tab, r in zip(tabs, tab_rows):
                          '<p class="cp-note">Needs at least two daily snapshots to draw a line. '
                          "The bot writes one per weekday run.</p>")
 
+        # ---- a split the broker never applied ----
+        # Read from the JOURNAL, not the broker, because the runner is the only
+        # place with Alpaca keys — the deployed Space has none, and this note
+        # matters most exactly where the numbers cannot be checked by hand. It
+        # sits directly under the chart it explains: the artefact is in that
+        # line, and a reader who scrolls past to the holdings has already drawn
+        # the wrong conclusion about the strategy.
+        split_notes = [d for d in r["decisions"] if d.get("blocked_by") == "unapplied_split"]
+        seen_tickers, unique_notes = set(), []
+        for note in split_notes:                      # newest first; one per name
+            if note.get("ticker") not in seen_tickers:
+                seen_tickers.add(note.get("ticker"))
+                unique_notes.append(note)
+        if unique_notes:
+            body = "".join(f'<p class="cp-note">{_esc(n["reason"])}</p>' for n in unique_notes)
+            _theme.panel(
+                "Account value includes a broker artefact",
+                body + '<p class="cp-foot">Alpaca\'s paper accounts do not process stock '
+                       "splits (confirmed with their support, 16 Sep 2026). The shares are "
+                       "missing from the broker's ledger, so no order recovers them — buying "
+                       "the difference would spend cash to rebuild the position, not undo the "
+                       "write-down. It is recorded here so this strategy's curve is not read "
+                       "as a result it did not produce.</p>",
+                tag=f"{len(unique_notes)} position(s) affected",
+            )
+
         # ---- live account: positions, or an honest note about why not ----
         view = r["view"]
         slots = cfg.get("target_slots") or 1

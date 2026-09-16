@@ -689,3 +689,67 @@ def test_the_holdings_count_agrees_with_the_slots_strip():
     # strip reads; the table must land on the same number rather than on 2.
     assert _strip(at)["Filled"] == "1 / 20"
     assert "1 held ·" in _body(at)
+
+
+# --------------------------------------------------------------------------
+# The broker-artefact note.
+#
+# Alpaca's paper accounts do not process splits. APH's 2-for-1 left that
+# account's equity ~$98 light for reasons nothing to do with top_decile_long's
+# signal, and five accounts exist to be compared with one another.
+# --------------------------------------------------------------------------
+
+def _split_note(**overrides):
+    base = _decision(
+        ticker="APH", action=journal.SKIP, status=journal.SKIPPED,
+        blocked_by="unapplied_split",
+        reason="APH had a 2-for-1 forward split on 2026-09-03 that the broker has not "
+               "applied: still 1.2682 shares at an entry of $157.70, when it should be "
+               "2.5364 at $78.85.",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_an_unapplied_split_is_called_out_on_the_tab():
+    at = _run(decisions=[_split_note(), _decision()])
+    body = _body(at)
+    assert "Account value includes a broker artefact" in body
+    assert "2-for-1 forward split" in body
+    assert "do not process stock splits" in body
+
+
+def test_the_note_says_no_order_can_recover_it():
+    """The wrong reading is 'so buy the missing shares' — it does not undo the
+    write-down, it spends cash to rebuild the position."""
+    body = _body(_run(decisions=[_split_note(), _decision()]))
+    assert "no order recovers them" in body
+
+
+def _artefact_panel(at) -> str:
+    """Just the note panel. The reason text also appears in the two decision
+    journals further down the page, which is correct and not what is under
+    test here."""
+    return next(m.value for m in at.markdown
+                if "Account value includes a broker artefact" in m.value)
+
+
+def test_one_line_per_name_however_many_runs_recorded_it():
+    """The runner journals it every run, so a fortnight of them must not stack
+    fourteen identical paragraphs under the chart."""
+    at = _run(decisions=[_split_note(), _split_note(), _split_note(), _decision()])
+    assert _artefact_panel(at).count("2-for-1 forward split") == 1
+    assert "1 position(s) affected" in _body(at)
+
+
+def test_two_affected_names_both_appear():
+    at = _run(decisions=[_split_note(),
+                         _split_note(ticker="MNST", reason="MNST had a 2-for-1 split."),
+                         _decision()])
+    body = _body(at)
+    assert "2-for-1 forward split" in body and "MNST had a 2-for-1 split" in body
+    assert "2 position(s) affected" in body
+
+
+def test_nothing_is_shown_when_no_split_was_missed():
+    assert "broker artefact" not in _body(_run())

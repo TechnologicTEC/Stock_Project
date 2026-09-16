@@ -289,3 +289,81 @@ def test_bars_are_requested_split_adjusted():
         "'all' rewrites history to dividend-adjusted prices that never traded "
         "(which check_fills grades real fills against)"
     )
+
+
+# --------------------------------------------------------------------------
+# Picking the adjustment that actually produces a continuous series.
+#
+# "split" is right for a genuine split (APH 2-for-1, where raw shows a 49%
+# cliff). It is WRONG for HON, where Alpaca carries a reverse-split alongside a
+# June 2026 spin-off that never happened to the price — applying it invents a
+# 50.9% cliff where raw runs continuously at 3.7%.
+# --------------------------------------------------------------------------
+
+class _CloseBar:
+    def __init__(self, day, close):
+        self.timestamp = datetime(2026, 6, day, tzinfo=timezone.utc)
+        self.open = self.high = self.low = self.close = close
+        self.volume = 1000
+
+
+def _two_feed_client(split_closes, raw_closes):
+    """A client answering differently for adjustment='split' vs 'raw'."""
+    calls = []
+
+    class _Client:
+        def get_stock_bars(self, req):
+            adj = str(getattr(req.adjustment, "value", req.adjustment))
+            calls.append(adj)
+            closes = raw_closes if adj == "raw" else split_closes
+            symbol = req.symbol_or_symbols
+            return {symbol: [_CloseBar(24 + i, c) for i, c in enumerate(closes)]}
+
+    return _Client(), calls
+
+
+def _closes_from(bars):
+    return [b["close"] for b in bars]
+
+
+def test_an_invented_cliff_falls_back_to_the_raw_series():
+    """HON: split fabricates a 50.9% drop, raw is continuous."""
+    client, calls = _two_feed_client(split_closes=[454.84, 462.48, 464.42, 227.80],
+                                     raw_closes=[227.42, 231.24, 232.21, 227.80])
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars = alpaca_client.get_historical_bars("HON", date(2026, 6, 24), date(2026, 6, 27))
+    assert _closes_from(bars) == [227.42, 231.24, 232.21, 227.80]
+    assert "raw" in calls, "should have asked for a second opinion"
+
+
+def test_a_real_split_keeps_the_adjusted_series():
+    """APH: split is continuous, raw is the one with the cliff."""
+    client, calls = _two_feed_client(split_closes=[78.87, 79.28, 81.59, 80.04],
+                                     raw_closes=[157.74, 158.55, 163.18, 80.04])
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars = alpaca_client.get_historical_bars("APH", date(2026, 6, 24), date(2026, 6, 27))
+    assert _closes_from(bars) == [78.87, 79.28, 81.59, 80.04]
+    assert calls == ["split"], "no cliff, so no second call"
+
+
+def test_a_genuine_crash_is_left_alone():
+    """GL fell 53% on a short-seller report. Both feeds agree, so the default
+    stands rather than the fallback silently rewriting a real move."""
+    crash = [100.0, 99.0, 98.0, 46.0]
+    client, calls = _two_feed_client(split_closes=crash, raw_closes=crash)
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars = alpaca_client.get_historical_bars("GL", date(2026, 6, 24), date(2026, 6, 27))
+    assert _closes_from(bars) == crash
+
+
+def test_a_failing_second_opinion_never_breaks_the_fetch():
+    class _Client:
+        def get_stock_bars(self, req):
+            adj = str(getattr(req.adjustment, "value", req.adjustment))
+            if adj == "raw":
+                raise RuntimeError("upstream down")
+            return {"X": [_CloseBar(24 + i, c) for i, c in enumerate([100.0, 45.0])]}
+
+    with patch.object(alpaca_client, "_data_client", return_value=_Client()):
+        bars = alpaca_client.get_historical_bars("X", date(2026, 6, 24), date(2026, 6, 25))
+    assert _closes_from(bars) == [100.0, 45.0]

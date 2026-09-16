@@ -34,6 +34,18 @@ class AlpacaConfigError(RuntimeError):
     pass
 
 
+# A one-day move this large is almost always a corporate-action artefact rather
+# than a price. Real ones happen (GL fell 53% on a short-seller report), which
+# is why this only triggers a COMPARISON rather than a correction.
+SPLIT_CLIFF_MOVE = 0.35
+
+
+def _largest_one_day_move(bars: list) -> float:
+    """Biggest close-to-close move in a bar list, as a fraction."""
+    closes = [float(b.close) for b in bars if getattr(b, "close", None)]
+    return max((abs(b / a - 1.0) for a, b in zip(closes, closes[1:]) if a), default=0.0)
+
+
 def is_configured() -> bool:
     """Whether both Alpaca keys are present — lets pages show a friendly setup
     prompt instead of raising when the account isn't wired up yet."""
@@ -177,6 +189,32 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
         adjustment="split",
     )
     bars = _data_client().get_stock_bars(req)[ticker]
+
+    # Neither adjustment mode is right for every name, so pick the one that
+    # actually produces a continuous series.
+    #
+    # "split" is correct for a genuine split: APH went 2-for-1 on 2026-09-03 and
+    # raw reads 160.08 -> 82.07, a 49% cliff that nothing downstream can tell
+    # from a crash. But Alpaca also carries a reverse-split for HON on
+    # 2026-06-29, alongside a spin-off, that never happened to the price — so
+    # applying it INVENTS a cliff: raw runs 232.21 -> 227.80 (3.7%) while split
+    # gives 464.42 -> 227.80 (50.9%). Honeywell then looks to the screener like
+    # it halved, and gets marked down for it.
+    #
+    # So: when the adjusted series still contains a cliff, fetch raw and keep
+    # whichever moved less. A real crash looks identical in both (GL fell 53%
+    # either way), so the comparison leaves it alone and the default stands.
+    # The extra call only happens on the rare name that trips the threshold.
+    if _largest_one_day_move(bars) > SPLIT_CLIFF_MOVE:
+        try:
+            raw_req = StockBarsRequest(symbol_or_symbols=ticker, timeframe=TimeFrame.Day,
+                                       start=start_dt, end=end_dt, adjustment="raw")
+            raw_bars = _data_client().get_stock_bars(raw_req)[ticker]
+            if raw_bars and _largest_one_day_move(raw_bars) < _largest_one_day_move(bars):
+                bars = raw_bars
+        except Exception:                # noqa: BLE001 — a second opinion, not a requirement
+            pass
+
     return [
         {
             "date": b.timestamp.date(),
