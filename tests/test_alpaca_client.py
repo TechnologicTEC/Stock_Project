@@ -269,3 +269,23 @@ def test_a_client_pointed_at_live_money_is_refused():
 
     with pytest.raises(alpaca_client.AlpacaConfigError, match="not the paper endpoint"):
         alpaca_client._assert_paper(LiveClient())
+
+
+# --------------------------------------------------------------------------
+# Split adjustment.
+#
+# Alpaca's default is "raw", which leaves a permanent cliff at every split.
+# APH went 2-for-1 on 2026-09-03 and came back as 160.08 then 82.07 — a 49%
+# fall as far as anything downstream could tell. The screener's momentum
+# factor, golden_cross's SMAs, the backtest, the validation forward-returns
+# and the bot page's rebuilt entry price all read that as a crash.
+# --------------------------------------------------------------------------
+
+def test_bars_are_requested_split_adjusted():
+    req = _captured_request(date(2026, 8, 20))
+    adjustment = str(getattr(req.adjustment, "value", req.adjustment))
+    assert adjustment == "split", (
+        f"got {adjustment!r} — 'raw' leaves a split as an apparent crash, and "
+        "'all' rewrites history to dividend-adjusted prices that never traded "
+        "(which check_fills grades real fills against)"
+    )

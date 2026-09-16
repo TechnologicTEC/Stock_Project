@@ -156,6 +156,25 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
         timeframe=TimeFrame.Day,
         start=start_dt,
         end=end_dt,
+        # SPLIT-ADJUSTED. Alpaca defaults to "raw", which leaves a permanent
+        # cliff in the series at every split: APH 2-for-1 on 2026-09-03 came
+        # back as 2 Sep close 160.08 then 3 Sep close 82.07. Nothing downstream
+        # can tell that from a 49% crash — the screener's momentum factor reads
+        # it as one, golden_cross's 50/200 SMAs straddle it, the backtest and
+        # the validation forward-returns inherit it, and the bot page priced a
+        # rebuilt position off the pre-split open and showed APH bought at
+        # $160.06 against an all-time high of $89.
+        #
+        # "split", not "all": dividend adjustment rewrites history to prices
+        # that never traded, and these bars are also what `check_fills` grades a
+        # real fill against. It does mean a fill placed BEFORE a split no longer
+        # matches its (now adjusted) bar — narrow, and a diagnostic reporting an
+        # anomaly there is the correct outcome.
+        #
+        # This also makes Alpaca agree with yfinance, whose OHLC is already
+        # split-adjusted (auto_adjust=False only turns off the DIVIDEND
+        # adjustment). The two sources silently disagreed before.
+        adjustment="split",
     )
     bars = _data_client().get_stock_bars(req)[ticker]
     return [
