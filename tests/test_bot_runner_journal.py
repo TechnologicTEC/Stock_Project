@@ -83,15 +83,22 @@ def recorded(monkeypatch):
 
 
 def _run(rows, *, dry_run, targets=(), notes=(), open_orders=(), client=None,
-         pre_market=False, now=None):
+         pre_market=False, now=None, synced=None):
+    """`synced`, if given, collects the kwargs of each official-equity sync."""
     client = client or _Client(open_orders=open_orders)
+
+    def _sync(strategy, config, client_, now_, **kw):
+        if synced is not None:
+            synced.append({"now": now_, **kw})
+
     with patch.object(run_bot.accounts, "clients_for", return_value=(client, None)), \
          patch.object(run_bot.accounts, "assert_paper", lambda _c: None), \
          patch.object(run_bot.strategies, "prepare", return_value={}), \
          patch.object(run_bot.strategies, "build", return_value=list(targets)), \
          patch.object(run_bot.strategies, "notes", return_value=list(notes)), \
          patch.object(run_bot, "_check_unapplied_splits", lambda *a, **k: None), \
-         patch.object(run_bot, "_log_price_freshness", lambda *a, **k: None):
+         patch.object(run_bot, "_log_price_freshness", lambda *a, **k: None), \
+         patch.object(run_bot, "_sync_official_equity", _sync):
         code = run_bot.run("spy_harness", dry_run=dry_run, pre_market=pre_market, now=now)
     return code, client
 
@@ -370,3 +377,119 @@ def test_the_workflow_and_the_runner_agree_on_the_pre_market_schedule():
     assert matched[0] in crons, f"run step checks {matched[0]!r}; schedules are {crons}"
     assert matched[0] != "45 21 * * 0-4", "the after-close run must not be the pre-market one"
     assert "--pre-market" in text
+
+
+# --------------------------------------------------------------------------
+# Syncing to the broker's official close.
+#
+# The post-close run reads equity at ~7:30pm New York, in after-hours trading,
+# so every point it recorded was slightly off — golden_cross by $43 on 16 Sep.
+# Both runs now reconcile settled sessions with the broker's own daily record.
+# --------------------------------------------------------------------------
+
+def test_every_live_run_syncs_after_its_own_work(recorded, snapshots):
+    synced = []
+    _run(recorded, dry_run=False, now=_utc(MON, 21, 45), synced=synced)
+    _run(recorded, dry_run=False, pre_market=True, now=_utc(TUE, 8, 30), synced=synced)
+    assert len(synced) == 2
+    # The post-close run still writes its provisional reading; the pre-market
+    # run still writes none of its own.
+    assert [s["day"] for s in snapshots] == [MON]
+
+
+def test_a_dry_run_is_passed_through_so_the_sync_can_skip_it(recorded, snapshots):
+    synced = []
+    _run(recorded, dry_run=True, now=_utc(MON, 21, 45), synced=synced)
+    assert synced and synced[0]["dry_run"] is True
+
+
+class _SyncClient:
+    """The two broker reads the sync makes."""
+
+    def __init__(self, official, sessions, *, fail=False):
+        self.official, self.sessions, self.fail = official, sessions, fail
+
+    def get_portfolio_history(self, req):
+        if self.fail:
+            raise RuntimeError("portfolio history down")
+        # 20:00 New York is 00:00 UTC the next day — the broker's own stamping.
+        stamps = [int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()) + 86_400
+                  for d in self.official]
+        return type("H", (), {"timestamp": stamps, "equity": list(self.official.values())})()
+
+    def get_calendar(self, req):
+        return [type("C", (), {"date": d})() for d in sorted(self.sessions)]
+
+
+@pytest.fixture
+def curve(monkeypatch):
+    """An in-memory snapshot table behind the journal functions the sync uses."""
+    table = {}
+
+    def snapshot(strategy, *, equity, cash, positions_count=0, benchmark_equity=None, day=None):
+        table[day] = {"date": day, "equity": equity, "cash": cash,
+                      "positions_count": positions_count, "benchmark_equity": benchmark_equity}
+
+    monkeypatch.setattr(run_bot.journal, "equity_curve",
+                        lambda s: [table[d] for d in sorted(table)])
+    monkeypatch.setattr(run_bot.journal, "snapshot_equity", snapshot)
+    monkeypatch.setattr(run_bot.journal, "set_official_equity",
+                        lambda s, d, e: table[d].__setitem__("equity", e) or True)
+    monkeypatch.setattr(run_bot.journal, "delete_snapshot",
+                        lambda s, d: table.pop(d, None) is not None)
+    monkeypatch.setattr(run_bot, "_benchmark_equity", lambda *a, **k: 10_000.0)
+    monkeypatch.setattr(run_bot, "_log", lambda _m: None)
+    return table
+
+
+def _seed(table, rows):
+    for day, equity in rows.items():
+        table[day] = {"date": day, "equity": equity, "cash": 25.0,
+                      "positions_count": 1, "benchmark_equity": 10_000.0}
+
+
+def test_the_sync_repairs_all_three_kinds_of_damage(curve):
+    fri, labor, tue8 = date(2026, 9, 4), date(2026, 9, 7), date(2026, 9, 8)
+    _seed(curve, {fri: 10_109.07, labor: 10_109.07, tue8: 10_060.00})   # MON missing
+    official = {fri: 10_109.07, tue8: 10_053.55, MON: 9_986.87, TUE: 9_941.06}
+    client = _SyncClient(official, {fri, tue8, MON, TUE})
+
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client,
+                                  _utc(date(2026, 9, 16), 10, 30))
+
+    assert sorted(curve) == [fri, tue8, MON, TUE]            # Labor Day gone
+    assert curve[tue8]["equity"] == 10_053.55                 # after-hours -> close
+    assert curve[MON]["equity"] == 9_986.87                   # filled in...
+    assert curve[MON]["cash"] == 25.0                         # ...carrying cash forward
+    assert curve[MON]["positions_count"] == 1
+
+
+def test_the_sync_never_touches_todays_provisional_reading(curve):
+    """At 7:52pm New York on the 15th the day is not settled."""
+    _seed(curve, {MON: 9_986.87, TUE: 9_952.09})
+    client = _SyncClient({MON: 9_986.87, TUE: 9_941.06}, {MON, TUE})
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client, _utc(TUE, 23, 52))
+    assert curve[TUE]["equity"] == 9_952.09
+
+
+def test_the_pre_market_run_is_the_one_that_settles_it(curve):
+    _seed(curve, {MON: 9_986.87, TUE: 9_952.09})
+    client = _SyncClient({MON: 9_986.87, TUE: 9_941.06}, {MON, TUE, date(2026, 9, 16)})
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client,
+                                  _utc(date(2026, 9, 16), 10, 30))
+    assert curve[TUE]["equity"] == 9_941.06
+
+
+def test_the_sync_is_skipped_on_a_dry_run(curve):
+    _seed(curve, {MON: 1.0})
+    client = _SyncClient({MON: 9_986.87}, {MON})
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client,
+                                  _utc(TUE, 10, 30), dry_run=True)
+    assert curve[MON]["equity"] == 1.0
+
+
+def test_a_failing_broker_never_breaks_the_run(curve):
+    _seed(curve, {MON: 9_986.87})
+    client = _SyncClient({}, set(), fail=True)
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client, _utc(TUE, 10, 30))
+    assert curve[MON]["equity"] == 9_986.87                   # untouched, no exception

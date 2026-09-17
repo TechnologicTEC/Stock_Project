@@ -288,6 +288,42 @@ def snapshot_equity(
                 row.benchmark_equity = benchmark_equity
 
 
+def set_official_equity(strategy: str, day: date_, equity: float) -> bool:
+    """Replace ONLY the equity on an existing snapshot. Returns whether a row
+    was found.
+
+    Used to swap the post-close run's live reading for the broker's official
+    close. Cash and the position count are left alone: nothing fills after the
+    close, so they were right already — only the after-hours mark on the
+    positions made the equity wrong.
+    """
+    with get_session() as session:
+        row = session.execute(
+            select(BotEquitySnapshot)
+            .where(BotEquitySnapshot.strategy == strategy)
+            .where(BotEquitySnapshot.date == day)
+        ).scalars().first()
+        if row is None:
+            return False
+        row.equity = equity
+        return True
+
+
+def delete_snapshot(strategy: str, day: date_) -> bool:
+    """Remove one day's snapshot. Only for a date the broker's calendar says was
+    not a session — see engine/bot/equity_sync.plan for the fences around it."""
+    with get_session() as session:
+        row = session.execute(
+            select(BotEquitySnapshot)
+            .where(BotEquitySnapshot.strategy == strategy)
+            .where(BotEquitySnapshot.date == day)
+        ).scalars().first()
+        if row is None:
+            return False
+        session.delete(row)
+        return True
+
+
 def equity_curve(strategy: str) -> list[dict]:
     """Oldest-first daily series for one strategy — the per-tab chart."""
     with get_session() as session:

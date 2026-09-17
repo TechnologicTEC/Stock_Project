@@ -169,6 +169,65 @@ def _check_unapplied_splits(strategy: str, run_id: str, config: dict, today: dat
         )
 
 
+def _sync_official_equity(strategy: str, config: dict, client, now: datetime,
+                          *, dry_run: bool = False) -> None:
+    """Make the stored curve match the broker's official daily record.
+
+    Runs on every live run, pre-market included. It never records a NEW live
+    reading — that is the post-close run's job, and only for today. What it
+    writes is the broker's own settled figure for sessions that have already
+    finished: replacing an after-hours reading with the 4pm close, filling a
+    session no run recorded, and removing a day the calendar says never
+    traded. See engine/bot/equity_sync for how each was established.
+
+    Skipped on a dry run, which is a rehearsal; the next live run syncs anyway.
+    Never raises — the curve is corrected on the next run if this one cannot.
+    """
+    if dry_run:
+        return
+    from engine.bot import equity_sync
+
+    try:
+        curve = journal.equity_curve(strategy)
+        if not curve:
+            return
+        rows = {r["date"]: r for r in curve}
+        started = curve[0]["date"]
+        settled = equity_sync.new_york_date(now)
+        official = equity_sync.fetch_official(client, started)
+        sessions = equity_sync.fetch_sessions(client, started, settled)
+        changes = equity_sync.plan(
+            {d: r["equity"] for d, r in rows.items()}, official, sessions,
+            settled_before=settled, started=started, window=(started, settled))
+
+        for day, equity in changes["update"]:
+            journal.set_official_equity(strategy, day, equity)
+        for day, equity in changes["insert"]:
+            # Cash and the position count carry forward: a session nobody
+            # recorded is one where nothing was traded by this bot.
+            before = [r for d, r in rows.items() if d < day]
+            prev = before[-1] if before else None
+            journal.snapshot_equity(
+                strategy, equity=equity,
+                cash=prev["cash"] if prev else equity,
+                positions_count=prev["positions_count"] if prev else 0,
+                benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], day),
+                day=day,
+            )
+        for day in changes["delete"]:
+            journal.delete_snapshot(strategy, day)
+    except Exception as exc:                 # noqa: BLE001 — see docstring
+        _log(f"  equity sync: unavailable ({type(exc).__name__}: {exc})")
+        return
+
+    n = {k: len(v) for k, v in changes.items()}
+    if any(n.values()):
+        _log(f"  equity sync: {n['update']} corrected to the official close, "
+             f"{n['insert']} missing session(s) filled, {n['delete']} non-session day(s) removed")
+    else:
+        _log("  equity sync: curve already matches the broker's official record")
+
+
 def _log_price_freshness(today: date_, now: datetime | None = None) -> None:
     """Say how old the newest cached price bar is, and complain if it is stale.
 
@@ -241,9 +300,14 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     `pre_market` is the evening-NZ run, placed before the US open so that a
     creator mention scanned mid-afternoon NZ fills at the next open rather than
     the one after. It trades exactly like the after-close run; what it must NOT
-    do is write an equity snapshot. No session has closed since the last one,
+    do is record a new live reading. No session has closed since the last one,
     so there is nothing new to record — and a pre-market reading would
     overwrite the previous close's row with a figure taken twelve hours later.
+
+    Both kinds of run then sync settled sessions to the broker's official
+    close. For the pre-market run that is the important part: it is the first
+    run after New York midnight, so it is the one that replaces last night's
+    provisional after-hours reading with the real 4pm value.
     """
     init_db()
     run_id = journal.new_run_id()
@@ -405,21 +469,25 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     verb = "would be placed" if dry_run else "submitted"
     if pre_market:
         _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
-             f"(pre-market: no snapshot, {session}'s close is already recorded)")
-        return 0
+             f"(pre-market: no new snapshot)")
+    else:
+        # Dated by the SESSION it measures, not by the calendar day the runner
+        # woke up on (see latest_closed_session). This is a PROVISIONAL live
+        # reading, taken in after-hours trading; the sync below leaves it alone
+        # until New York passes midnight, and the next run swaps in the
+        # official 4pm close.
+        journal.snapshot_equity(
+            strategy,
+            equity=final["equity"],
+            cash=final["cash"],
+            positions_count=len(final_positions),
+            benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], session),
+            day=session,
+        )
+        _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
+             f"(provisional snapshot for {session})")
 
-    # Dated by the SESSION it measures, not by the calendar day the runner
-    # woke up on. See latest_closed_session for the Monday that went missing.
-    journal.snapshot_equity(
-        strategy,
-        equity=final["equity"],
-        cash=final["cash"],
-        positions_count=len(final_positions),
-        benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], session),
-        day=session,
-    )
-    _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
-         f"(snapshot for {session})")
+    _sync_official_equity(strategy, config, trading_client, now, dry_run=dry_run)
     return 0
 
 
