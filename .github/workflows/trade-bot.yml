@@ -45,6 +45,35 @@ on:
     # In NZ (UTC+12/13) this reads as weekday mornings, Mon-Fri, instead of
     # Tue-Sat. Runs land ~100-120 min late in practice, so ~11:30 NZ.
     - cron: "45 21 * * 0-4"
+
+    # 08:30 UTC, MONDAY THROUGH FRIDAY — the PRE-MARKET run, NZ evenings.
+    #
+    # The morning run lands ~11:30 NZ, but creator videos are scanned later
+    # than that: across the last twenty, our scan processed them between 00:02
+    # and 08:12 UTC (12:00-20:12 NZ). So a mention found in the NZ afternoon
+    # waited for the NEXT morning's run, whose order filled at the open after
+    # that — two days from video to fill. This run sits between the two: after
+    # the latest scan we have seen land, and before the 13:30 UTC open (14:30
+    # in EST), so that mention fills at the next open instead.
+    #
+    # 08:30 rather than later because runs land ~2h late. Typical landing is
+    # ~10:30 UTC — three hours before the bell — and even a 5h delay still
+    # clears it. A worse one fills intraday, which check_fills already grades
+    # separately; no worse than not having this run.
+    #
+    # Mon-Fri because each run precedes THAT day's US session. In NZ it is
+    # 20:30 NZST / 21:30 NZDT, landing ~22:30-23:30.
+    #
+    # It runs with --pre-market (see the `run` step), which trades normally but
+    # writes no equity snapshot: no session has closed since the morning run
+    # recorded one. Double-buying is already handled — an order from the
+    # morning run is still queued at this hour, and the PENDING_ORDER rail
+    # refuses to stack a second on top of it; creator_conviction compares its
+    # watermark with >= precisely so a mention cannot fall between two runs.
+    #
+    # KEEP IN STEP: the `run` step matches this exact string to detect the
+    # pre-market run, and tests/test_bot_runner_journal.py checks the two agree.
+    - cron: "30 8 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -62,6 +91,13 @@ on:
         description: "Run only this strategy (blank = all six)"
         required: false
         default: ""
+      pre_market:
+        # Same rule as the dry-run box: the description is the tick's only
+        # label, so it says what ticking it does and when you would.
+        description: "PRE-MARKET — tick if running before the US open (trades, but records no equity snapshot)."
+        type: boolean
+        required: false
+        default: false
 
 concurrency: trade-bot        # never overlap runs
 
@@ -111,7 +147,12 @@ jobs:
           ALPACA_CREATOR_CONVICTION_SECRET: ${{ secrets.ALPACA_CREATOR_CONVICTION_SECRET }}
           ALPACA_TOP_DECILE_LONG_KEY: ${{ secrets.ALPACA_TOP_DECILE_LONG_KEY }}
           ALPACA_TOP_DECILE_LONG_SECRET: ${{ secrets.ALPACA_TOP_DECILE_LONG_SECRET }}
+        # `github.event.schedule` is the cron string that fired, so the
+        # pre-market run is identified by its schedule rather than by the time
+        # the runner happens to wake up — runs land hours late, so the clock is
+        # exactly the wrong thing to infer it from.
         run: |
           python scripts/run_bot.py \
             --strategy ${{ matrix.strategy }} \
-            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
+            ${{ (github.event.schedule == '30 8 * * 1-5' || github.event.inputs.pre_market == 'true') && '--pre-market' || '' }}

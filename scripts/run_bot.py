@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date as date_
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -55,18 +55,53 @@ def _status(dry_run: bool, live_status: str) -> str:
     return journal.DRY_RUN if dry_run else live_status
 
 
-def sessions_behind(newest: date_, today: date_) -> int:
+# The latest UTC hour at which a US session can still be open. The bell is
+# 20:00 UTC in EDT and 21:00 in EST; using the later one means a run is only
+# ever treated as post-close once the market is shut year-round.
+CLOSE_UTC_HOUR = 21
+
+
+def latest_closed_session(now: datetime) -> date_:
+    """The most recent weekday whose US session has finished, as of `now` (UTC).
+
+    This is the date a run's equity snapshot describes, and it is NOT the
+    calendar date the run happens on. Two ways those came apart:
+
+    * **A run that crosses midnight.** Monday 14 Sep's run was scheduled 21:45
+      UTC and landed at 00:00 on the 15th. `date.today()` said Tuesday, so
+      Monday's close was saved as Tuesday's — and Tuesday's own run overwrote
+      it that night. Monday vanished from every equity curve. Runs routinely
+      land between 23:30 and 00:00, so this was a coin flip each night.
+    * **A run before the bell.** The pre-market run happens during the NZ
+      evening, on a US weekday whose session has not opened yet. The newest
+      close that can exist is the previous weekday's.
+
+    Both reduce to one rule: a weekday counts only once the clock is past its
+    close; otherwise walk back to the last weekday before today.
+
+    Unlike the helper deleted in 65c2388, this one carries real information.
+    That one only skipped weekends, which the weekday count already did — so
+    removing it changed no test. This one reads the TIME, which a date-only
+    count cannot see: at 08:30 UTC on a Tuesday, Tuesday is a weekday that has
+    not traded yet.
+    """
+    day = now.date()
+    if day.weekday() < 5 and now.hour >= CLOSE_UTC_HOUR:
+        return day
+    day -= timedelta(days=1)
+    while day.weekday() >= 5:            # 5 = Saturday, 6 = Sunday
+        day -= timedelta(days=1)
+    return day
+
+
+def sessions_behind(newest: date_, through: date_) -> int:
     """How many trading sessions the newest cached bar is missing.
 
-    Weekdays strictly after `newest`, up to and including `today`. 0 means the
-    cache is current. Counted in weekdays rather than calendar days because the
-    schedule now includes a Sunday run, where Friday's close IS the newest data
-    that can exist — a calendar-day count called that two days stale and fired
-    the warning below every single week.
-
-    Skipping the weekend days is all it takes; there is no need to first walk
-    `today` back to the last weekday, because a Saturday or Sunday contributes
-    nothing to the count either way.
+    Weekdays strictly after `newest`, up to and including `through` — the
+    latest session that should have closed (`latest_closed_session`). 0 means
+    the cache is current. Counted in weekdays rather than calendar days because
+    the schedule includes a Sunday run, where Friday's close IS the newest data
+    that can exist.
 
     Weekdays, not Alpaca's calendar: a US market holiday leaves no bar, so the
     run after one reports 1 session behind when nothing is actually wrong. That
@@ -74,7 +109,7 @@ def sessions_behind(newest: date_, today: date_) -> int:
     free of the network call that grading fills needs.
     """
     behind, day = 0, newest + timedelta(days=1)
-    while day <= today:
+    while day <= through:
         if day.weekday() < 5:           # 5 = Saturday, 6 = Sunday
             behind += 1
         day += timedelta(days=1)
@@ -134,8 +169,13 @@ def _check_unapplied_splits(strategy: str, run_id: str, config: dict, today: dat
         )
 
 
-def _log_price_freshness(today: date_) -> None:
+def _log_price_freshness(today: date_, now: datetime | None = None) -> None:
     """Say how old the newest cached price bar is, and complain if it is stale.
+
+    "Stale" is measured against `latest_closed_session(now)`, not `today`: the
+    pre-market run happens on a weekday that has not traded yet, and counting
+    that day as a missed close would print "warm-cache may not have run" on
+    every single evening run.
 
     The bot is scheduled 15 minutes after warm-cache so it reads the day's
     closes. That ordering is an ASSUMPTION, not a guarantee: GitHub's scheduled
@@ -158,7 +198,8 @@ def _log_price_freshness(today: date_) -> None:
             _log(f"  price cache: no recent {BENCHMARK_TICKER} bars at all")
             return
         newest = max(dates)
-        behind = sessions_behind(newest, today)
+        now = now or datetime.now(timezone.utc)
+        behind = sessions_behind(newest, latest_closed_session(now))
         if behind == 0:
             _log(f"  price cache: current (newest {BENCHMARK_TICKER} bar is {newest}, "
                  f"the latest close there should be)")
@@ -193,11 +234,24 @@ def _benchmark_equity(strategy: str, starting_equity: float, today: date_) -> fl
     return starting_equity * (spy_now / spy_then)
 
 
-def run(strategy: str, *, dry_run: bool = False) -> int:
+def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
+        now: datetime | None = None) -> int:
+    """One strategy, one pass.
+
+    `pre_market` is the evening-NZ run, placed before the US open so that a
+    creator mention scanned mid-afternoon NZ fills at the next open rather than
+    the one after. It trades exactly like the after-close run; what it must NOT
+    do is write an equity snapshot. No session has closed since the last one,
+    so there is nothing new to record — and a pre-market reading would
+    overwrite the previous close's row with a figure taken twelve hours later.
+    """
     init_db()
     run_id = journal.new_run_id()
+    now = now or datetime.now(timezone.utc)
     today = date_.today()
-    _log(f"[{run_id}] {strategy} — {'DRY RUN' if dry_run else 'live'} — {today}")
+    session = latest_closed_session(now)
+    mode = ("DRY RUN" if dry_run else "live") + (", pre-market" if pre_market else "")
+    _log(f"[{run_id}] {strategy} — {mode} — {today} (latest closed session {session})")
 
     config = journal.get_config(strategy)
 
@@ -234,7 +288,7 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     positions = executor.current_positions(trading_client)
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
-    _log_price_freshness(today)
+    _log_price_freshness(today, now)
     _check_unapplied_splits(strategy, run_id, config, today, dry_run=dry_run)
 
     # Gather, then decide. `prepare` is the only place a strategy does I/O; if it
@@ -347,16 +401,25 @@ def run(strategy: str, *, dry_run: bool = False) -> int:
     placed = submitted and not dry_run
     final = executor.account_snapshot(trading_client) if placed else account
     final_positions = executor.current_positions(trading_client) if placed else positions
+
+    verb = "would be placed" if dry_run else "submitted"
+    if pre_market:
+        _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
+             f"(pre-market: no snapshot, {session}'s close is already recorded)")
+        return 0
+
+    # Dated by the SESSION it measures, not by the calendar day the runner
+    # woke up on. See latest_closed_session for the Monday that went missing.
     journal.snapshot_equity(
         strategy,
         equity=final["equity"],
         cash=final["cash"],
         positions_count=len(final_positions),
-        benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], today),
-        day=today,
+        benchmark_equity=_benchmark_equity(strategy, config["starting_equity"], session),
+        day=session,
     )
-    _log(f"  done — {submitted} order(s) {'would be placed' if dry_run else 'submitted'}, "
-         f"equity ${final['equity']:,.2f}")
+    _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
+         f"(snapshot for {session})")
     return 0
 
 
@@ -366,10 +429,12 @@ def main() -> int:
                         help="Which strategy to run.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Plan and journal, but submit nothing.")
+    parser.add_argument("--pre-market", action="store_true",
+                        help="Running before the US open: trade, but write no equity snapshot.")
     args = parser.parse_args()
 
     try:
-        return run(args.strategy, dry_run=args.dry_run)
+        return run(args.strategy, dry_run=args.dry_run, pre_market=args.pre_market)
     except Exception as exc:                      # noqa: BLE001 — the job should go red
         _log(f"FATAL {type(exc).__name__}: {exc}")
         raise

@@ -13,7 +13,7 @@ So these drive `run_bot.run()` end to end against fakes and assert on the rows
 that come out, which is the only level at which that bug is visible.
 """
 import importlib.util
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,14 +82,17 @@ def recorded(monkeypatch):
     return rows
 
 
-def _run(rows, *, dry_run, targets=(), notes=(), open_orders=(), client=None):
+def _run(rows, *, dry_run, targets=(), notes=(), open_orders=(), client=None,
+         pre_market=False, now=None):
     client = client or _Client(open_orders=open_orders)
     with patch.object(run_bot.accounts, "clients_for", return_value=(client, None)), \
          patch.object(run_bot.accounts, "assert_paper", lambda _c: None), \
          patch.object(run_bot.strategies, "prepare", return_value={}), \
          patch.object(run_bot.strategies, "build", return_value=list(targets)), \
-         patch.object(run_bot.strategies, "notes", return_value=list(notes)):
-        code = run_bot.run("spy_harness", dry_run=dry_run)
+         patch.object(run_bot.strategies, "notes", return_value=list(notes)), \
+         patch.object(run_bot, "_check_unapplied_splits", lambda *a, **k: None), \
+         patch.object(run_bot, "_log_price_freshness", lambda *a, **k: None):
+        code = run_bot.run("spy_harness", dry_run=dry_run, pre_market=pre_market, now=now)
     return code, client
 
 
@@ -186,11 +189,16 @@ def test_no_row_a_dry_run_writes_ever_counts_as_a_run(recorded):
 # ordering is an assumption, and a stale read has to be visible.
 # --------------------------------------------------------------------------
 
-def _freshness_log(bars, today=date(2026, 9, 1)):      # a Tuesday
+def _utc(d, hour, minute=0):
+    return datetime(d.year, d.month, d.day, hour, minute, tzinfo=timezone.utc)
+
+
+def _freshness_log(bars, today=date(2026, 9, 1), now=None):      # a Tuesday
+    """`now` defaults to after that day's close — the morning (NZ) run."""
     lines = []
     with patch("engine.cache.get_closes_for", return_value=bars), \
          patch.object(run_bot, "_log", lines.append):
-        run_bot._log_price_freshness(today)
+        run_bot._log_price_freshness(today, now or _utc(today, 22))
     return " ".join(lines)
 
 
@@ -257,3 +265,108 @@ def test_sessions_behind_ignores_weekends_entirely():
     assert run_bot.sessions_behind(friday, sunday) == 0
     assert run_bot.sessions_behind(friday, date(2026, 9, 14)) == 1    # Monday
     assert run_bot.sessions_behind(friday, date(2026, 9, 18)) == 5    # the next Friday
+
+
+# --------------------------------------------------------------------------
+# Which session a run is recording.
+#
+# Monday 14 Sep's run was scheduled 21:45 UTC and landed at 00:00 on the 15th.
+# `date.today()` said Tuesday, so Monday's close was saved as Tuesday's — and
+# Tuesday's own run overwrote it. Monday is simply absent from every curve.
+# Runs land between 23:30 and 00:00, so that was a coin flip every night.
+# --------------------------------------------------------------------------
+
+MON, TUE, FRI, SAT, SUN = (date(2026, 9, 14), date(2026, 9, 15), date(2026, 9, 11),
+                           date(2026, 9, 12), date(2026, 9, 13))
+
+
+@pytest.mark.parametrize("now, expected, why", [
+    (_utc(MON, 21, 45), MON, "an on-time after-close run records its own day"),
+    (_utc(TUE, 0, 0),   MON, "THE BUG: past midnight, it is still Monday's close"),
+    (_utc(TUE, 2, 30),  MON, "however late it lands before the next bell"),
+    (_utc(SUN, 23, 59), FRI, "Sunday's run records Friday, not Sunday"),
+    (_utc(TUE, 8, 30),  MON, "the pre-market run: Tuesday has not traded yet"),
+    (_utc(MON, 8, 30),  FRI, "Monday before the bell looks back over the weekend"),
+    (_utc(SAT, 12, 0),  FRI, "Saturday has no session"),
+    (_utc(MON, 20, 30), FRI, "20:30 UTC may still be trading in EST, so not yet"),
+])
+def test_latest_closed_session(now, expected, why):
+    assert run_bot.latest_closed_session(now) == expected, why
+
+
+def test_an_evening_run_reading_yesterdays_close_is_current():
+    """The one that proves the helper is not redundant.
+
+    At 08:30 UTC on a Tuesday, Tuesday is a weekday. A count running up to
+    TODAY would call Monday's bar a session behind and print "warm-cache may
+    not have run" on every pre-market run — for a close that cannot exist yet.
+    """
+    out = _freshness_log({"SPY": [(MON, 600.0)]}, today=TUE, now=_utc(TUE, 8, 30))
+    assert "current" in out
+    assert "may not have run" not in out
+    # ...and the date-only count really would have got it wrong:
+    assert run_bot.sessions_behind(MON, TUE) == 1
+
+
+@pytest.fixture
+def snapshots(recorded, monkeypatch):
+    """Capture equity snapshots instead of discarding them."""
+    calls = []
+    monkeypatch.setattr(run_bot.journal, "snapshot_equity",
+                        lambda strategy, **kw: calls.append(kw))
+    return calls
+
+
+def test_a_run_that_crosses_midnight_records_the_session_it_measured(recorded, snapshots):
+    _run(recorded, dry_run=False, now=_utc(TUE, 0, 0))
+    assert [s["day"] for s in snapshots] == [MON]
+
+
+def test_sundays_run_records_fridays_session(recorded, snapshots):
+    """Friday was being recorded twice — once dated Friday, once Sunday."""
+    _run(recorded, dry_run=False, now=_utc(SUN, 23, 59))
+    assert [s["day"] for s in snapshots] == [FRI]
+
+
+def test_the_pre_market_run_records_no_snapshot(recorded, snapshots):
+    """No session has closed since the morning run recorded one. Writing here
+    would overwrite Monday's close with a figure taken twelve hours later."""
+    code, _ = _run(recorded, dry_run=False, pre_market=True, now=_utc(TUE, 8, 30))
+    assert code == 0
+    assert snapshots == []
+
+
+def test_the_pre_market_run_still_trades(recorded, snapshots):
+    """Skipping the snapshot is the ONLY difference — the whole point of the
+    run is to place the order that a mid-afternoon mention calls for."""
+    target = Target(ticker="NVTS", notional=2_500.0, reason="creator conviction")
+    _, client = _run(recorded, dry_run=False, pre_market=True,
+                     now=_utc(TUE, 8, 30), targets=[target])
+    assert [o.symbol for o in client.submitted] == ["NVTS"]
+    assert snapshots == []
+
+
+def test_an_after_close_run_still_records_one(recorded, snapshots):
+    _run(recorded, dry_run=False, now=_utc(MON, 21, 45))
+    assert [s["day"] for s in snapshots] == [MON]
+
+
+def test_the_workflow_and_the_runner_agree_on_the_pre_market_schedule():
+    """The run step spots the pre-market run by comparing against the cron
+    string itself, so the two copies must be identical. Edit one without the
+    other and every evening run would silently start writing snapshots.
+
+    Read with a regex rather than PyYAML, which parses the `on:` key as True.
+    """
+    import re
+
+    text = (Path(__file__).resolve().parent.parent
+            / ".github" / "workflows" / "trade-bot.yml").read_text(encoding="utf-8")
+    crons = re.findall(r'^\s*-\s*cron:\s*"([^"]+)"', text, re.MULTILINE)
+    matched = re.findall(r"github\.event\.schedule == '([^']+)'", text)
+
+    assert len(crons) == 2, crons
+    assert len(matched) == 1, matched
+    assert matched[0] in crons, f"run step checks {matched[0]!r}; schedules are {crons}"
+    assert matched[0] != "45 21 * * 0-4", "the after-close run must not be the pre-market one"
+    assert "--pre-market" in text
