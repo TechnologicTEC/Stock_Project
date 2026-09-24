@@ -3,7 +3,9 @@
 # (this job never scores news with FinBERT). What it does need is the Screener's
 # point-in-time reconstruction stack: SEC fundamentals, price history, and the
 # technicals the momentum factor computes.
-sqlalchemy>=2.0
+# <2.1: 2.1 makes psycopg 3 the default driver for a bare postgresql:// URL,
+# and this job installs psycopg2 (see requirements.txt).
+sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9
 pandas>=2.2
 numpy>=2.0

@@ -17,7 +17,12 @@ numpy>=2.0                  # used directly by engine/health.py (Phase 3); also 
 pandas-ta-classic>=0.6
 
 # --- Database ---
-sqlalchemy>=2.0
+# Capped below 2.1 deliberately. 2.1 changed the default driver for a bare
+# postgresql:// URL from psycopg2 to psycopg 3, which nothing here installs,
+# so every hosted job died on ModuleNotFoundError the day it was released.
+# db/session.py now names psycopg2 in the URL itself, so lifting this cap is a
+# test run against 2.1's other changes, not a scramble.
+sqlalchemy>=2.0,<2.1
 
 # --- Data sources (all free-tier) ---
 finnhub-python>=2.4      # quotes, fundamentals, news, insider data

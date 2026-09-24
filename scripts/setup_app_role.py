@@ -29,7 +29,7 @@ sys.path.insert(0, ".")  # runnable from repo root or scripts/
 from sqlalchemy import create_engine, text  # noqa: E402
 
 from engine import config  # noqa: F401,E402  (loads .env)
-from db.session import _RLS_USER_TABLES  # noqa: E402
+from db.session import _RLS_USER_TABLES, _name_the_postgres_driver  # noqa: E402
 
 ROLE = os.environ.get("APP_DB_ROLE", "copilot_app")
 PERMISSIVE_POLICY = "app_shared_rw"
@@ -37,6 +37,7 @@ PERMISSIVE_POLICY = "app_shared_rw"
 
 def _admin_url() -> str:
     url = os.environ.get("ADMIN_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    url = _name_the_postgres_driver(url or "")
     if not url or not url.startswith("postgresql"):
         sys.exit("ADMIN_DATABASE_URL/DATABASE_URL must be a Postgres owner connection (the `postgres` role).")
     return url

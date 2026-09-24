@@ -3,7 +3,9 @@
 # LIVE screener across ~500 names, so it needs the whole scoring stack: the
 # technicals for momentum, SEC/news parsing, AND FinBERT for the sentiment factor
 # (the warm-cache job's torch/transformers, which validate-universe didn't need).
-sqlalchemy>=2.0
+# <2.1: 2.1 makes psycopg 3 the default driver for a bare postgresql:// URL,
+# and this job installs psycopg2 (see requirements.txt).
+sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9
 pandas>=2.2
 numpy>=2.0

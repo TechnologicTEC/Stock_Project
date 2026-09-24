@@ -76,6 +76,23 @@ def _default_db_url() -> str:
     return os.environ.get("DATABASE_URL", f"sqlite:///{db_path}")
 
 
+def _name_the_postgres_driver(url: str) -> str:
+    """Put the driver we actually install into a Postgres URL.
+
+    SQLAlchemy's default driver for a bare `postgresql://` URL is not a fixed
+    thing: 2.1 changed it from psycopg2 to psycopg 3. We install psycopg2
+    (see requirements.txt), so the day 2.1 shipped every hosted job died on
+    `No module named 'psycopg'`. The URL is a deployment secret, so it can't
+    say the driver itself — which makes this the place to say it.
+
+    An explicit driver is left alone, so `postgresql+psycopg://` still opts in.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 def configure(database_url: str | None = None) -> Engine:
     """
     Point the app at a database. Called automatically (with the default
@@ -89,7 +106,7 @@ def configure(database_url: str | None = None) -> Engine:
     global _engine, _SessionLocal, _bootstrap_user_id
     _bootstrap_user_id = None  # a fresh DB (esp. the in-memory test DB) re-derives this in init_db()
 
-    url = database_url or _default_db_url()
+    url = _name_the_postgres_driver(database_url or _default_db_url())
     kwargs: dict = {}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}

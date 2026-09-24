@@ -2,7 +2,9 @@
 # Not the full requirements.txt — no Streamlit UI stack, and no torch/transformers
 # (this job doesn't score news with FinBERT). It DOES need the screener's stack
 # and the YouTube/extraction bits.
-sqlalchemy>=2.0
+# <2.1: 2.1 makes psycopg 3 the default driver for a bare postgresql:// URL,
+# and this job installs psycopg2 (see requirements.txt).
+sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9
 pandas>=2.2
 numpy>=2.0

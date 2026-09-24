@@ -33,7 +33,8 @@ def _database_url() -> str:
     # Migrations need DDL/ownership, so prefer the admin connection when the app
     # itself runs as a least-privilege role (ADMIN_DATABASE_URL = the owner, e.g.
     # postgres). Falls back to DATABASE_URL, then the local SQLite default.
-    return (
+    # Named driver, same reason as the app's: the default one moved in SQLAlchemy 2.1.
+    return db_session._name_the_postgres_driver(
         os.environ.get("ADMIN_DATABASE_URL")
         or os.environ.get("DATABASE_URL")
         or db_session._default_db_url()
