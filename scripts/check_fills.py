@@ -7,6 +7,15 @@ across all five strategies, so it cannot distort the comparison between them —
 but it also gives every fill a reference price that is knowable in advance. This
 script checks the fills against it.
 
+One run breaks that, and it is not a bug in the fill: the 08:30 UTC pre-market
+run has been starting 4.5 to 6.75 hours late (GitHub queues scheduled jobs), so
+four of five morning runs in the week to 24 Sep landed AFTER the New York open
+and filled mid-session. AMD came in 3.16% above the open that way. Measured
+against the open those read as terrible fills; measured against the price when
+the order was actually placed they are fine. Tane's call, 25 Sep: leave both the
+schedule and this grading as they are, and read a flagged morning fill as a late
+run rather than a routing fault. Check the run's start time before believing it.
+
     python scripts/check_fills.py                       # every strategy, last 30 days
     python scripts/check_fills.py --strategy golden_cross
     python scripts/check_fills.py --days 7 --tolerance 0.25
