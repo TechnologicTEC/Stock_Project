@@ -286,8 +286,10 @@ def _fills_same_session(when: datetime | None) -> bool:
     so an incoming naive value is read as UTC before the conversion.
 
     Known limit: a market holiday isn't checked, so an order placed at noon on
-    one would be treated as filled a session early. The bot's own schedule never
-    does that, and only a manual run on a closed day could.
+    one would be treated as filled a session early. That is reachable — the
+    08:30 UTC run has been landing 4.5 to 6.75 hours late, which on a holiday
+    would put it mid-"session" — but it costs a wrong badge for one day, not a
+    wrong number, so it is not worth a calendar call from a display module.
     """
     if when is None:
         return False
