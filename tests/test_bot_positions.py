@@ -422,6 +422,85 @@ def test_a_name_topped_up_in_the_latest_run_is_still_held():
     assert rows[0]["pending"] is False
 
 
+def test_a_run_during_market_hours_is_held_not_ordered():
+    """The regression. AMD was bought at 09:41 New York on 24 Sep — 11 minutes
+    after the open, so it filled at once — and that evening's snapshot recorded
+    four positions and the cash already spent. The date-only rule still badged
+    it 'ordered', and would have gone on doing so until Sunday's run."""
+    rows = positions.enrich(
+        [_row("AMD")],
+        since={"AMD": date(2026, 9, 24)},
+        opened_at={"AMD": datetime(2026, 9, 24, 13, 41, 56)},   # 09:41 New York
+        confirmed_through=date(2026, 9, 24),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_a_post_close_run_is_still_an_order_in_flight():
+    """21:45 UTC is 17:45 New York — after the close, so it cannot fill until
+    the next open, which is after tonight's snapshot was written."""
+    rows = positions.enrich(
+        [_row("FSLR")],
+        since={"FSLR": date(2026, 9, 7)},
+        opened_at={"FSLR": datetime(2026, 9, 7, 21, 45)},
+        confirmed_through=date(2026, 9, 7),
+    )
+    assert rows[0]["pending"] is True
+
+
+def test_the_pre_market_run_fills_at_that_mornings_open():
+    """08:30 UTC is 04:30 New York: before the close, so it fills at 09:30 that
+    same session — hours before the evening snapshot."""
+    rows = positions.enrich(
+        [_row("AMZN")],
+        since={"AMZN": date(2026, 9, 25)},
+        opened_at={"AMZN": datetime(2026, 9, 25, 8, 30)},
+        confirmed_through=date(2026, 9, 25),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_a_post_close_order_clears_once_the_next_snapshot_lands():
+    rows = positions.enrich(
+        [_row("FSLR")],
+        since={"FSLR": date(2026, 9, 7)},
+        opened_at={"FSLR": datetime(2026, 9, 7, 21, 45)},
+        confirmed_through=date(2026, 9, 8),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_without_a_timestamp_the_old_date_rule_still_applies():
+    """Callers that don't pass `opened_at` must not change behaviour."""
+    rows = positions.enrich(
+        [_row("FSLR")],
+        since={"FSLR": date(2026, 9, 7)},
+        confirmed_through=date(2026, 9, 7),
+    )
+    assert rows[0]["pending"] is True
+
+
+def test_the_order_timestamp_survives_the_replay():
+    """enrich can only ask the question if book_from_fills kept the answer."""
+    fills = [{"ticker": "AMD", "action": "buy", "notional": 2_526.59,
+              "decided_at": datetime(2026, 9, 24, 13, 41, 56)}]
+    assert positions.opened_at(fills) == {"AMD": datetime(2026, 9, 24, 13, 41, 56)}
+    assert positions.held_since(fills) == {"AMD": date(2026, 9, 24)}
+
+
+def test_a_re_entry_carries_the_second_buys_timestamp():
+    """Same rule as `since`: the CURRENT holding is what's being dated."""
+    fills = [
+        {"ticker": "MU", "action": "buy", "qty": 5.0, "notional": 500.0,
+         "decided_at": datetime(2026, 9, 1, 21, 45)},
+        {"ticker": "MU", "action": "sell", "qty": 5.0, "notional": 500.0,
+         "decided_at": datetime(2026, 9, 10, 21, 45)},
+        {"ticker": "MU", "action": "buy", "qty": 4.0, "notional": 400.0,
+         "decided_at": datetime(2026, 9, 20, 14, 5)},
+    ]
+    assert positions.opened_at(fills) == {"MU": datetime(2026, 9, 20, 14, 5)}
+
+
 def test_split_pending_partitions_the_book():
     rows = positions.enrich(
         [_row("MU"), _row("FSLR"), _row("ADI")],

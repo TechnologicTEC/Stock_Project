@@ -21,6 +21,13 @@ that can touch the network (through a DB-cached profile lookup, guarded).
 from __future__ import annotations
 
 from datetime import date as date_
+from datetime import datetime, time as time_, timezone
+
+from engine.bot.equity_sync import NY
+
+# The 4pm New York close, which decides whether an order fills the session
+# it was placed in or queues to the next one. See `_fills_same_session`.
+MARKET_CLOSE_NY = time_(16, 0)
 
 # Share counts are floats — Alpaca fills fractionally — so "closed" has to be a
 # tolerance rather than == 0. A hundredth of a share of the cheapest name we
@@ -90,7 +97,8 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
         held = book.get(ticker)
         if _is_buy(fill.get("action")):
             if held is None:
-                book[ticker] = {"qty": qty or 0.0, "cost": value or 0.0, "since": day}
+                book[ticker] = {"qty": qty or 0.0, "cost": value or 0.0,
+                                "since": day, "opened_at": when}
             else:
                 held["qty"] += qty or 0.0
                 held["cost"] += value or 0.0
@@ -144,6 +152,16 @@ def fill_price_lookup(bars: dict[str, list]):
         return None
 
     return _price
+
+
+def opened_at(fills: list[dict]) -> dict[str, datetime]:
+    """{TICKER: the timestamp its current holding was ordered}.
+
+    The date alone can't say whether a snapshot taken the same evening had
+    already seen the order — see `_fills_same_session`.
+    """
+    return {t: h["opened_at"] for t, h in book_from_fills(fills).items()
+            if h.get("opened_at")}
 
 
 def held_since(fills: list[dict]) -> dict[str, date_]:
@@ -255,8 +273,44 @@ def rank_index(leaderboard_rows=()) -> dict[str, dict]:
     return out
 
 
+def _fills_same_session(when: datetime | None) -> bool:
+    """Would an order placed at `when` have filled the same session?
+
+    The bot submits market DAY orders. One placed before the 4pm New York close
+    fills that session — immediately if the market is already open, at that
+    morning's open if it was placed overnight or in the pre-market run. Placed
+    after the close, it queues to the NEXT session.
+
+    That distinction is the whole difference between a holding and an order in
+    flight when both share a date. Timestamps are naive UTC (engine/time_utils),
+    so an incoming naive value is read as UTC before the conversion.
+
+    Known limit: a market holiday isn't checked, so an order placed at noon on
+    one would be treated as filled a session early. The bot's own schedule never
+    does that, and only a manual run on a closed day could.
+    """
+    if when is None:
+        return False
+    aware = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return aware.astimezone(NY).time() < MARKET_CLOSE_NY
+
+
+def _is_pending(opened: date_ | None, when: datetime | None,
+                confirmed_through: date_ | None) -> bool:
+    """Has any snapshot been taken since this order could have filled?"""
+    if not (confirmed_through and opened):
+        return False
+    if _fills_same_session(when):
+        # It filled during `opened`'s session, so that evening's snapshot —
+        # written at the end of the run, hours after the close — has seen it.
+        return confirmed_through < opened
+    # Placed after the close: it fills at the next open, which is AFTER the
+    # snapshot dated `opened` was written. Only a later snapshot confirms it.
+    return confirmed_through <= opened
+
+
 def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
-           since=None, today: date_ | None = None,
+           since=None, opened_at=None, today: date_ | None = None,
            confirmed_through: date_ | None = None) -> list[dict]:
     """Join broker (or reconstructed) positions to everything else the page knows.
 
@@ -276,17 +330,27 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
     an account that held seven, beside a slots strip that correctly said 7/20.
 
     The rule is the snapshot's own timing. The runner writes it at the END of a
-    run, after submitting but before anything can fill, so a position opened on
-    or after that date has never been seen by a snapshot. Marked `pending`
-    rather than hidden: an order the bot has placed is real and worth showing —
-    it just isn't a holding yet. Pass None (the live broker path, where every
-    row IS a position) and nothing is ever flagged.
+    run, after submitting but before an after-close order can fill, so a name
+    opened by that same run has never been seen by a snapshot.
+
+    Which makes the ORDER TIME part of the question, not just its date. A run
+    during market hours fills immediately, and that evening's snapshot does see
+    it: AMD was bought at 09:41 New York on 24 Sep and the snapshot dated 24 Sep
+    recorded four positions and the cash already spent — but a date-only rule
+    called it an unfilled order for three more days. `opened_at` carries the
+    timestamp so `_is_pending` can ask the real question. Without it the
+    comparison falls back to dates alone, which is the old behaviour.
+
+    Marked `pending` rather than hidden: an order the bot has placed is real and
+    worth showing — it just isn't a holding yet. Pass `confirmed_through=None`
+    (the live broker path, where every row IS a position) and nothing is flagged.
 
     Returned largest-position-first, which is the order that answers "is one
     name taking over".
     """
     names, ranks = names or {}, ranks or {}
     reasons, since = reasons or {}, since or {}
+    opened_at = opened_at or {}
 
     rows = []
     for position in positions or ():
@@ -301,7 +365,7 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
         row["reason"] = reasons.get(ticker)
         row["since"] = opened
         row["days_held"] = (today - opened).days if (opened and today) else None
-        row["pending"] = bool(confirmed_through and opened and opened >= confirmed_through)
+        row["pending"] = _is_pending(opened, opened_at.get(ticker), confirmed_through)
         row.update(ranks.get(ticker) or
                    {"score": None, "rank": None, "recommendation": None})
         rows.append(row)
