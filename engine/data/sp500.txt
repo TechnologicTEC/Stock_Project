@@ -13,6 +13,12 @@
 #
 # Class shares use a dash (BRK-B), matching Alpaca/yfinance rather than BRK.B.
 # 503 tickers.
+#
+# This file is the index verbatim, which lists three companies TWICE, once per
+# share class (GOOG/GOOGL, FOX/FOXA, NWS/NWSA). What we screen and trade is 500:
+# engine/universe.SECONDARY_SHARE_CLASSES drops the less liquid class of each
+# pair, and says why. Don't delete the lines here — the snapshot is meant to be
+# what the index holds, and the decision to collapse a pair belongs in code.
 A
 AAPL
 ABBV
