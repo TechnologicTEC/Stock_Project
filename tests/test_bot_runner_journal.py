@@ -191,6 +191,59 @@ def test_no_row_a_dry_run_writes_ever_counts_as_a_run(recorded):
 
 
 # --------------------------------------------------------------------------
+# Cash. The book is sized as shares of equity; the account pays in dollars.
+# --------------------------------------------------------------------------
+
+def _account_with(cash):
+    class _Poor(_Client):
+        def get_account(self):
+            a = _Account()
+            a.cash = cash
+            return a
+    return _Poor()
+
+
+def test_the_runner_cuts_a_buy_to_the_cash_the_account_has(recorded):
+    """creator_conviction, 24 Sep 2026: $2,526.59 of AMD ordered against
+    $2,212.85 of cash, and the account ended the day $313.74 overdrawn."""
+    client = _account_with(2_212.85)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+
+    assert len(client.submitted) == 1
+    assert float(client.submitted[0].notional) == pytest.approx(2_212.85)
+
+
+def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):
+    client = _account_with(-313.70)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+
+    assert client.submitted == []
+    blocked = [r for r in recorded if r.get("blocked_by") == risk.INSUFFICIENT_CASH]
+    assert len(blocked) == 1
+    assert blocked[0]["ticker"] == "AMD" and blocked[0]["status"] == journal.BLOCKED
+    # And it must not ALSO claim the book already matched the target — the two
+    # rows would contradict each other about what happened.
+    assert [r for r in recorded if r.get("action") == journal.HOLD] == []
+
+
+def test_a_dry_run_shows_the_cut_without_reaching_the_broker(recorded):
+    """A preview that ignored cash would promise an order the live run can't place."""
+    client = _account_with(2_212.85)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=True, targets=targets, client=client)
+    assert client.submitted == []
+    assert {r["status"] for r in recorded} == {journal.DRY_RUN}
+    # The cut has to show in the preview too. Without this the assertions above
+    # pass whether or not the runner checks cash, because a dry run never
+    # submits anything — and the preview would promise an order it can't place.
+    planned = [r for r in recorded if r.get("ticker") == "AMD"]
+    assert len(planned) == 1
+    assert planned[0]["notional"] == pytest.approx(2_212.85)
+
+
+# --------------------------------------------------------------------------
 # Price-cache freshness. The bot is scheduled 15 min after warm-cache, but
 # GitHub's scheduled workflows have run 23 min to 8 HOURS late — so that
 # ordering is an assumption, and a stale read has to be visible.

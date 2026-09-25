@@ -32,6 +32,9 @@ ORDER_CAP = "order_cap"
 MIN_NOTIONAL = "min_notional"
 DUPLICATE = "duplicate"
 PENDING_ORDER = "pending_order"
+# Not a refusal to protect the account either: the account simply does not
+# have the money. See engine/bot/executor.fund.
+INSUFFICIENT_CASH = "insufficient_cash"
 # Not a risk rail like the others: nothing here protects the account, which
 # is paper. It marks a name declined because a fill in it would not have
 # been a believable price — see engine/bot/liquidity.

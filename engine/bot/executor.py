@@ -14,7 +14,7 @@ own, which is how bots end up trading a portfolio that doesn't exist.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as date_
 
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -141,6 +141,81 @@ def plan(
                                 reason=f"Trimming to target. {target.reason}"))
 
     return orders
+
+
+@dataclass(frozen=True)
+class Shortfall:
+    """A buy the account could not pay for. Journalled, never silently dropped."""
+    order: Order
+    affordable: float
+    available: float
+
+
+def fund(orders: list[Order], positions: list[Position], *, cash: float,
+         band: float) -> tuple[list[Order], list[Shortfall]]:
+    """Fit the buys inside the money the account actually has. Pure.
+
+    `plan()` sizes the book as shares of EQUITY and never looks at cash, which
+    is fine until the shares add up to all of it. creator_conviction holds 4
+    slots at 1/4 of equity each — a fully invested book by design — so the
+    conviction top-up that takes one name to 27.5% is spending money that is
+    not there. On 24 Sep it bought $2,526.59 of AMD against $2,212.85 of cash
+    and ended the day $313.74 overdrawn. Nothing bounced: Alpaca grants this
+    paper account 4x buying power, so an overdraft just shows up as negative
+    cash and a book worth 103% of the account.
+
+    Sells in the same plan pay for the buys. A monthly rebalance sells seven
+    names to buy seven others from a book that is already fully invested, so
+    ignoring the proceeds would block every swap the strategy exists to make.
+
+    A buy is CUT to what is affordable rather than refused. That is the opposite
+    of `risk.check_order`, which refuses an oversized order without resizing it
+    — deliberately, because a size over the position cap means the sizing rule
+    is broken and shrinking it would hide that. Cash is not a bug, it is the
+    budget: the honest answer to "$2,526 wanted, $2,212 there" is to buy $2,212
+    and say so. Refusing instead would leave a qualifying name untraded and the
+    strategy under-invested for as long as the gap persisted, which would show
+    up in its equity curve as a signal result rather than a plumbing decision.
+
+    A cut that leaves less than the rebalance band buys nothing at all — that is
+    the same "too small to be worth trading" line `plan()` already draws.
+
+    Buys are funded in the order the strategy listed them, so a shortfall lands
+    on the last names rather than being spread thinly across all of them. The
+    next run finishes the job once the account can pay for it.
+    """
+    value = {p.ticker.upper(): abs(p.market_value) for p in positions}
+    available = float(cash)
+    for order in orders:
+        if order.side == "sell":
+            available += (order.notional if order.notional is not None
+                          else value.get(order.ticker.upper(), 0.0))
+
+    funded: list[Order] = []
+    short: list[Shortfall] = []
+    for order in orders:
+        if order.side != "buy":
+            funded.append(order)
+            continue
+
+        wanted = float(order.notional or 0.0)
+        affordable = min(wanted, available)
+        if affordable < band:
+            short.append(Shortfall(order=order, affordable=max(0.0, affordable),
+                                   available=max(0.0, available)))
+            continue
+
+        available -= affordable
+        if affordable < wanted - 0.005:
+            funded.append(replace(
+                order, notional=round(affordable, 2),
+                reason=f"{order.reason} Cut from ${wanted:,.2f} to the "
+                       f"${affordable:,.2f} of cash available.",
+            ))
+        else:
+            funded.append(order)
+
+    return funded, short
 
 
 # --------------------------------------------------------------------------

@@ -250,6 +250,91 @@ def test_plan_puts_exits_before_buys():
 
 
 # --------------------------------------------------------------------------
+# fund() — never spend money the account doesn't have
+# --------------------------------------------------------------------------
+
+BAND = executor.band_for(10_000.0)      # $50 on a $10k account
+
+
+def _buy(notional, ticker="AMD"):
+    return executor.Order(ticker=ticker, side="buy", notional=notional, reason="because")
+
+
+def test_fund_cuts_a_buy_to_the_cash_that_exists():
+    """The real case: creator_conviction, 24 Sep 2026. Four slots at a quarter of
+    equity each is a fully invested book, so the conviction top-up that took NVTS
+    to 27.5% left the fourth name short — and the account went $313.74 overdrawn."""
+    funded, short = executor.fund([_buy(2_526.59)], [], cash=2_212.85, band=BAND)
+    assert short == []
+    assert len(funded) == 1
+    assert funded[0].notional == pytest.approx(2_212.85)
+    assert "Cut from $2,526.59" in funded[0].reason
+
+
+def test_fund_blocks_a_buy_when_the_cash_is_already_negative():
+    funded, short = executor.fund([_buy(2_526.59)], [], cash=-313.70, band=BAND)
+    assert funded == []
+    assert len(short) == 1
+    assert short[0].order.ticker == "AMD"
+    assert short[0].available == 0.0          # never reported as negative money
+
+
+def test_fund_blocks_rather_than_buying_dust():
+    """Below the rebalance band is the line the planner already draws for
+    'too small to be worth trading'. A $40 stub of a $2,500 conviction is not a
+    position, it's a rounding artifact with a commission story."""
+    funded, short = executor.fund([_buy(2_526.59)], [], cash=40.0, band=BAND)
+    assert funded == []
+    assert short[0].affordable == pytest.approx(40.0)
+
+
+def test_fund_spends_the_proceeds_of_the_sells_in_the_same_plan():
+    """A monthly rebalance sells to buy. Ignoring the proceeds would block every
+    swap on a fully-invested book — which is all of them."""
+    positions = [executor.Position("ACGL", qty=10.0, market_value=2_000.0)]
+    orders = [
+        executor.Order(ticker="ACGL", side="sell", qty=10.0, reason="out of the decile"),
+        _buy(2_000.0, ticker="COF"),
+    ]
+    funded, short = executor.fund(orders, positions, cash=0.0, band=BAND)
+    assert short == []
+    assert [o.ticker for o in funded] == ["ACGL", "COF"]
+    assert funded[1].notional == pytest.approx(2_000.0)   # full size, not cut
+
+
+def test_fund_counts_a_partial_trim_as_proceeds():
+    orders = [
+        executor.Order(ticker="SPY", side="sell", notional=500.0, reason="trim"),
+        _buy(500.0),
+    ]
+    funded, short = executor.fund(orders, [], cash=0.0, band=BAND)
+    assert short == [] and funded[1].notional == pytest.approx(500.0)
+
+
+def test_fund_leaves_a_plan_it_can_pay_for_completely_alone():
+    orders = [_buy(2_500.0, "AMD"), _buy(2_500.0, "AMZN")]
+    funded, short = executor.fund(orders, [], cash=10_000.0, band=BAND)
+    assert short == [] and funded == orders
+
+
+def test_fund_pays_in_order_so_the_shortfall_lands_on_one_name():
+    """Not spread thinly across both — one whole position beats two half ones,
+    and the next run finishes the job."""
+    orders = [_buy(2_500.0, "AMD"), _buy(2_500.0, "AMZN")]
+    funded, short = executor.fund(orders, [], cash=3_000.0, band=BAND)
+    assert short == []
+    assert funded[0].notional == pytest.approx(2_500.0)   # first name paid in full
+    assert funded[1].notional == pytest.approx(500.0)
+
+
+def test_fund_never_touches_a_sell():
+    """Exits are how the account gets its cash back; they can't be unaffordable."""
+    orders = [executor.Order(ticker="SPY", side="sell", qty=20.0, reason="closing")]
+    funded, short = executor.fund(orders, [], cash=-5_000.0, band=BAND)
+    assert funded == orders and short == []
+
+
+# --------------------------------------------------------------------------
 # submit() — the only autonomous-order path
 # --------------------------------------------------------------------------
 
