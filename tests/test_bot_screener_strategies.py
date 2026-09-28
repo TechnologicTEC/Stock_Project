@@ -163,7 +163,7 @@ def test_runs_since_buy_is_none_when_no_buy_is_on_record():
 def test_first_run_of_the_month_buys_the_top_fifteen():
     targets = comp.build(_ctx(_rows(), slots=15))
     assert [t.ticker for t in targets] == [f"T{i:02d}" for i in range(1, 16)]
-    assert all(t.notional == pytest.approx(10_000.0 / 15) for t in targets)
+    assert all(t.notional == pytest.approx(9_500.0 / 15) for t in targets)   # 95% / 15
 
 
 def test_between_rebalances_it_reasserts_the_book_rather_than_emptying_it():
@@ -306,10 +306,10 @@ def test_a_name_with_a_null_score_is_also_held():
     assert [t.ticker for t in thr.build(_thr_ctx(rows, held=["AAA"]))] == ["AAA"]
 
 
-def test_sizing_is_five_percent_at_twenty_slots():
+def test_sizing_is_a_twentieth_of_the_invested_ninety_five_percent():
     rows = _rows(n=30, top_score=85.0, step=0.2)
     targets = thr.build(_thr_ctx(rows, slots=20, equity=10_000.0))
-    assert targets[0].notional == pytest.approx(500.0)
+    assert targets[0].notional == pytest.approx(475.0)
 
 
 def test_threshold_refuses_without_leaderboard_rows():

@@ -427,15 +427,21 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     committed = executor.committed_to_buys(unfilled)
     if committed:
         _log(f"  ${committed:,.2f} already committed to unfilled buys")
-    orders, short = executor.fund(orders, positions, cash=account["cash"] - committed)
+    cash_now = account["cash"] - committed
+    # The cushion already built is off-limits to planned buys (risk.CASH_CUSHION).
+    keep = risk.cushion_to_keep(equity, cash_now)
+    if keep:
+        _log(f"  ${keep:,.2f} held back as the cash cushion")
+    orders, short = executor.fund(orders, positions, cash=cash_now, keep=keep)
+    cushion_note = (f" (${keep:,.2f} more is held back as the cash cushion)" if keep else "")
     for gap in short:
         _log(f"    not enough cash: {gap.order.ticker} wanted "
              f"${gap.order.notional:,.2f}, ${gap.available:,.2f} available")
         journal.record(
             run_id=run_id, strategy=strategy, ticker=gap.order.ticker, action=gap.order.side,
             reason=(f"Not enough cash: ${gap.order.notional:,.2f} wanted, "
-                    f"${gap.available:,.2f} available. Not bought in part — it waits "
-                    "for a sale to free the cash."),
+                    f"${gap.available:,.2f} available{cushion_note}. Not bought in part "
+                    "— it waits for a sale to free the cash."),
             status=_status(dry_run, journal.BLOCKED), blocked_by=risk.INSUFFICIENT_CASH,
             notional=gap.order.notional,
         )

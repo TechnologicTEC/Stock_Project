@@ -144,7 +144,7 @@ def check_order(
 
 
 def position_notional(equity: float, target_slots: int, max_position_pct: float) -> float:
-    """The sizing rule, in one place: `equity x min(1/slots, max_pct)`.
+    """The sizing rule, in one place: `equity x (1 - CASH_CUSHION) x min(1/slots, max_pct)`.
 
     Identical for every strategy — that uniformity is what lets the five equity
     curves be compared as a test of the *signals* rather than of five different
@@ -152,4 +152,33 @@ def position_notional(equity: float, target_slots: int, max_position_pct: float)
     """
     slots = max(1, int(target_slots or 1))
     weight = min(1.0 / slots, max_position_pct if max_position_pct else 1.0)
-    return max(0.0, equity * weight)
+    return max(0.0, equity * (1.0 - CASH_CUSHION) * weight)
+
+
+# The cash cushion — Tane's rule, 29 Sep 2026, all five strategies. Positions are
+# sized from 95% of the account, so a full book leaves 5% in cash, and
+# `executor.fund` never plans a buy that spends cushion the account already has.
+#
+# Why it exists: when a sale pays for a buy in the same run, the sale's price
+# isn't known until the next open, and the stock opens lower about half the
+# time — for the creator bot's names by 1.06% typically and 5.65% on a bad day
+# (1 in 20), for NVTS by 3.19% typically. Counting the sale at yesterday's close
+# then leaves the account short when the orders fill. The cushion is what that
+# shortfall comes out of, so the account doesn't go negative, while the bot
+# still buys in the same run rather than waiting a trading day for the cash.
+#
+# Built as it goes, not taken up front: none of the accounts had it on the day
+# this was added (creator -$314, composite -$5, top decile $3). Taking it first
+# would have held back the next several buys — composite's whole October swap
+# among them — so instead each sell-and-replace leaves ~5% of the sale behind.
+CASH_CUSHION = 0.05
+
+
+def cushion_to_keep(equity: float, cash: float) -> float:
+    """How much of the current cash is cushion, and so off-limits to planned buys.
+
+    Up to CASH_CUSHION of the account, but never more than the cash that is
+    actually there — the cushion is protected once built, not demanded before
+    anything else may happen. See CASH_CUSHION.
+    """
+    return max(0.0, min(CASH_CUSHION * max(equity, 0.0), cash))

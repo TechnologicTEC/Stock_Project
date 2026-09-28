@@ -95,10 +95,11 @@ def test_the_book_is_the_top_decile():
     assert [t.ticker for t in targets] == [f"T{i:03d}" for i in range(1, 51)]
 
 
-def test_each_position_is_two_percent_of_equity():
+def test_each_position_is_a_fiftieth_of_the_invested_ninety_five_percent():
+    """A full decile is 95% of the account; the other 5% is the cash cushion."""
     targets = tdl.build(_ctx(equity=10_000.0, slots=50))
-    assert targets[0].notional == pytest.approx(200.0)
-    assert sum(t.notional for t in targets) == pytest.approx(10_000.0)
+    assert targets[0].notional == pytest.approx(190.0)
+    assert sum(t.notional for t in targets) == pytest.approx(9_500.0)
 
 
 def test_the_reason_reads_the_way_the_blueprint_specifies():
@@ -125,12 +126,12 @@ def test_a_held_name_still_in_the_decile_survives_the_rebalance():
 
 def test_a_short_leaderboard_leaves_the_difference_in_cash():
     """Position size is a property of the slot count, not of how many names
-    happened to qualify — so a 30-name decile is a 30-name book at $200, not
+    happened to qualify — so a 30-name decile is a 30-name book at $190, not
     50 slots' worth spread thinner."""
     targets = tdl.build(_ctx(_rows(300), slots=50))
     assert len(targets) == 30
-    assert targets[0].notional == pytest.approx(200.0)
-    assert sum(t.notional for t in targets) == pytest.approx(6_000.0)
+    assert targets[0].notional == pytest.approx(190.0)
+    assert sum(t.notional for t in targets) == pytest.approx(5_700.0)
 
 
 def test_build_refuses_without_a_leaderboard():

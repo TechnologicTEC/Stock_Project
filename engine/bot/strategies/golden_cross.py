@@ -52,7 +52,7 @@ from __future__ import annotations
 from datetime import date as date_
 from datetime import timedelta
 
-from engine.bot import risk
+from engine.bot import executor, risk
 from engine.bot.executor import Target
 
 # One name, deliberately. The whole value of this strategy is the live-vs-
@@ -133,9 +133,20 @@ def build(ctx) -> list[Target]:
         fast_now, slow_now = float(fast.iloc[-1]), float(slow.iloc[-1])
 
         if float(signal.iloc[-1]) >= 1.0:
+            # HOLD, not LEVEL: bought at the shared size when the cross turns on,
+            # then left alone until it turns off. At 100% of the account the two
+            # were the same thing — with no cash, the target always equalled the
+            # position. With the 5% cash cushion they aren't: LEVEL would sell $504
+            # of SPY on the first run just to make the cushion, then trim or top
+            # up SPY against that cash every time it moved ~10% — a quiet day
+            # resizing a position, which nothing else in the bot is allowed to do.
+            # This strategy never sells one name to buy another, so it has no
+            # sale-price risk for the cushion to cover; its cushion arrives with
+            # its next entry.
             targets.append(Target(
                 ticker=ticker,
                 notional=notional,
+                sizing=executor.HOLD,
                 reason=f"Golden cross: 50d ${fast_now:,.2f} above 200d ${slow_now:,.2f}.",
             ))
 

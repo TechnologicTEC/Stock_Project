@@ -704,8 +704,9 @@ for tab, r in zip(tabs, tab_rows):
             _stat("Cash", _money(cash_now, 0), se=_pct(cash_pct, 0)),
             _stat("Invested", _pct(invested_pct, 0)),
             _stat("Position size",
-                  f'equity × {_tidy_pct(min(1 / slots, cfg.get("max_position_pct") or 1.0))}'
-                  if slots else "—"),
+                  f'equity × {_tidy_pct((1 - risk.CASH_CUSHION) * min(1 / slots, cfg.get("max_position_pct") or 1.0))}'
+                  if slots else "—",
+                  se=f"{_tidy_pct(risk.CASH_CUSHION)} kept as cash"),
         )
 
         # ---- open positions ----

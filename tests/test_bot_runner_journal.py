@@ -216,12 +216,26 @@ def test_the_runner_refuses_a_buy_the_cash_does_not_fully_cover(recorded):
     assert len(blocked) == 1 and blocked[0]["notional"] == pytest.approx(2_526.59)
 
 
-def test_the_runner_places_a_buy_the_cash_does_cover(recorded):
-    client = _account_with(2_600.00)
+def test_the_runner_places_a_buy_the_cash_covers_beyond_the_cushion(recorded):
+    """$10,000 account: $500 of the cash is the cushion, so $3,100 leaves $2,600."""
+    client = _account_with(3_100.00)
     targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
     _run(recorded, dry_run=False, targets=targets, client=client)
     assert len(client.submitted) == 1
     assert float(client.submitted[0].notional) == pytest.approx(2_526.59)
+
+
+def test_a_buy_that_would_dip_into_the_cushion_waits_and_says_why(recorded):
+    """$2,600 of cash covers the $2,526.59 — but only by spending the $500 kept
+    for a sale that opens lower than planned. Refused, and the journal names the
+    cushion rather than implying the money isn't there."""
+    client = _account_with(2_600.00)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+    assert client.submitted == []
+    row = next(r for r in recorded if r.get("blocked_by") == risk.INSUFFICIENT_CASH)
+    assert "$2,100.00 available" in row["reason"]
+    assert "$500.00 more is held back as the cash cushion" in row["reason"]
 
 
 def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):

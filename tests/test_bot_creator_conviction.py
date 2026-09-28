@@ -371,24 +371,25 @@ def test_build_refuses_without_a_prepared_window():
 # build — entries
 # --------------------------------------------------------------------------
 
-def test_a_qualifying_name_is_bought_at_one_eighth_of_the_account():
+def test_a_qualifying_name_is_bought_at_one_eighth_of_the_invested_account():
+    """1/8 of 95% — the other 5% is the cash cushion."""
     targets = cc.build(_ctx([_entry("NVTS", bullish=3)], equity=8_000.0))
     assert _tickers(targets) == ["NVTS"]
-    assert targets[0].notional == pytest.approx(1_000.0)
+    assert targets[0].notional == pytest.approx(950.0)
     assert targets[0].sizing == executor.HOLD
     assert "3 bullish" in targets[0].reason
 
 
 def test_a_strong_case_is_bought_at_the_same_size_as_a_weak_one():
     targets = cc.build(_ctx([_entry("A", bullish=3), _entry("B", bullish=9)]))
-    assert {t.notional for t in targets} == {1_250.0}
+    assert {t.notional for t in targets} == {1_187.5}
 
 
 def test_the_slot_count_binds_rather_than_the_position_cap():
-    """The cap is a backstop, as for every other strategy: 1/8 = 12.5% sits
-    under the 20% cap, so eight full slots are the whole account."""
+    """The cap is a backstop, as for every other strategy: 1/8 sits under the
+    20% cap, so eight full slots are the whole invested 95% of the account."""
     targets = cc.build(_ctx([_entry(f"T{i}", bullish=3) for i in range(8)]))
-    assert sum(t.notional for t in targets) == pytest.approx(10_000.0)
+    assert sum(t.notional for t in targets) == pytest.approx(9_500.0)
 
 
 def test_a_non_qualifying_name_is_not_bought():

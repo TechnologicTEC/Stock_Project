@@ -151,12 +151,31 @@ def test_sizing_uses_the_shared_position_rule():
     targets = golden_cross.build(_ctx({"SPY": _rising()}, equity=12_500.0, slots=1, cap=1.0))
     assert targets[0].notional == pytest.approx(
         risk.position_notional(12_500.0, 1, 1.0))
-    assert targets[0].notional == pytest.approx(12_500.0)
+    assert targets[0].notional == pytest.approx(11_875.0)       # 95%: 5% is the cushion
+
+
+def test_a_held_position_is_never_resized_while_the_cross_stays_on():
+    """HOLD, not LEVEL. With the 5% cash cushion, levelling would sell ~$500 of
+    SPY on the first run just to make room for cash, then trade SPY against that
+    cash every time it moved ~10% — a quiet day resizing a position."""
+    from engine.bot import executor
+    ctx = _ctx({"SPY": _rising()}, equity=10_124.29, slots=1, cap=1.0)
+    targets = golden_cross.build(ctx)
+    assert [t.sizing for t in targets] == [executor.HOLD]
+    held = [executor.Position("SPY", qty=15.0, market_value=10_124.29)]
+    assert executor.plan(targets, held, equity=10_124.29) == []
+
+
+def test_an_entry_from_cash_is_bought_at_the_cushioned_size():
+    from engine.bot import executor
+    targets = golden_cross.build(_ctx({"SPY": _rising()}, equity=10_000.0, slots=1, cap=1.0))
+    orders = executor.plan(targets, [], equity=10_000.0)
+    assert [(o.side, o.notional) for o in orders] == [("buy", 9_500.0)]
 
 
 def test_sizing_respects_a_tighter_cap_than_the_slot_share():
     targets = golden_cross.build(_ctx({"SPY": _rising()}, equity=10_000.0, slots=1, cap=0.2))
-    assert targets[0].notional == pytest.approx(2_000.0)
+    assert targets[0].notional == pytest.approx(1_900.0)
 
 
 # --------------------------------------------------------------------------

@@ -151,8 +151,12 @@ class Shortfall:
 
 
 def fund(orders: list[Order], positions: list[Position], *,
-         cash: float) -> tuple[list[Order], list[Shortfall]]:
+         cash: float, keep: float = 0.0) -> tuple[list[Order], list[Shortfall]]:
     """Keep only the buys the account can pay for IN FULL. Pure.
+
+    `keep` is cash that planned buys may not touch — the cushion
+    (`risk.cushion_to_keep`). It is there for what planning can't see: a sale
+    that opens lower than the close it was counted at.
 
     `plan()` sizes the book as shares of EQUITY and never looks at cash, which
     is fine until the shares add up to more than the account has. On 24 Sep
@@ -182,7 +186,7 @@ def fund(orders: list[Order], positions: list[Position], *,
     exactly the cash on hand.
     """
     value = {p.ticker.upper(): abs(p.market_value) for p in positions}
-    available = float(cash)
+    available = float(cash) - max(0.0, float(keep))
     for order in orders:
         if order.side == "sell":
             available += (order.notional if order.notional is not None

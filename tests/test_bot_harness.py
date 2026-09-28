@@ -196,11 +196,13 @@ def test_sub_dollar_orders_are_rejected():
     assert blocked is not None and blocked.rail == risk.MIN_NOTIONAL
 
 
+# Every size is from 95% of the account: the other 5% is the cash cushion
+# (risk.CASH_CUSHION, Tane's rule from 29 Sep 2026).
 @pytest.mark.parametrize("slots,cap,expected", [
-    (1, 1.0, 10_000.0),
-    (15, 0.20, 10_000.0 / 15),      # 6.7% — the slot count binds
-    (2, 0.20, 2_000.0),             # 50% would exceed the cap, so the cap binds
-    (20, 0.20, 500.0),
+    (1, 1.0, 9_500.0),
+    (15, 0.20, 9_500.0 / 15),       # 6.3% — the slot count binds
+    (2, 0.20, 1_900.0),             # 50% would exceed the cap, so the cap binds
+    (20, 0.20, 475.0),
 ])
 def test_sizing_rule(slots, cap, expected):
     assert risk.position_notional(10_000.0, slots, cap) == pytest.approx(expected)
@@ -348,6 +350,60 @@ def test_committed_to_buys_ignores_what_it_cannot_price():
         symbol = "SPY"
     assert executor.committed_to_buys([_Bare(), _QueuedOrder("X", "buy")]) == 0.0
     assert executor.committed_to_buys([]) == 0.0
+
+
+# --------------------------------------------------------------------------
+# The cash cushion (risk.CASH_CUSHION) — built as it goes, then protected
+# --------------------------------------------------------------------------
+
+def test_the_cushion_is_five_percent_of_the_account_once_it_is_there():
+    assert risk.CASH_CUSHION == 0.05
+    assert risk.cushion_to_keep(10_000.0, 4_473.31) == pytest.approx(500.0)
+
+
+def test_the_cushion_is_never_more_than_the_cash_actually_there():
+    """Built as it goes, not demanded up front: $130 of cash is $130 of cushion,
+    not a debt of $370 that blocks every buy until it's repaid."""
+    assert risk.cushion_to_keep(10_000.0, 130.0) == pytest.approx(130.0)
+
+
+def test_an_overdrawn_account_has_no_cushion_to_protect():
+    assert risk.cushion_to_keep(10_250.0, -313.70) == 0.0
+
+
+def test_fund_never_plans_a_buy_that_dips_into_the_cushion():
+    funded, short = executor.fund([_buy(1_200.0)], [], cash=1_500.0, keep=500.0)
+    assert funded == []
+    assert short[0].available == pytest.approx(1_000.0)
+
+
+def test_a_sale_still_pays_for_a_buy_while_the_cushion_is_held():
+    positions = [executor.Position("OLD", qty=10.0, market_value=1_000.0)]
+    orders = [executor.Order(ticker="OLD", side="sell", qty=10.0, reason="out"),
+              _buy(950.0, "NEW")]
+    funded, short = executor.fund(orders, positions, cash=500.0, keep=500.0)
+    assert short == [] and [o.ticker for o in funded] == ["OLD", "NEW"]
+
+
+def test_the_cushion_absorbs_a_sale_that_opens_lower():
+    """The case it exists for. Creator on ~23 Oct: -$313.70 of cash, NVTS
+    (~$2,878) sold to buy the next two in line at 1/8 of 95% of a $10,250
+    account. Planned, it leaves ~$130 — so a typical NVTS drop at the open
+    (3.19%, ~$92) still leaves the account positive. Without the 95% sizing the
+    two buys would have been $2,562.50 and the same drop would take it negative."""
+    equity = 10_250.0
+    buy = risk.position_notional(equity, 8, 0.20)
+    positions = [executor.Position("NVTS", qty=242.09, market_value=2_878.0)]
+    orders = [executor.Order(ticker="NVTS", side="sell", qty=242.09, reason="clock ran out"),
+              _buy(buy, "META"), _buy(buy, "AMZN")]
+    cash = -313.70
+    funded, short = executor.fund(orders, positions, cash=cash,
+                                  keep=risk.cushion_to_keep(equity, cash))
+    assert short == []
+    left_if_nvts_opens_lower = cash + 2_878.0 * (1 - 0.0319) - 2 * buy
+    assert left_if_nvts_opens_lower > 0
+    at_full_size = cash + 2_878.0 * (1 - 0.0319) - 2 * (equity / 8)
+    assert at_full_size < 0
 
 
 def test_fund_never_touches_a_sell():
@@ -588,20 +644,20 @@ def test_assert_paper_rejects_anything_else(kwargs):
 # The harness strategy
 # --------------------------------------------------------------------------
 
-def test_spy_harness_targets_spy_at_full_weight():
+def test_spy_harness_targets_spy_with_everything_but_the_cushion():
     ctx = strategies.Context(strategy="spy_harness", equity=10_000.0, cash=10_000.0,
                              config=_config(), today=date(2026, 9, 1))
     targets = strategies.build("spy_harness", ctx)
     assert len(targets) == 1
     assert targets[0].ticker == "SPY"
-    assert targets[0].notional == pytest.approx(10_000.0)
+    assert targets[0].notional == pytest.approx(9_500.0)
 
 
 def test_harness_target_scales_with_equity():
     """It re-reads equity each run, so gains compound instead of idling as cash."""
     ctx = strategies.Context(strategy="spy_harness", equity=12_500.0, cash=0.0,
                              config=_config(), today=date(2026, 9, 1))
-    assert strategies.build("spy_harness", ctx)[0].notional == pytest.approx(12_500.0)
+    assert strategies.build("spy_harness", ctx)[0].notional == pytest.approx(11_875.0)
 
 
 def test_unknown_strategy_is_a_clear_error():
