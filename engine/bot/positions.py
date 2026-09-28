@@ -299,16 +299,28 @@ def _fills_same_session(when: datetime | None) -> bool:
 
 def _is_pending(opened: date_ | None, when: datetime | None,
                 confirmed_through: date_ | None) -> bool:
-    """Has any snapshot been taken since this order could have filled?"""
+    """Has any snapshot been taken since this order could have filled?
+
+    Compared on the order's NEW YORK date, because snapshots are dated by New
+    York session. `opened` is a UTC date, and the evening run regularly lands
+    after midnight UTC — 00:01 UTC on a Friday is 20:01 Thursday in New York —
+    so comparing on it kept a filled position badged "ordered" for an extra
+    session (a whole weekend, for a Friday fill). `opened` is used only when
+    there is no timestamp to do better with.
+    """
     if not (confirmed_through and opened):
         return False
+    if when is None:
+        return confirmed_through <= opened
+    aware = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    day = aware.astimezone(NY).date()
     if _fills_same_session(when):
-        # It filled during `opened`'s session, so that evening's snapshot —
+        # It filled during that New York session, so that evening's snapshot —
         # written at the end of the run, hours after the close — has seen it.
-        return confirmed_through < opened
+        return confirmed_through < day
     # Placed after the close: it fills at the next open, which is AFTER the
-    # snapshot dated `opened` was written. Only a later snapshot confirms it.
-    return confirmed_through <= opened
+    # snapshot dated that day was written. Only a later snapshot confirms it.
+    return confirmed_through <= day
 
 
 def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,

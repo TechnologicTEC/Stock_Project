@@ -403,7 +403,8 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     # against positions, which don't exist until an order fills, so a queued
     # order is invisible to it — see executor.open_order_tickers for the holiday
     # case that turns into a doubled position.
-    pending = executor.open_order_tickers(trading_client)
+    unfilled = executor.open_orders(trading_client)
+    pending = {(o.symbol or "").upper() for o in unfilled}
     held_back = [o for o in orders if o.ticker.upper() in pending] if pending else []
     if pending:
         _log(f"  {len(pending)} symbol(s) with unfilled orders: {', '.join(sorted(pending))}")
@@ -419,8 +420,14 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
 
     # Only buy what the account can pay for in full — never part of a position,
     # never on borrowed money. Applied AFTER the pending filter, so an order
-    # we're already waiting on doesn't reserve cash twice.
-    orders, short = executor.fund(orders, positions, cash=account["cash"])
+    # we're already waiting on doesn't reserve cash twice. And the cash is net of
+    # buys already queued: Alpaca's cash only moves on a fill, so without this a
+    # run landing before an earlier run's buy has filled would spend the same
+    # dollars again on the next name in line.
+    committed = executor.committed_to_buys(unfilled)
+    if committed:
+        _log(f"  ${committed:,.2f} already committed to unfilled buys")
+    orders, short = executor.fund(orders, positions, cash=account["cash"] - committed)
     for gap in short:
         _log(f"    not enough cash: {gap.order.ticker} wanted "
              f"${gap.order.notional:,.2f}, ${gap.available:,.2f} available")

@@ -238,6 +238,27 @@ def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):
     assert [r for r in recorded if r.get("action") == journal.HOLD] == []
 
 
+def test_a_queued_buy_is_not_spent_twice_by_the_next_run(recorded):
+    """Alpaca's cash only moves when an order fills. The evening run queued META
+    with the last $1,282.77; the morning run lands before the open, sees the same
+    $1,500 of cash, and has AMZN next in line. Buying it would spend the META
+    money again — both fill at the open and the account goes $1,065 overdrawn."""
+    class _Queued:
+        symbol = "META"
+        side = type("Side", (), {"value": "buy"})()
+        notional = "1282.77"
+
+    client = _account_with(1_500.00)
+    client._open_orders = [_Queued()]
+    targets = [Target(ticker="META", notional=1_282.77, reason="queued last night"),
+               Target(ticker="AMZN", notional=1_282.77, reason="next in line")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+
+    assert client.submitted == []
+    blocked = {r["ticker"]: r["blocked_by"] for r in recorded if r.get("blocked_by")}
+    assert blocked == {"META": risk.PENDING_ORDER, "AMZN": risk.INSUFFICIENT_CASH}
+
+
 def test_a_dry_run_shows_the_refusal_without_reaching_the_broker(recorded):
     """A preview that ignored cash would promise an order the live run won't place.
     Without the journal assertion this passes whether or not the runner checks

@@ -328,6 +328,28 @@ def test_a_refused_buy_does_not_block_a_later_one_that_fits():
     assert [s.order.ticker for s in short] == ["BIG"]
 
 
+class _QueuedOrder:
+    """Shaped like alpaca-py's Order: `side` is an enum carrying `.value`."""
+    def __init__(self, symbol, side, notional=None):
+        self.symbol = symbol
+        self.side = type("Side", (), {"value": side})()
+        self.notional = None if notional is None else str(notional)   # Alpaca sends strings
+
+
+def test_committed_to_buys_adds_up_the_queued_buys_only():
+    queued = [_QueuedOrder("META", "buy", 1_282.77), _QueuedOrder("AMZN", "buy", 1_282.77),
+              _QueuedOrder("NVTS", "sell")]
+    assert executor.committed_to_buys(queued) == pytest.approx(2_565.54)
+
+
+def test_committed_to_buys_ignores_what_it_cannot_price():
+    """A bare symbol (the fakes elsewhere) or a buy with no notional adds nothing."""
+    class _Bare:
+        symbol = "SPY"
+    assert executor.committed_to_buys([_Bare(), _QueuedOrder("X", "buy")]) == 0.0
+    assert executor.committed_to_buys([]) == 0.0
+
+
 def test_fund_never_touches_a_sell():
     """Exits are how the account gets its cash back; they can't be unaffordable."""
     orders = [executor.Order(ticker="SPY", side="sell", qty=20.0, reason="closing")]

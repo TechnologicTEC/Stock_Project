@@ -470,6 +470,30 @@ def test_a_post_close_order_clears_once_the_next_snapshot_lands():
     assert rows[0]["pending"] is False
 
 
+def test_an_evening_run_landing_after_midnight_utc_is_dated_by_new_york():
+    """The evening run regularly lands after 00:00 UTC. 00:01 UTC Friday is 20:01
+    THURSDAY in New York: the order queues to Friday's open, and the snapshot
+    dated Friday — written that evening — has seen it. Comparing on the UTC date
+    (Friday) kept it badged 'ordered' through the weekend."""
+    rows = positions.enrich(
+        [_row("SPY")],
+        since={"SPY": date(2026, 9, 25)},                        # the UTC date
+        opened_at={"SPY": datetime(2026, 9, 25, 0, 1)},          # Thu 20:01 NY
+        confirmed_through=date(2026, 9, 25),
+    )
+    assert rows[0]["pending"] is False
+
+
+def test_the_same_late_order_is_pending_until_that_snapshot_exists():
+    rows = positions.enrich(
+        [_row("SPY")],
+        since={"SPY": date(2026, 9, 25)},
+        opened_at={"SPY": datetime(2026, 9, 25, 0, 1)},
+        confirmed_through=date(2026, 9, 24),                     # Thursday's snapshot
+    )
+    assert rows[0]["pending"] is True
+
+
 def test_without_a_timestamp_the_old_date_rule_still_applies():
     """Callers that don't pass `opened_at` must not change behaviour."""
     rows = positions.enrich(

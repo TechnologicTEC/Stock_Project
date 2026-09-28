@@ -240,11 +240,43 @@ def open_order_tickers(client) -> set[str]:
     on, per ticker rather than per run — one stuck order shouldn't freeze the
     other nineteen slots.
     """
+    return {(o.symbol or "").upper() for o in open_orders(client)}
+
+
+def open_orders(client) -> list:
+    """Every order at the broker that hasn't filled yet."""
     from alpaca.trading.enums import QueryOrderStatus
     from alpaca.trading.requests import GetOrdersRequest
 
     req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=200)
-    return {(o.symbol or "").upper() for o in client.get_orders(filter=req)}
+    return list(client.get_orders(filter=req))
+
+
+def committed_to_buys(orders) -> float:
+    """Dollars already promised to buy orders that haven't filled. Pure.
+
+    Alpaca's `cash` only moves when an order FILLS, not when it is queued —
+    measured, not assumed: the creator account's snapshot written straight
+    after queueing $2,517.44 of MSFT on 20 Sep still read $4,785.68. So a run
+    that lands between an earlier run's queued buy and its fill sees that money
+    as unspent. The pending filter stops it buying the SAME stock twice; this
+    stops it spending the same dollars on a DIFFERENT one. With the creator
+    queue that is the ordinary case, not an edge: the evening run queues the top
+    of the queue, and the morning run — or a manual evening run — lands before
+    the open with the next name waiting.
+
+    The bot buys in dollars, so an open buy carries its `notional`. A buy with
+    no notional (none of ours) can't be priced here and is left out.
+    """
+    total = 0.0
+    for o in orders or ():
+        side = getattr(o, "side", None)
+        if str(getattr(side, "value", side) or "").lower() != "buy":
+            continue
+        notional = getattr(o, "notional", None)
+        if notional is not None:
+            total += float(notional)
+    return total
 
 
 def current_positions(client) -> list[Position]:
