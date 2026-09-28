@@ -114,7 +114,7 @@ _UNSET = object()      # so `spread=None` can mean "no snapshot yet", not "defau
 
 def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET,
-         fills=_UNSET, names=_UNSET, rebuilt=_UNSET):
+         fills=_UNSET, names=_UNSET, rebuilt=_UNSET, clock=_UNSET):
     """Render the page with every external read stubbed.
 
     The panel readers are stubbed here too. Without them the strategy panels
@@ -141,7 +141,8 @@ def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          patch("app._cache.bot_leaderboard",
                return_value=_leaderboard() if leaderboard is _UNSET else leaderboard), \
          patch("app._cache.bot_creator_mentions",
-               return_value=_mentions() if mentions is _UNSET else mentions), \
+               return_value=_mentions() if mentions is _UNSET else mentions),          patch("app._cache.bot_creator_clock_inputs",
+               return_value=({}, {}) if clock is _UNSET else clock), \
          patch("app._cache.bot_decile_spread",
                return_value=_spread() if spread is _UNSET else spread), \
          patch("app._cache.bot_sma_frame",
@@ -520,10 +521,54 @@ def test_the_decile_panel_says_so_before_the_first_snapshot():
 
 
 def test_the_creator_panel_shows_the_window_and_links_the_videos():
-    at = _run(configs=[_config("creator_conviction", target_slots=4)])
+    at = _run(configs=[_config("creator_conviction", target_slots=8)])
     text = _page_text(at)
-    assert "30-day mention window" in text
+    assert "Holdings and the queue" in text
     assert "https://x/1" in text and "NVTS" in text
+
+
+def _creator_mention(ticker, days_ago, bullish=3):
+    when = datetime.now() - timedelta(days=days_ago)
+    return {"ticker": ticker, "mentions": bullish, "company_name": ticker,
+            "stances": {"bullish": bullish, "bearish": 0, "neutral": 0, "unknown": 0},
+            "last_seen": when,
+            "videos": [{"title": "v", "url": f"https://x/{ticker}", "published_at": when,
+                        "stance": "bullish"}] * bullish}
+
+
+def _held(ticker):
+    return {"ticker": ticker, "qty": 10.0, "avg_entry_price": 100.0,
+            "current_price": 110.0, "market_value": 1_100.0, "unrealized_pl": 100.0,
+            "unrealized_plpc": 0.1, "change_today_pct": 0.0}
+
+
+def test_the_creator_panel_shows_each_holdings_clock_and_the_queue():
+    """Days left is the clock the strategy acts on, and a qualifier that isn't
+    held says where it stands in line."""
+    mentions = [_creator_mention("NVTS", 3), _creator_mention("AMZN", 1)]
+    view = _account_view(positions=[_held("NVTS")])
+    clock = ({"NVTS": datetime.now() - timedelta(days=5)}, {})
+    at = _run(configs=[_config("creator_conviction", target_slots=8)],
+              mentions=mentions, view=view, clock=clock)
+    text = _page_text(at)
+    assert "1 held · 1 queued" in text
+    assert "queued 1" in text
+    assert '<td class="num">25</td>' in text           # 30 from the buy, 5 days ago
+
+
+def test_the_creator_panel_finds_the_holdings_without_broker_keys():
+    """The deployed Space holds no bot keys. Reading 'held' from the broker
+    alone would show nothing held and no clock at all there."""
+    mentions = [_creator_mention("NVTS", 3)]
+    fills = [{"ticker": "NVTS", "decided_at": datetime.now() - timedelta(days=5),
+              "action": journal.BUY, "qty": None, "notional": 1_250.0,
+              "reason": "entry", "status": journal.SUBMITTED}]
+    clock = ({"NVTS": datetime.now() - timedelta(days=5)}, {})
+    at = _run(configs=[_config("creator_conviction", target_slots=8)],
+              mentions=mentions, view=_account_view(available=False),
+              fills=fills, clock=clock)
+    text = _page_text(at)
+    assert "1 held · 0 queued" in text
 
 
 def test_the_creator_panel_reports_a_stalled_scan_rather_than_going_blank():

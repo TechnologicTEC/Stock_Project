@@ -203,15 +203,25 @@ def _account_with(cash):
     return _Poor()
 
 
-def test_the_runner_cuts_a_buy_to_the_cash_the_account_has(recorded):
+def test_the_runner_refuses_a_buy_the_cash_does_not_fully_cover(recorded):
     """creator_conviction, 24 Sep 2026: $2,526.59 of AMD ordered against
-    $2,212.85 of cash, and the account ended the day $313.74 overdrawn."""
+    $2,212.85 of cash, and the account ended the day $313.74 overdrawn. Since
+    28 Sep the order is not placed at all — not cut down, not borrowed for."""
     client = _account_with(2_212.85)
     targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
     _run(recorded, dry_run=False, targets=targets, client=client)
 
+    assert client.submitted == []
+    blocked = [r for r in recorded if r.get("blocked_by") == risk.INSUFFICIENT_CASH]
+    assert len(blocked) == 1 and blocked[0]["notional"] == pytest.approx(2_526.59)
+
+
+def test_the_runner_places_a_buy_the_cash_does_cover(recorded):
+    client = _account_with(2_600.00)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
     assert len(client.submitted) == 1
-    assert float(client.submitted[0].notional) == pytest.approx(2_212.85)
+    assert float(client.submitted[0].notional) == pytest.approx(2_526.59)
 
 
 def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):
@@ -228,19 +238,17 @@ def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):
     assert [r for r in recorded if r.get("action") == journal.HOLD] == []
 
 
-def test_a_dry_run_shows_the_cut_without_reaching_the_broker(recorded):
-    """A preview that ignored cash would promise an order the live run can't place."""
+def test_a_dry_run_shows_the_refusal_without_reaching_the_broker(recorded):
+    """A preview that ignored cash would promise an order the live run won't place.
+    Without the journal assertion this passes whether or not the runner checks
+    cash at all, because a dry run never submits anything."""
     client = _account_with(2_212.85)
     targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
     _run(recorded, dry_run=True, targets=targets, client=client)
     assert client.submitted == []
     assert {r["status"] for r in recorded} == {journal.DRY_RUN}
-    # The cut has to show in the preview too. Without this the assertions above
-    # pass whether or not the runner checks cash, because a dry run never
-    # submits anything — and the preview would promise an order it can't place.
-    planned = [r for r in recorded if r.get("ticker") == "AMD"]
-    assert len(planned) == 1
-    assert planned[0]["notional"] == pytest.approx(2_212.85)
+    assert [r["blocked_by"] for r in recorded if r.get("ticker") == "AMD"] == [
+        risk.INSUFFICIENT_CASH]
 
 
 # --------------------------------------------------------------------------

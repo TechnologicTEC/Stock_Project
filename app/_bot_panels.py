@@ -258,10 +258,11 @@ def _score_threshold(cfg: dict, view: dict) -> None:
 
 
 # --------------------------------------------------------------------------
-# Creator conviction — the mentions that triggered it, and the 30-day clock
+# Creator conviction — each holding's clock, and the queue waiting for cash
 # --------------------------------------------------------------------------
 
 def _creator(cfg: dict, view: dict) -> None:
+    from engine.bot import positions as bot_positions
     from engine.bot.strategies import creator_conviction as cc
 
     board = _cache.bot_creator_mentions()
@@ -275,48 +276,69 @@ def _creator(cfg: dict, view: dict) -> None:
     today = date.today()
     newest = max((e["last_seen"] for e in board if e.get("last_seen")), default=None)
     silence = (today - newest.date()).days if newest else None
-    held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
 
-    entries = sorted(board, key=lambda e: (-(e.get("stances") or {}).get("bullish", 0),
-                                           -(e.get("mentions") or 0)))
-    shown = [e for e in entries
-             if cc.qualifies(e)[0] or (e.get("ticker") or "").upper() in held][:10]
+    # What's held: the broker's list where the keys are in the environment, else
+    # the journal's. The deployed Space holds no bot keys, so without the
+    # fallback nothing would ever show as held and no clock would be drawn.
+    if view.get("available"):
+        held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+    else:
+        held = set(bot_positions.book_from_fills(_cache.bot_fills("creator_conviction")))
+
+    opened, history = _cache.bot_creator_clock_inputs()
+    by_ticker = {(e.get("ticker") or "").upper(): e for e in board}
+    clocks = {t: cc.holding_clock(t, opened, history, by_ticker.get(t)) for t in held}
+    queue = sorted((e for e in board if cc.qualifies(e)[0]
+                    and (e.get("ticker") or "").upper() not in held), key=cc.stack_key)
+
+    # Held first, the one closest to being sold at the top; then the queue in the
+    # order it would be bought.
+    held_order = sorted(held, key=lambda t: (clocks[t].until if clocks.get(t) else date.min, t))
+    rows = [(by_ticker.get(t) or {"ticker": t}, True) for t in held_order]
+    rows += [(e, False) for e in queue]
 
     body = []
-    for e in shown:
+    for place, (e, is_held) in enumerate(rows[:14]):
         ticker = (e.get("ticker") or "").upper()
-        st_ = e.get("stances") or {}
-        bull = int(st_.get("bullish") or 0)
+        bull = int((e.get("stances") or {}).get("bullish") or 0)
         seen = e.get("last_seen")
-        days_left = (cc.WINDOW_DAYS - (today - seen.date()).days) if seen else None
-        ok, _why = cc.qualifies(e)
-        flag = ('<span class="cp-pill">held</span>' if ticker in held
-                else ('<span class="cp-pill">qualifies</span>' if ok else ""))
+        if is_held:
+            c = clocks.get(ticker)
+            left = c.days_left(today) if c else None
+            flag = '<span class="cp-pill">held</span>'
+        else:
+            left = None
+            flag = f'<span class="cp-pill">queued {place - len(held_order) + 1}</span>'
         links = " ".join(_video_link(v) for v in (e.get("videos") or [])[:4] if v.get("url"))
         body.append(
             f'<tr><td><span class="tick">{_esc(ticker)}</span> {flag}</td>'
             f'<td class="num">{bull}</td>'
-            f'<td class="num dim">{e.get("mentions")}</td>'
+            f'<td class="num dim">{e.get("mentions") or 0}</td>'
             f'<td class="num dim">{_esc(seen.strftime("%d %b")) if seen else "—"}</td>'
-            f'<td class="num">{days_left if days_left is not None else "—"}</td>'
+            f'<td class="num">{left if left is not None else "—"}</td>'
             f'<td class="dim">{links or "—"}</td></tr>')
 
+    slots = int(cfg.get("target_slots") or cc.DEFAULT_SLOTS)
+    added = cc.DAYS_ADDED
     _theme.panel(
-        f"The {cc.WINDOW_DAYS}-day mention window",
+        "Holdings and the queue",
         '<div class="cp-scroll"><table class="cp-table"><thead><tr><th>Ticker</th>'
         '<th class="num">Bullish</th><th class="num">All</th><th class="num">Last seen</th>'
         '<th class="num">Days left</th><th>Videos</th></tr></thead>'
         f'<tbody>{"".join(body)}</tbody></table></div>'
-        f'<p class="cp-note">Buys on <b>{cc.ENTRY_BULLISH} bullish mentions</b>, or '
-        f'{cc.SUSTAINED_BULLISH} bullish with no bearish across {cc.SUSTAINED_MENTIONS}+ '
-        "mentions — and only when a name is mentioned <i>again</i>, so the backlog standing at "
-        "go-live is never bought. <b>Days left</b> is how long the newest mention has before it "
-        f"ages out of the window; at zero bullish the position is sold. Size grows with the case: "
-        f"the ceiling is reached at {cc.ENTRY_BULLISH + cc.MENTIONS_TO_MAX} bullish mentions.</p>"
+        f'<p class="cp-note">A name clears the bar on <b>{cc.ENTRY_BULLISH} bullish mentions</b>, '
+        f'or {cc.SUSTAINED_BULLISH} bullish with no bearish across {cc.SUSTAINED_MENTIONS}+ '
+        f"mentions, in {cc.WINDOW_DAYS} days. It is bought at 1/{slots} of the account, never "
+        "resized, and only when the cash for the whole position is there. <b>Days left</b> is "
+        f"each holding's clock: {cc.MAX_DAYS_LEFT} from the buy, +{added['bullish']} for a "
+        f"bullish mention, +{added['neutral']} for a neutral one, never above "
+        f"{cc.MAX_DAYS_LEFT}; at zero it is sold. <b>Queued</b> names clear the bar and are "
+        "waiting for a slot and the cash — newest mention first, the number is the order "
+        "they would be bought in.</p>"
         + (f'<p class="cp-foot">Newest mention anywhere is {silence} day(s) old; the run refuses '
-           f"past {cc.MAX_FEED_SILENCE_DAYS}, so a stalled scan cannot empty the window and "
-           "liquidate the book.</p>" if silence is not None else ""),
-        tag=f"{len(board)} names mentioned",
+           f"past {cc.MAX_FEED_SILENCE_DAYS}, so a stalled scan cannot run every clock down "
+           "and liquidate the book.</p>" if silence is not None else ""),
+        tag=f"{len(held)} held · {len(queue)} queued",
     )
 
 

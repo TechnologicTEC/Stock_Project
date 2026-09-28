@@ -11,92 +11,83 @@ Two ways to clear the bar, both inside a 30-day window:
   >=3 bullish mentions                        a case made repeatedly
   >=2 bullish, 0 bearish, and >=4 mentions    sustained coverage, no dissent
 
-The second arm exists for the name a creator returns to constantly while only
-sometimes stating a view outright. Worth knowing: over the whole scanned
-history to date it has **never** fired — every qualification came through the
-first arm. It is kept because it costs nothing and the creator set is expected
-to grow, but it is not currently doing anything, and a comment claiming
-otherwise would be wrong.
+## Eight equal slots, and never a partial buy
 
-## Clearing the bar is not enough: a new mention has to trigger it
+Every position is bought at 1/8 of the account (`target_slots` in bot_config)
+and is never resized afterwards — no top-ups when the creator keeps talking
+about it, no trims when it runs. Until 28 Sep 2026 the book was four slots, with
+positions topped up toward 30% as bullish mentions grew; that overcommitted the
+account, since four quarters is already all of it, and the fourth buy went
+$313 overdrawn. Tane's call on 28 Sep, with six names qualifying: eight slots,
+one size, and the clock below doing the job the top-ups were doing badly.
 
-A name is bought only when it is **mentioned again**, and the tally at that
-moment clears the bar. Meeting the criteria on its own never buys anything.
+A buy only happens when the account has the cash for ALL of it
+(`executor.fund`). Nothing is bought in part and nothing is borrowed.
 
-The distinction matters because the two are easy to confuse and behave very
-differently. At the moment this went live there was already a backlog of
-mentions going back months, and one name (NVTS) cleared the bar on history
-alone. Buying it would have been acting on a case the creator made weeks
-earlier, at a price that has already moved — the strategy would open by betting
-on stale news and then, by construction, never do so again. That is not the
-thing being measured. What is being measured is whether a creator returning to
-a name is worth acting on, so the return *is* the trigger, and the backlog only
-ever counts toward the tally.
+## The backlog is a stack
 
-The watermark is the strategy's **previous run date**, read back out of the
-journal (`screener_common.run_dates`) rather than stored anywhere. That gives
-three properties for free. The first run has no previous run, so it buys
-nothing and simply starts watching — which is exactly the "don't act on the
-backlog" behaviour, arrived at by the rule rather than by a special case. A
-mention stays actionable across about two runs, absorbing a weekend or a lagging
-scan job. And because `run_dates` already discards dry runs, `--dry-run` cannot
-arm the watermark and change what a later live run does.
+More names can qualify than there are slots or cash for. They wait, and when
+cash frees up the NEWEST case goes first: the name with the most recent mention.
+If several share that date, the one whose first mention in the window is most
+recent wins — the fresher case over the one the creator has been making for a
+month. Bullish count, then ticker, break any tie left after that.
+
+Only bullish and neutral mentions count toward "newest" and "first". A bearish
+mention is the creator arguing against the stock, and must never push it up the
+queue.
+
+A name stays in the backlog for as long as it clears the bar. There is no
+longer a rule that a name must be mentioned again after each run to be bought:
+that existed to stop the first run acting on a months-old backlog, and it would
+now throw away a queue that is waiting only for cash.
+
+## The clock: how long a position is held
+
+A position starts with 30 days to live the day it is bought. Every later
+mention adds to it, capped at 30:
+
+  bullish   +10 days
+  neutral    +5 days
+  bearish    nothing — see the reversal rule below
+
+Held with 5 days left and mentioned bullishly, it has 15; mentioned bullishly
+again, 25; once more, 30 and no further. At zero it is sold. The clock is
+derived every run from the journal's buy and the mentions since, rather than
+stored, so there is nothing to keep in step with what actually happened.
+
+A mention that lands after the clock had already run out does not revive it.
+A name with no buy on record (it shouldn't happen — every buy is journalled) is
+dated from its newest counting mention instead, so it can't be held forever.
+
+Separately, and regardless of the clock, a held name is sold when the creator
+turns: more bearish than bullish mentions in the window.
 
 ## Why absence means "sell" here, when it means "hold" everywhere else
 
 `score_threshold` holds a name that has dropped off the leaderboard, because a
-missing row is missing data. This strategy does the opposite: a held name with
-no mentions left in the window is sold, because the creator no longer talking
-about a stock is exactly the signal decaying — that IS the information.
+missing row is missing data. This strategy does the opposite: the clock runs
+out when the creator stops talking about a stock, because that IS the signal
+decaying.
 
-Those two rules only differ safely because of `MAX_FEED_SILENCE_DAYS`. If the
-scan job breaks, every name ages out of the window within a month and the book
-would liquidate itself on a broken cron. So the run refuses entirely when the
-newest mention anywhere is too old. The freshness gate is what earns the right
-to read absence as evidence; without it, this module would be committing the
-mistake the rest of the bot is built to avoid.
-
-Freshness is keyed on the newest **mention**, not the newest video, on purpose.
-Videos arriving with extraction broken would leave mentions frozen while the
-feed looked healthy — the failure this guards against, wearing a disguise.
-
-## Position size follows the strength of the case
-
-A name enters at the ordinary slot share of the account. If the creator keeps
-returning to it, the target grows, and the position is **topped up** toward a
-ceiling — more bullish mentions, more money. `MENTIONS_TO_MAX` sets how many
-extra mentions it takes to reach the ceiling.
-
-Every one of these is a **share of the account, never a dollar figure**. At
-$10,000 across 4 slots that is $2,500 rising to $3,000; at $100,000 it is
-$25,000 rising to $30,000, with no code change. The floor is `1 / target_slots`
-and the ceiling is `max_position_pct`, both from `bot_config`.
-
-Sizing is one-way. `executor.TOPUP` means the target can only ever buy: if the
-case weakens the target falls, and that must not become a sell order. Losing
-conviction is what the exit rules are for — a name is sold whole when the
-bullish mentions run out or the creator turns, not trimmed on the way down.
-
-**Nothing trims a position, and nothing caps how large it can grow by simply
-going up.** That is deliberate, and Tane's call: these positions turn over on
-the 30-day mention window soon enough that concentration does not get the
-chance to become a problem, and levelling the book would put the quiet-day
-churn straight back in.
+That is only safe because of `MAX_FEED_SILENCE_DAYS`. If the scan job broke,
+every clock would run down together and the book would liquidate on a broken
+cron. So the run refuses entirely when the newest mention anywhere is too old.
+Freshness is keyed on the newest **mention**, not the newest video: videos
+arriving with extraction broken would leave mentions frozen while the feed
+looked healthy — the failure this guards against, wearing a disguise.
 
 ## Liquidity
 
 Every candidate is screened by `engine/bot/liquidity` before it can be bought;
-that module explains why it exists and why it is written first. Note what it
-does in practice today: of the six names this rule has ever selected, the
-thinnest trades $222M a day, and the filter rejects none of them. The creator's
-micro-caps — the sub-dollar names that would make a paper fill meaningless —
-get mentioned once, not three times, so the conviction bar is already screening
-most of them out on its own. The filter is insurance against a creator set that
-changes, not a gate that is currently doing work.
+that module explains why. In practice it rejects nothing the conviction bar
+selects — the creator's sub-dollar micro-caps get mentioned once, not three
+times. It is insurance against a creator set that changes.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date as date_
+from datetime import datetime, timedelta
 
 from engine.bot import executor, liquidity
 from engine.bot.executor import Target
@@ -111,31 +102,29 @@ ENTRY_BULLISH = 3           # arm A: the case made repeatedly
 SUSTAINED_BULLISH = 2       # arm B: fewer explicit calls...
 SUSTAINED_MENTIONS = 4      # ...but sustained coverage, and no dissent at all
 
-MIN_HOLD_RUNS = 2           # runs a position survives before a soft exit applies
-
-# Extra bullish mentions, beyond the entry bar, to reach the maximum position
-# size. 2 means 3 mentions buys the base share, 4 buys halfway, 5 or more buys
-# the ceiling. Grounded in the scanned history: the most bullish mentions any
-# name has collected inside one 30-day window is 5 (NOW, RDW), so the top of
-# the range is reachable rather than theoretical.
-MENTIONS_TO_MAX = 2
+# The clock. Tane's numbers, 28 Sep 2026.
+MAX_DAYS_LEFT = 30
+DAYS_ADDED = {"bullish": 10, "neutral": 5}      # bearish and unknown add nothing
+COUNTED_STANCES = frozenset(DAYS_ADDED)         # what counts as "a mention" for the queue
 
 # The largest gap between video days across the scanned history is 9, and the
 # 90th percentile is 6. 21 days is over twice the worst observed silence, so it
 # separates "the creator took a break" from "the job is broken" without being
-# so wide that the 30-day window has emptied before it fires.
+# so wide that every clock has run out before it fires.
 MAX_FEED_SILENCE_DAYS = 21
+
+DEFAULT_SLOTS = 8
 
 
 def prepare(config: dict, today: date_) -> dict:
-    """Read the mention window, then price the names that qualify.
+    """Read the mention window, the holding clocks, and price the candidates.
 
-    All the I/O for this strategy: the creator mentions, and price frames for
+    All the I/O for this strategy: the creator mentions, when each current
+    holding was bought and everything said about it since, and price frames for
     the candidates only — a handful of names, not the whole mention universe.
     """
-    from engine.bot import journal
-    from engine.bot.strategies import StrategyDataError
     from engine import creator_signals
+    from engine.bot.strategies import StrategyDataError
 
     board = creator_signals.mention_leaderboard(days=WINDOW_DAYS, min_mentions=1)
 
@@ -156,23 +145,39 @@ def prepare(config: dict, today: date_) -> dict:
     if silence > MAX_FEED_SILENCE_DAYS:
         raise StrategyDataError(
             f"Newest creator mention is {silence} days old, over the "
-            f"{MAX_FEED_SILENCE_DAYS}-day limit. A stalled scan empties the "
-            f"{WINDOW_DAYS}-day window and would liquidate the book on a broken "
-            "cron rather than on a signal."
+            f"{MAX_FEED_SILENCE_DAYS}-day limit. A stalled scan runs every holding's "
+            "clock down at once and would liquidate the book on a broken cron "
+            "rather than on a signal."
         )
 
     candidates = [e for e in board if qualifies(e)[0]]
-    notional = _notional_from_config(config)
+    opened, history = load_clock_inputs()
     frames = liquidity.fetch_frames([e["ticker"] for e in candidates], today)
 
     return {
         "board": board,
         "candidates": candidates,
+        "opened": opened,
+        "history": history,
         "frames": frames,
         "feed_silence_days": silence,
-        "screen_notional": notional,
-        "decisions": journal.recent_decisions("creator_conviction", common.DECISION_LOOKBACK),
+        "screen_notional": _notional_from_config(config),
     }
+
+
+def load_clock_inputs() -> tuple[dict, dict]:
+    """(opened, history): when each journal-held name was bought, and every
+    mention of it since. The bot page reads the same pair, so the clock it shows
+    is the clock the strategy acts on."""
+    from engine import creator_signals
+    from engine.bot import journal
+    from engine.bot import positions as bot_positions
+
+    opened = bot_positions.opened_at(journal.fills("creator_conviction"))
+    if not opened:
+        return {}, {}
+    history = creator_signals.mention_history(opened, since=min(opened.values()))
+    return opened, history
 
 
 def _notional_from_config(config: dict) -> float:
@@ -189,71 +194,95 @@ def _notional_from_config(config: dict) -> float:
 
     return risk.position_notional(
         float(config.get("starting_equity") or 10_000.0),
-        int(config.get("target_slots") or 4),
+        int(config.get("target_slots") or DEFAULT_SLOTS),
         float(config.get("max_position_pct") or 1.0),
     )
 
 
-def entry_watermark(ctx):
-    """The date a mention must be at or after to trigger a buy: this strategy's
-    previous run. None before it has ever run, which buys nothing.
+# --------------------------------------------------------------------------
+# The clock
+# --------------------------------------------------------------------------
 
-    Derived from the journal rather than stored, so there is no watermark to
-    keep in sync and no way for it to disagree with what actually happened.
+@dataclass(frozen=True)
+class Clock:
+    """How long a holding has left. `bullish`/`neutral` count the mentions since
+    the buy that added time, for the reason shown on the page."""
+    opened: date_ | None
+    until: date_
+    bullish: int = 0
+    neutral: int = 0
+
+    def days_left(self, today: date_) -> int:
+        return (self.until - today).days
+
+
+def _as_datetime(value) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    return datetime(value.year, value.month, value.day)
+
+
+def clock(opened, mentions) -> Clock:
+    """The clock for a position bought at `opened`, given `mentions` as
+    (when, stance) pairs. Pure.
+
+    30 days from the buy; each later mention adds `DAYS_ADDED[stance]`, capped at
+    `MAX_DAYS_LEFT` from the day of the mention. Anything at or before the buy is
+    part of the case that bought it, not a reason to hold longer. A mention after
+    the clock ran out cannot revive it; one on the very day it runs out still
+    counts, since that day's run has not necessarily sold it yet.
     """
-    previous = common.run_dates(ctx)
-    return previous[0] if previous else None
+    start = _as_datetime(opened)
+    until = start.date() + timedelta(days=MAX_DAYS_LEFT)
+    bullish = neutral = 0
+    for when, stance in sorted((_as_datetime(w), s) for w, s in mentions or ()):
+        if when <= start:
+            continue
+        day = when.date()
+        if day > until:
+            break
+        added = DAYS_ADDED.get(stance, 0)
+        if not added:
+            continue
+        remaining = (until - day).days
+        until = day + timedelta(days=min(MAX_DAYS_LEFT, remaining + added))
+        bullish += stance == "bullish"
+        neutral += stance == "neutral"
+    return Clock(opened=start.date(), until=until, bullish=bullish, neutral=neutral)
 
 
-def newly_mentioned(entry: dict, watermark) -> bool:
-    """Has this name been mentioned since we last looked?
+def holding_clock(ticker: str, opened: dict, history: dict, entry: dict | None) -> Clock | None:
+    """The clock for one held name, or None when there is nothing to date it by.
 
-    Compared with >= rather than >, deliberately. A run that happens twice in a
-    day, or a scan that lands a video's mentions just after a run, would
-    otherwise let a mention fall between two runs and never be actionable at
-    all. The cost is that a mention can trigger across two consecutive runs
-    instead of one, which is harmless: if it qualified, the name is already held
-    and skipped as such; if it did not, nothing happens either way.
+    A name the journal never recorded buying is dated from its newest counting
+    mention, as though bought then — so it runs down like everything else rather
+    than being held forever on missing data.
     """
-    if watermark is None:
-        return False                     # never run: start watching, buy nothing
-    last_seen = entry.get("last_seen")
-    if last_seen is None:
-        return False
-    seen_on = last_seen.date() if hasattr(last_seen, "date") else last_seen
-    return seen_on >= watermark
+    ticker = ticker.upper()
+    if opened.get(ticker) is not None:
+        return clock(opened[ticker], history.get(ticker) or ())
+    days = _counted_days(entry)
+    if not days:
+        return None
+    return Clock(opened=None, until=max(days) + timedelta(days=MAX_DAYS_LEFT))
 
 
-def conviction_notional(ctx, bullish: int) -> float:
-    """What this name should be worth, given how strong the case currently is.
-
-    Scales from the ordinary slot share up to `max_position_pct` as bullish
-    mentions accumulate past the entry bar. Both ends are FRACTIONS OF EQUITY,
-    so the whole thing rescales with the account: $2,500 -> $3,000 on a $10k
-    account, $25,000 -> $30,000 on a $100k one, same code.
-    """
-    slots = max(1, int(ctx.config.get("target_slots") or 4))
-    floor_pct = 1.0 / slots
-    ceiling_pct = max(floor_pct, float(ctx.config.get("max_position_pct") or floor_pct))
-
-    extra = max(0, int(bullish) - ENTRY_BULLISH)
-    if MENTIONS_TO_MAX <= 0:
-        reached = 1.0
-    else:
-        reached = min(1.0, extra / MENTIONS_TO_MAX)
-    pct = floor_pct + (ceiling_pct - floor_pct) * reached
-    return float(ctx.equity) * pct
+def _hold_reason(c: Clock, today: date_) -> str:
+    added = []
+    if c.bullish:
+        added.append(f"{c.bullish} bullish")
+    if c.neutral:
+        added.append(f"{c.neutral} neutral")
+    since = (f" Extended by {' and '.join(added)} mention(s) since the buy."
+             if added else " Nothing said about it since the buy.")
+    bought = f"bought {c.opened:%d %b}" if c.opened else "no buy on record"
+    return (f"{c.days_left(today)} day(s) left ({bought}); sold on {c.until:%d %b} "
+            f"unless mentioned again.{since}")
 
 
-def _size_note(ctx, bullish: int) -> str:
-    slots = max(1, int(ctx.config.get("target_slots") or 4))
-    floor = float(ctx.equity) / slots
-    size = conviction_notional(ctx, bullish)
-    if size <= floor + 0.005:
-        return ""
-    return (f" Topped up to ${size:,.2f} from the ${floor:,.2f} base on "
-            f"{bullish} bullish mentions.")
-
+# --------------------------------------------------------------------------
+# Entry: the bar, and the queue
+# --------------------------------------------------------------------------
 
 def qualifies(entry: dict) -> tuple[bool, str]:
     """Does this leaderboard entry clear the conviction bar? -> (ok, why)."""
@@ -270,134 +299,147 @@ def qualifies(entry: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def _counted_days(entry: dict | None) -> list[date_]:
+    """Dates of the bullish and neutral mentions in the window.
+
+    Falls back to `last_seen` for an entry carrying no per-video detail, which
+    is all a date can honestly be read from.
+    """
+    if not entry:
+        return []
+    videos = entry.get("videos")
+    if videos is None:
+        seen = entry.get("last_seen")
+        return [seen.date() if hasattr(seen, "date") else seen] if seen else []
+    days = []
+    for v in videos:
+        when = v.get("published_at")
+        if when is not None and v.get("stance") in COUNTED_STANCES:
+            days.append(when.date() if hasattr(when, "date") else when)
+    return days
+
+
+def stack_key(entry: dict):
+    """Newest case first: latest counting mention, then the most recent FIRST
+    counting mention, then more bullish, then ticker."""
+    days = _counted_days(entry)
+    latest = max(days).toordinal() if days else 0
+    first = min(days).toordinal() if days else 0
+    bullish = int((entry.get("stances") or {}).get("bullish") or 0)
+    return (-latest, -first, -bullish, (entry.get("ticker") or "").upper())
+
+
+def eligible_entrants(ctx) -> list[dict]:
+    """Every name clearing the bar that isn't held, in the order it would be bought."""
+    candidates = (ctx.extras or {}).get("candidates") or []
+    held = ctx.held_tickers()
+    waiting = [e for e in candidates if (e.get("ticker") or "").upper() not in held]
+    return sorted(waiting, key=stack_key)
+
+
+# --------------------------------------------------------------------------
+# The book
+# --------------------------------------------------------------------------
+
+def _slots(ctx) -> int:
+    return max(1, int(ctx.config.get("target_slots") or DEFAULT_SLOTS))
+
+
+def _keep(ctx, notional: float) -> list[Target]:
+    """Held names whose clock is still running and whose creator hasn't turned.
+    Anything not restated here is closed by the planner."""
+    extras = ctx.extras or {}
+    by_ticker = {(e.get("ticker") or "").upper(): e for e in extras.get("board") or []}
+    opened = extras.get("opened") or {}
+    history = extras.get("history") or {}
+
+    kept = []
+    for ticker in sorted(ctx.held_tickers()):
+        entry = by_ticker.get(ticker)
+        stances = (entry or {}).get("stances") or {}
+        if entry is not None and int(stances.get("bearish") or 0) > int(stances.get("bullish") or 0):
+            continue                                  # the creator turned
+        c = holding_clock(ticker, opened, history, entry)
+        if c is None or c.days_left(ctx.today) <= 0:
+            continue                                  # time's up
+        kept.append(Target(ticker=ticker, notional=notional, sizing=executor.HOLD,
+                           reason=_hold_reason(c, ctx.today)))
+    return kept
+
+
+def _queue(ctx, free: int, notional: float) -> tuple[list, list]:
+    """Walk the backlog in stack order until `free` slots are taken.
+
+    Returns (chosen, declined): (entry, assessment) pairs given a slot, and the
+    liquidity assessments of names passed over on the way. A name further down
+    than the last free slot is neither — it was never about to be bought.
+    """
+    entrants = eligible_entrants(ctx)
+    if free <= 0 or not entrants:
+        return [], []
+    tradable, excluded = liquidity.screen(
+        [e["ticker"] for e in entrants], (ctx.extras or {}).get("frames") or {},
+        notional, held=ctx.held_tickers(),
+    )
+    passed = {a.ticker.upper(): a for a in tradable}
+    failed = {a.ticker.upper(): a for a in excluded}
+
+    chosen, declined = [], []
+    for entry in entrants:
+        if len(chosen) >= free:
+            break
+        ticker = (entry.get("ticker") or "").upper()
+        if ticker in passed:
+            chosen.append((entry, passed[ticker]))
+        elif ticker in failed:
+            declined.append(failed[ticker])
+    return chosen, declined
+
+
 def build(ctx) -> list[Target]:
-    """The target book: held names still carrying conviction, plus new ones."""
+    """The target book: holdings with time left, then the backlog, newest first."""
     from engine.bot.strategies import StrategyDataError
 
-    extras = ctx.extras or {}
-    board = extras.get("board")
-    if not board:
+    if not (ctx.extras or {}).get("board"):
         raise StrategyDataError(
             "No creator mention window on the context — prepare() did not run."
         )
 
-    by_ticker = {(e.get("ticker") or "").upper(): e for e in board if e.get("ticker")}
-    held = ctx.held_tickers()
     notional = common.notional_for(ctx)
-    slots = int(ctx.config.get("target_slots") or 4)
+    slots = _slots(ctx)
+    targets = _keep(ctx, notional)
 
-    targets: list[Target] = []
-
-    # 1. What to keep. Anything not re-listed here is closed by the planner, so
-    #    every hold has to be stated explicitly.
-    for ticker in sorted(held):
-        entry = by_ticker.get(ticker)
-        stances = (entry or {}).get("stances") or {}
-        bullish = int(stances.get("bullish") or 0)
-        bearish = int(stances.get("bearish") or 0)
-
-        # The creator turned. No minimum hold defers a reversal of the thesis.
-        if entry is not None and bearish > bullish:
-            continue
-
-        # Attention died. Unlike a missing screener row this is real
-        # information — the freshness gate in prepare() is what makes that
-        # true — but a minimum hold still stops a name that hovers on the
-        # edge of the window from being round-tripped run after run.
-        if bullish == 0:
-            runs = common.runs_since_buy(ctx, ticker)
-            if runs is not None and runs < MIN_HOLD_RUNS:
-                targets.append(Target(
-                    ticker=ticker, notional=notional, sizing=executor.HOLD,
-                    reason=f"No bullish mentions left in the {WINDOW_DAYS}-day window, "
-                           f"but only {runs} run(s) held — minimum hold is "
-                           f"{MIN_HOLD_RUNS}.",
-                ))
-            continue
-
-        still, why = qualifies(entry or {})
-        # Size on the CURRENT strength of the case. If the creator has kept
-        # talking about it since we bought, the target is bigger than the
-        # position and TOPUP buys the difference. If the case has weakened the
-        # target falls, and TOPUP makes sure that is not a sell — conviction
-        # fading is what the exit rules are for, not a reason to trim.
-        targets.append(Target(
-            ticker=ticker, notional=conviction_notional(ctx, bullish),
-            sizing=executor.TOPUP,
-            reason=(f"Still qualifying: {why}.{_size_note(ctx, bullish)}" if still
-                    else f"Conviction fading ({bullish} bullish, {bearish} bearish in "
-                         f"{WINDOW_DAYS} days) but coverage continues — held until it "
-                         "reaches zero."),
-        ))
-
-    # 2. Fill free slots. Only names mentioned again since the last run are
-    #    eligible — clearing the bar on an old tally never buys anything, and
-    #    on the first run nothing is eligible at all. Held names are screened
-    #    for liquidity but never excluded on it; see engine/bot/liquidity for
-    #    why that asymmetry is deliberate.
-    entrants = eligible_entrants(ctx)
-    frames = extras.get("frames") or {}
-    tradable, _excluded = liquidity.screen(
-        [e["ticker"] for e in entrants], frames, notional, held=held,
-    )
-    passed = {a.ticker: a for a in tradable}
-
-    kept = {t.ticker for t in targets}
-    for entry in entrants:
-        if len(targets) >= slots:
-            break
-        ticker = (entry.get("ticker") or "").upper()
-        if not ticker or ticker in kept or ticker not in passed:
-            continue
+    chosen, _declined = _queue(ctx, slots - len(targets), notional)
+    for entry, assessment in chosen:
         _ok, why = qualifies(entry)
-        bullish = int((entry.get("stances") or {}).get("bullish") or 0)
+        days = _counted_days(entry)
+        newest = f" Newest mention {max(days):%d %b}." if days else ""
         targets.append(Target(
-            ticker=ticker, notional=conviction_notional(ctx, bullish),
-            reason=f"Creator conviction: {why}, and mentioned again since the last "
-                   f"run.{_size_note(ctx, bullish)} {passed[ticker].reason}",
+            ticker=(entry.get("ticker") or "").upper(), notional=notional,
+            sizing=executor.HOLD,
+            reason=(f"Creator conviction: {why}.{newest} Bought at 1/{slots} of the "
+                    f"account with {MAX_DAYS_LEFT} days on the clock. {assessment.reason}"),
         ))
-
     return targets
 
 
-def eligible_entrants(ctx) -> list[dict]:
-    """Candidates that both clear the bar and were mentioned again, best first.
-
-    Ranked by bullish count then total mentions, which only decides who gets a
-    slot when more names are eligible than there is room for.
-    """
-    candidates = (ctx.extras or {}).get("candidates") or []
-    watermark = entry_watermark(ctx)
-    fresh = [e for e in candidates if newly_mentioned(e, watermark)]
-    return sorted(fresh,
-                  key=lambda e: (-(e.get("stances") or {}).get("bullish", 0),
-                                 -(e.get("mentions") or 0),
-                                 (e.get("ticker") or "")))
-
-
 def liquidity_notes(ctx) -> list[dict]:
-    """Names that cleared conviction but failed the liquidity screen.
+    """Names that would have been bought but failed the liquidity screen.
 
     Returned for the runner to journal. Usually empty — that is the expected
     result, not a sign it isn't running.
 
-    Scoped to names that were actually about to be bought, not to every name
-    clearing the bar. A candidate held back because nothing new was said about
-    it was never going to be ordered, so reporting it as "declined on
-    liquidity" would put a false reason in the journal and repeat it daily.
+    Scoped to names the queue actually reached. With the backlog persisting
+    between runs, reporting every illiquid qualifier would repeat the same
+    "declined" row on every run while all slots were full and nothing was
+    about to be bought at all.
     """
-    entrants = eligible_entrants(ctx)
-    if not entrants:
-        return []
     from engine.bot import journal, risk
 
-    _tradable, excluded = liquidity.screen(
-        [e["ticker"] for e in entrants],
-        (ctx.extras or {}).get("frames") or {},
-        common.notional_for(ctx),
-        held=ctx.held_tickers(),
-    )
+    notional = common.notional_for(ctx)
+    free = _slots(ctx) - len(_keep(ctx, notional))
+    _chosen, declined = _queue(ctx, free, notional)
     # The routing keys travel with the note so the runner doesn't have to know
     # which strategy sent it — see scripts/run_bot.py.
     return [{**a.as_note(), "action": journal.SKIP, "status": journal.BLOCKED,
-             "blocked_by": risk.LIQUIDITY} for a in excluded]
+             "blocked_by": risk.LIQUIDITY} for a in declined]

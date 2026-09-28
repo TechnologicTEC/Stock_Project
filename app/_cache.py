@@ -190,6 +190,18 @@ def bot_creator_mentions() -> list[dict]:
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_creator_clock_inputs() -> tuple[dict, dict]:
+    """(opened, history) for the creator bot's holding clocks — the same inputs
+    the strategy reads, so the days left on the page are the days it acts on."""
+    from engine.bot.strategies import creator_conviction
+
+    try:
+        return creator_conviction.load_clock_inputs()
+    except Exception:                        # noqa: BLE001
+        return {}, {}
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def bot_position_names(tickers: tuple[str, ...]) -> dict[str, str]:
     """{TICKER: company name} for a strategy's holdings.
 

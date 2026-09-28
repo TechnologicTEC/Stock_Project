@@ -80,31 +80,20 @@ SEED: list[dict] = [
     {
         "strategy": "creator_conviction",
         "key_env_prefix": "ALPACA_CREATOR_CONVICTION",
-        # The blueprint's simulation said 8; replaying the real conviction rule
-        # over every video scanned so far, the book is 1-4 names and has never
-        # exceeded 4. Set to 4 so the curve measures a mostly-invested account
-        # rather than one diluted by permanent cash — at 8 the account would
-        # have sat ~60-85% idle and the equity line would have been reporting
-        # the cash weighting more than the signal. Revisit if more creators are
-        # added and demand rises; the count is the whole experiment's exposure.
-        #
-        # Expect it to start empty and fill slowly regardless: entries are
-        # triggered by a name being mentioned again, so the backlog standing at
-        # go-live is never bought.
-        "target_slots": 4,
-        # The TOP-UP CEILING, not a cap on drift. A name enters at the slot
-        # share (1/4 = 25%) and is topped up toward 30% as the creator keeps
-        # coming back to it — more bullish mentions, more money. Both ends are
-        # shares of the account, so on $10k that is $2,500 rising to $3,000 and
-        # on $100k it is $25,000 rising to $30,000, unchanged code.
-        #
-        # Nothing trims, and nothing caps how large a position grows by simply
-        # going up: these turn over on the 30-day mention window soon enough
-        # that concentration does not get the chance to matter, and levelling
-        # would reintroduce the quiet-day churn.
-        "max_position_pct": 0.30,
-        # A full turnover of a 4-name book is 4 sells + 4 buys.
-        "max_orders_per_run": 10,
+        # 8 since 28 Sep 2026, Tane's call. It went live at 4, because replaying
+        # the conviction rule over the scanned history at the time never held
+        # more than 4 names and 8 would have left the account mostly cash. By
+        # 28 Sep six names qualified at once, so 4 slots was turning signals
+        # away rather than measuring them. Each position is 1/8 of the account,
+        # bought once and never resized; see the strategy module.
+        "target_slots": 8,
+        # A backstop, not a sizing input: 1/8 = 12.5% binds long before it.
+        # This used to be a top-up ceiling (positions grew from 25% toward 30%
+        # as mentions accumulated); top-ups were removed with the move to 8.
+        "max_position_pct": 0.20,
+        # A full turnover of an 8-name book is 8 sells + 8 buys; 20 leaves
+        # headroom so the cap can never silently truncate one.
+        "max_orders_per_run": 20,
         "starting_equity": 10_000.0,
         "enabled": True,
     },

@@ -417,18 +417,18 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
             )
         orders = [o for o in orders if o.ticker.upper() not in pending]
 
-    # Never spend money the account doesn't have. Applied AFTER the pending
-    # filter, so an order we're already waiting on doesn't reserve cash twice.
-    orders, short = executor.fund(
-        orders, positions, cash=account["cash"], band=executor.band_for(equity),
-    )
+    # Only buy what the account can pay for in full — never part of a position,
+    # never on borrowed money. Applied AFTER the pending filter, so an order
+    # we're already waiting on doesn't reserve cash twice.
+    orders, short = executor.fund(orders, positions, cash=account["cash"])
     for gap in short:
         _log(f"    not enough cash: {gap.order.ticker} wanted "
              f"${gap.order.notional:,.2f}, ${gap.available:,.2f} available")
         journal.record(
             run_id=run_id, strategy=strategy, ticker=gap.order.ticker, action=gap.order.side,
             reason=(f"Not enough cash: ${gap.order.notional:,.2f} wanted, "
-                    f"${gap.available:,.2f} available."),
+                    f"${gap.available:,.2f} available. Not bought in part — it waits "
+                    "for a sale to free the cash."),
             status=_status(dry_run, journal.BLOCKED), blocked_by=risk.INSUFFICIENT_CASH,
             notional=gap.order.notional,
         )

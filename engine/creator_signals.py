@@ -328,6 +328,39 @@ def mention_leaderboard(days: int = LEADERBOARD_DAYS,
     return board
 
 
+def mention_history(tickers, since: datetime) -> dict[str, list[tuple[datetime, str]]]:
+    """{TICKER: [(when, stance), ...]} for every mention at or after `since`,
+    oldest first.
+
+    For the creator bot's holding clock, which needs every mention since a
+    position was bought — and a position kept alive by repeat mentions can have
+    been bought long before the 30-day window `mention_leaderboard` reads. The
+    date rule matches that function's: a video's publish time, falling back to
+    when it was processed.
+    """
+    wanted = sorted({(t or "").upper() for t in tickers if t})
+    if not wanted:
+        return {}
+    with get_session() as s:
+        rows = s.execute(
+            select(VideoMention.ticker, VideoMention.stance,
+                   CreatorVideo.published_at, CreatorVideo.processed_at)
+            .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
+            .where(VideoMention.ticker.in_(wanted))
+        ).all()
+
+    out: dict[str, list[tuple[datetime, str]]] = {}
+    for ticker, stance, published_at, processed_at in rows:
+        when = _naive(published_at) or _naive(processed_at)
+        if when is None or when < since:
+            continue
+        out.setdefault(ticker.upper(), []).append(
+            (when, stance if stance in _STANCES else "unknown"))
+    for events in out.values():
+        events.sort()
+    return out
+
+
 def ticker_stance(ticker: str, days: int = LEADERBOARD_DAYS) -> dict | None:
     """Recent creator sentiment for ONE ticker: {mentions, counts, stance} where
     `stance` is the leading bullish/bearish/neutral. None if not mentioned in the

@@ -250,42 +250,36 @@ def test_plan_puts_exits_before_buys():
 
 
 # --------------------------------------------------------------------------
-# fund() — never spend money the account doesn't have
+# fund() — a buy happens only when the whole position can be paid for
 # --------------------------------------------------------------------------
-
-BAND = executor.band_for(10_000.0)      # $50 on a $10k account
-
 
 def _buy(notional, ticker="AMD"):
     return executor.Order(ticker=ticker, side="buy", notional=notional, reason="because")
 
 
-def test_fund_cuts_a_buy_to_the_cash_that_exists():
-    """The real case: creator_conviction, 24 Sep 2026. Four slots at a quarter of
-    equity each is a fully invested book, so the conviction top-up that took NVTS
-    to 27.5% left the fourth name short — and the account went $313.74 overdrawn."""
-    funded, short = executor.fund([_buy(2_526.59)], [], cash=2_212.85, band=BAND)
-    assert short == []
-    assert len(funded) == 1
-    assert funded[0].notional == pytest.approx(2_212.85)
-    assert "Cut from $2,526.59" in funded[0].reason
-
-
-def test_fund_blocks_a_buy_when_the_cash_is_already_negative():
-    funded, short = executor.fund([_buy(2_526.59)], [], cash=-313.70, band=BAND)
+def test_fund_refuses_a_buy_the_cash_does_not_cover():
+    """The real case: creator_conviction, 24 Sep 2026 — $2,526.59 of AMD ordered
+    against $2,212.85 of cash, and the account went $313.74 overdrawn. Tane's rule
+    since 28 Sep: not bought in part, not bought on borrowed money. Not bought."""
+    funded, short = executor.fund([_buy(2_526.59)], [], cash=2_212.85)
     assert funded == []
     assert len(short) == 1
-    assert short[0].order.ticker == "AMD"
+    assert short[0].order.notional == pytest.approx(2_526.59)   # the order is not cut
+    assert short[0].available == pytest.approx(2_212.85)
+
+
+def test_fund_refuses_everything_when_the_cash_is_already_negative():
+    funded, short = executor.fund([_buy(1_281.53)], [], cash=-313.70)
+    assert funded == []
     assert short[0].available == 0.0          # never reported as negative money
 
 
-def test_fund_blocks_rather_than_buying_dust():
-    """Below the rebalance band is the line the planner already draws for
-    'too small to be worth trading'. A $40 stub of a $2,500 conviction is not a
-    position, it's a rounding artifact with a commission story."""
-    funded, short = executor.fund([_buy(2_526.59)], [], cash=40.0, band=BAND)
-    assert funded == []
-    assert short[0].affordable == pytest.approx(40.0)
+def test_fund_buys_a_position_that_is_exactly_the_cash_on_hand():
+    """Compared in cents: float noise must not refuse a buy that fits exactly."""
+    funded, short = executor.fund([_buy(10_000.0)], [], cash=10_000.000000001)
+    assert short == [] and len(funded) == 1
+    funded, short = executor.fund([_buy(10_000.000000001)], [], cash=10_000.0)
+    assert short == [] and len(funded) == 1
 
 
 def test_fund_spends_the_proceeds_of_the_sells_in_the_same_plan():
@@ -296,10 +290,9 @@ def test_fund_spends_the_proceeds_of_the_sells_in_the_same_plan():
         executor.Order(ticker="ACGL", side="sell", qty=10.0, reason="out of the decile"),
         _buy(2_000.0, ticker="COF"),
     ]
-    funded, short = executor.fund(orders, positions, cash=0.0, band=BAND)
+    funded, short = executor.fund(orders, positions, cash=0.0)
     assert short == []
     assert [o.ticker for o in funded] == ["ACGL", "COF"]
-    assert funded[1].notional == pytest.approx(2_000.0)   # full size, not cut
 
 
 def test_fund_counts_a_partial_trim_as_proceeds():
@@ -307,30 +300,38 @@ def test_fund_counts_a_partial_trim_as_proceeds():
         executor.Order(ticker="SPY", side="sell", notional=500.0, reason="trim"),
         _buy(500.0),
     ]
-    funded, short = executor.fund(orders, [], cash=0.0, band=BAND)
+    funded, short = executor.fund(orders, [], cash=0.0)
     assert short == [] and funded[1].notional == pytest.approx(500.0)
 
 
 def test_fund_leaves_a_plan_it_can_pay_for_completely_alone():
     orders = [_buy(2_500.0, "AMD"), _buy(2_500.0, "AMZN")]
-    funded, short = executor.fund(orders, [], cash=10_000.0, band=BAND)
+    funded, short = executor.fund(orders, [], cash=10_000.0)
     assert short == [] and funded == orders
 
 
-def test_fund_pays_in_order_so_the_shortfall_lands_on_one_name():
-    """Not spread thinly across both — one whole position beats two half ones,
-    and the next run finishes the job."""
+def test_fund_pays_in_order_and_refuses_the_one_that_no_longer_fits():
+    """The first name in the strategy's order is paid in full; the second would
+    need $2,500 of the $500 left, so it waits rather than being bought small."""
     orders = [_buy(2_500.0, "AMD"), _buy(2_500.0, "AMZN")]
-    funded, short = executor.fund(orders, [], cash=3_000.0, band=BAND)
-    assert short == []
-    assert funded[0].notional == pytest.approx(2_500.0)   # first name paid in full
-    assert funded[1].notional == pytest.approx(500.0)
+    funded, short = executor.fund(orders, [], cash=3_000.0)
+    assert [o.ticker for o in funded] == ["AMD"]
+    assert funded[0].notional == pytest.approx(2_500.0)
+    assert [s.order.ticker for s in short] == ["AMZN"]
+    assert short[0].available == pytest.approx(500.0)
+
+
+def test_a_refused_buy_does_not_block_a_later_one_that_fits():
+    orders = [_buy(2_500.0, "BIG"), _buy(400.0, "SMALL")]
+    funded, short = executor.fund(orders, [], cash=1_000.0)
+    assert [o.ticker for o in funded] == ["SMALL"]
+    assert [s.order.ticker for s in short] == ["BIG"]
 
 
 def test_fund_never_touches_a_sell():
     """Exits are how the account gets its cash back; they can't be unaffordable."""
     orders = [executor.Order(ticker="SPY", side="sell", qty=20.0, reason="closing")]
-    funded, short = executor.fund(orders, [], cash=-5_000.0, band=BAND)
+    funded, short = executor.fund(orders, [], cash=-5_000.0)
     assert funded == orders and short == []
 
 
