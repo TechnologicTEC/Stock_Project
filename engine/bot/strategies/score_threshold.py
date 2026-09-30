@@ -13,6 +13,18 @@ One-in, seven-months-out is what fills twenty slots. A tighter band would sell
 winners automatically, because a rallying stock sheds valuation points faster
 than it gains momentum points.
 
+**Exit at 70 was considered and rejected, 30 Sep 2026** (Tane's call, on this
+evidence). Across the cached walk-forward rebuilds (503 stocks, ~monthly,
+Apr 2021–Mar 2026), a HELD name slipping into 65–70 — the only case where the
+two rules differ — went on to beat the average stock by +0.2% over the next
+three months (n=532; first slip only, -0.1%, n=179): no worse than average, so
+selling it avoids nothing. Selling does cost something: the slot waits in cash
+until a new name crosses 75 (~one a month), and the held name still returned
++1% to +2.6% over those months. Exiting at 70 also meant 16% more buys and a
+typical hold of 6 months instead of 10. The rebuilds null valuation, which is
+the part of the live score that makes a tight band sell winners, so if
+anything they flatter 70.
+
 Three exit rules, in priority order:
 
   score < 55   sell now. 55 is the index median, so a name there is no longer
