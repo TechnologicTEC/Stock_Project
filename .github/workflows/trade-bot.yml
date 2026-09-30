@@ -124,7 +124,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements-bot.txt
+      - run: bash scripts/retry.sh pip install -r requirements-bot.txt
 
       - name: Run ${{ matrix.strategy }}
         # Skip this job when a manual run named a different strategy.

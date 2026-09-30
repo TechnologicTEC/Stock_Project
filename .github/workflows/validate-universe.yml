@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements-validate.txt
+      - run: bash scripts/retry.sh pip install -r requirements-validate.txt
       - name: Reconstruct + measure cross-sectional IC
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}   # BYPASSRLS role; writes shared caches only

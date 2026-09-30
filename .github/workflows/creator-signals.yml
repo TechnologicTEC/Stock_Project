@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements-signals.txt
+      - run: bash scripts/retry.sh pip install -r requirements-signals.txt
       - name: Scan creators + screen mentions
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}

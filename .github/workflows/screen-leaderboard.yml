@@ -63,8 +63,8 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-finbert-prosusai
       # CPU-only torch, before requirements so its torch>=2.0 line is satisfied.
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -r requirements-screen.txt
+      - run: bash scripts/retry.sh pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: bash scripts/retry.sh pip install -r requirements-screen.txt
       - name: Screen the S&P 500 + cache the leaderboard
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}   # BYPASSRLS role; leaderboard is a shared blob

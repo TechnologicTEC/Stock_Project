@@ -32,8 +32,8 @@ jobs:
           key: hf-finbert-prosusai
       # CPU-only torch: avoids pulling the ~2 GB CUDA build. Must precede the
       # requirements install so its torch>=2.0 line is already satisfied.
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -r requirements-warm.txt
+      - run: bash scripts/retry.sh pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: bash scripts/retry.sh pip install -r requirements-warm.txt
       - name: Warm price + fundamentals + news caches
         env:
           DATABASE_URL: ${{ secrets.WARM_DATABASE_URL }}
