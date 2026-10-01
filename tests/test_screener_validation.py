@@ -6,6 +6,20 @@ from unittest.mock import MagicMock, patch
 
 from engine import price_history, screener_validation as sv
 
+# Captured before the autouse fixture below stands it in.
+_REAL_TICKER_INPUTS = sv.screener_history.ticker_inputs
+
+
+@pytest.fixture(autouse=True)
+def _no_per_ticker_inputs(monkeypatch):
+    """Each walk-forward now reads a ticker's filings and profile once, up
+    front (screener_history.ticker_inputs). Most tests here stub the per-date
+    scorer and never look at those, so stand in an empty read: each date then
+    falls back to fetching for itself, which those stubs already cover. The
+    tests that are about the up-front read restore the real one."""
+    from engine import screener_history
+    monkeypatch.setattr(screener_history, "ticker_inputs", lambda _t: {})
+
 
 # --------------------------------------------------------------------------
 # summarize — pure, no network
@@ -245,7 +259,7 @@ def test_a_consistently_zero_ic_is_not_significant():
 def _fake_universe_reconstruction():
     """Deterministic raw/score stubs: score depends only on (ticker, date), so
     both loop orders must agree exactly."""
-    def raw(ticker, as_of, include_analyst=True, span_df=None):
+    def raw(ticker, as_of, include_analyst=True, span_df=None, inputs=None):
         if ticker == "DEAD":
             return None                      # nothing in EDGAR -> contributes nothing
         return (f"raw::{ticker}::{as_of}", f"{ticker} Inc")
@@ -262,7 +276,7 @@ def _fake_universe_reconstruction():
 def test_universe_walk_forward_matches_the_ticker_major_loop_point_for_point():
     raw, score = _fake_universe_reconstruction()
 
-    def single(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
+    def single(ticker, as_of, include_news=True, include_analyst=True, span_df=None, inputs=None):
         built = raw(ticker, as_of, include_analyst)
         return None if built is None else score({ticker: built[0]}, as_of)[ticker]
 
@@ -581,7 +595,7 @@ def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():
 # --------------------------------------------------------------------------
 
 def test_walk_forward_collects_score_and_forward_return_points():
-    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None, inputs=None):
         return {"overall_score": 72.0, "recommendation": "Buy"}
 
     def fake_forward(ticker, as_of, horizon_days, span_df=None):
@@ -600,7 +614,7 @@ def test_walk_forward_collects_score_and_forward_return_points():
 def test_walk_forward_skips_dates_without_a_score_or_a_forward_return():
     calls = {"n": 0}
 
-    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None):
+    def fake_score(ticker, as_of, include_news=True, include_analyst=True, span_df=None, inputs=None):
         calls["n"] += 1
         return {"overall_score": None, "recommendation": "Insufficient data"}  # never scorable
 
@@ -737,3 +751,64 @@ def test_pooled_cache_key_changes_with_the_settings():
     assert k1 == sv.pooled_cache_key(["aapl"], **base)                      # case/order-insensitive
     assert k1 != sv.pooled_cache_key(["AAPL", "MSFT"], **base)              # ticker set matters
     assert k1 != sv.pooled_cache_key(["AAPL"], **{**base, "include_news": True})
+
+
+# --------------------------------------------------------------------------
+# One read of the filings and profile per ticker, not one per date.
+#
+# Both are a single cache row. Read per date they cost 122 of the 125 queries a
+# ticker made; against Supabase from a runner that was ~43s a ticker, and the
+# 1 Oct 2026 run of 503 names ran out of time at 484.
+# --------------------------------------------------------------------------
+
+def _count_reads(monkeypatch):
+    from engine import screener, screener_history
+    from tests.test_screener_history import _price_df, _synthetic_series
+
+    monkeypatch.setattr(screener_history, "ticker_inputs", _REAL_TICKER_INPUTS)
+    reads = {"pit": 0, "profile": 0}
+
+    def pit(_t):
+        reads["pit"] += 1
+        return _synthetic_series()
+
+    def profile(_t):
+        reads["profile"] += 1
+        return (screener.DEFAULT_SECTOR_BUCKET, None, "Test Co")
+
+    monkeypatch.setattr(screener_history.edgar_fundamentals, "get_pit_fundamentals", pit)
+    monkeypatch.setattr(screener_history, "_profile_bits", profile)
+    monkeypatch.setattr(screener_history.analyst_history, "recommendation_as_of", lambda *a: None)
+    monkeypatch.setattr(sv.price_history, "ensure_cached", lambda *a, **k: None)
+    monkeypatch.setattr(sv.price_history, "get_history_df", _price_df)
+    monkeypatch.setattr(screener_history.price_history, "get_history_df", _price_df)
+    return reads
+
+
+def test_walk_forward_reads_the_filings_and_profile_once_per_ticker(monkeypatch):
+    reads = _count_reads(monkeypatch)
+    points = sv.walk_forward("TEST", date(2022, 9, 1), date(2023, 6, 1),
+                             step_days=30, horizon_days=30,
+                             include_news=False, include_analyst=False)
+    assert len(points) > 5                       # many dates scored...
+    assert reads == {"pit": 1, "profile": 1}     # ...from one read of each
+
+
+def test_the_date_major_loop_reads_them_once_per_ticker_too(monkeypatch):
+    reads = _count_reads(monkeypatch)
+    sv.universe_walk_forward(["AAA", "BBB"], date(2022, 9, 1), date(2023, 6, 1),
+                             step_days=30, horizon_days=30, include_analyst=False)
+    assert reads == {"pit": 2, "profile": 2}
+
+
+def test_reading_once_scores_exactly_as_reading_per_date(monkeypatch):
+    """The saving must not move a single number: compare against the scorer
+    left to fetch for itself on every date."""
+    from engine import screener_history
+    _count_reads(monkeypatch)
+    args = ("TEST", date(2022, 9, 1), date(2023, 6, 1))
+    kw = dict(step_days=30, horizon_days=30, include_news=False, include_analyst=False)
+    once = sv.walk_forward(*args, **kw)
+    monkeypatch.setattr(screener_history, "ticker_inputs", lambda _t: {})
+    per_date = sv.walk_forward(*args, **kw)
+    assert once == per_date and once

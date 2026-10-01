@@ -118,13 +118,17 @@ def _pct_growth(now: float | None, prior: float | None) -> float | None:
     return (now / prior - 1.0) * 100.0
 
 
-def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | None:
+def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None,
+                             series: dict | None = None) -> dict | None:
     """Reconstruct the Screener's fundamental inputs as of `as_of`, keyed by the
     exact Finnhub field names the Screener reads (so it slots straight into the
     existing scorers). Returns None if EDGAR has no data for this ticker, or {}
     if there isn't enough filed history yet to compute anything. `price_df`, if
-    given, supplies the point-in-time price (avoids a second network fetch)."""
-    series = edgar_fundamentals.get_pit_fundamentals(ticker)
+    given, supplies the point-in-time price (avoids a second network fetch).
+    `series`, if given, is the ticker's EDGAR history already read (see
+    ticker_inputs)."""
+    if series is None:
+        series = edgar_fundamentals.get_pit_fundamentals(ticker)
     if not series:
         return None
 
@@ -163,8 +167,24 @@ def pit_fundamentals_metrics(ticker: str, as_of: date, price_df=None) -> dict | 
     return metrics
 
 
+def ticker_inputs(ticker: str) -> dict:
+    """The parts of a reconstruction that don't depend on the date: the EDGAR
+    filing history and the profile. Read them once per ticker and hand them to
+    every date via `inputs=`.
+
+    Each is one cache row, and without this a walk-forward read both again on
+    every date — 122 of the 125 queries one ticker made over 61 dates. On a
+    laptop's SQLite that is invisible; against Supabase from a GitHub runner it
+    was ~43s a ticker, and on 1 Oct 2026 the 503-name validation ran out of its
+    350 minutes at 484. It also re-pulled ~2 MB of the same filings per ticker."""
+    ticker = ticker.strip().upper()
+    return {"pit": edgar_fundamentals.get_pit_fundamentals(ticker),
+            "profile": _profile_bits(ticker)}
+
+
 def historical_raw_data(ticker: str, as_of: date, include_analyst: bool = True,
-                        span_df=None) -> tuple[object, str | None] | None:
+                        span_df=None, inputs: dict | None = None
+                        ) -> tuple[object, str | None] | None:
     """Everything knowable about `ticker` on `as_of`, as a `TickerRawData` plus the
     company name — the **expensive, per-ticker** half of a reconstruction (prices,
     EDGAR filings, profile, analyst events). None if EDGAR has nothing.
@@ -181,11 +201,13 @@ def historical_raw_data(ticker: str, as_of: date, include_analyst: bool = True,
     lo = as_of - timedelta(days=screener.MOMENTUM_LOOKBACK_DAYS)
     price_df = (price_history.window(span_df, lo, as_of) if span_df is not None
                 else price_history.get_history_df(ticker, lo, as_of))
-    metrics = pit_fundamentals_metrics(ticker, as_of, price_df=price_df)
+    metrics = pit_fundamentals_metrics(ticker, as_of, price_df=price_df,
+                                       series=(inputs or {}).get("pit"))
     if metrics is None:
         return None
 
-    sector_bucket, raw_industry, company_name = _profile_bits(ticker)
+    sector_bucket, raw_industry, company_name = (
+        (inputs or {}).get("profile") or _profile_bits(ticker))
 
     # Reconstructed analyst consensus (step 4) supplies the recommendation
     # component; price targets and insider data have no free point-in-time
@@ -248,7 +270,8 @@ def score_reconstructed_batch(raw_by_ticker: dict, as_of: date, *,
 
 
 def historical_screener_score(ticker: str, as_of: date, include_news: bool = True,
-                              include_analyst: bool = True, span_df=None) -> dict | None:
+                              include_analyst: bool = True, span_df=None,
+                              inputs: dict | None = None) -> dict | None:
     """The Screener's overall score for `ticker` **as it would have scored on
     `as_of`**, using only then-knowable data and the live scoring curves.
     Returns None if EDGAR has nothing for the ticker; the score itself can still
@@ -261,7 +284,8 @@ def historical_screener_score(ticker: str, as_of: date, include_news: bool = Tru
     Single-ticker convenience wrapper over historical_raw_data +
     score_reconstructed_batch."""
     ticker = ticker.strip().upper()
-    built = historical_raw_data(ticker, as_of, include_analyst=include_analyst, span_df=span_df)
+    built = historical_raw_data(ticker, as_of, include_analyst=include_analyst, span_df=span_df,
+                                inputs=inputs)
     if built is None:
         return None
     raw, company_name = built

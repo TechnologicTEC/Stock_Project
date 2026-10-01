@@ -95,13 +95,20 @@ def walk_forward(ticker: str, start: date, end: date,
         span_df = price_history.get_history_df(ticker, span_lo, span_hi)
     except Exception:
         pass
+    # The filings and profile, likewise read once rather than once per date (see
+    # screener_history.ticker_inputs). Best-effort the same way: on failure each
+    # date fetches for itself, exactly as before.
+    try:
+        inputs = screener_history.ticker_inputs(ticker)
+    except Exception:
+        inputs = None
 
     points: list[dict] = []
     current = start
     while current <= last_scorable:
         scored = screener_history.historical_screener_score(
             ticker, current, include_news=include_news, include_analyst=include_analyst,
-            span_df=span_df)
+            span_df=span_df, inputs=inputs)
         if scored and scored["overall_score"] is not None:
             fwd = forward_return_pct(ticker, current, horizon_days, span_df)
             if fwd is not None:
@@ -373,10 +380,15 @@ def universe_walk_forward(tickers, start: date, end: date, *,
     span_lo = start - timedelta(days=_PRICE_WARMUP_DAYS)
     span_hi = min(end + timedelta(days=horizon_days), today)
     spans: dict[str, object] = {}
+    inputs: dict[str, dict] = {}
     for ticker in tickers:
         try:
             price_history.ensure_cached(ticker, span_lo, span_hi)
             spans[ticker] = price_history.get_history_df(ticker, span_lo, span_hi)
+        except Exception:
+            pass
+        try:
+            inputs[ticker] = screener_history.ticker_inputs(ticker)
         except Exception:
             pass
 
@@ -392,7 +404,8 @@ def universe_walk_forward(tickers, start: date, end: date, *,
         for ticker in tickers:
             try:
                 built = screener_history.historical_raw_data(
-                    ticker, as_of, include_analyst=include_analyst, span_df=spans.get(ticker))
+                    ticker, as_of, include_analyst=include_analyst, span_df=spans.get(ticker),
+                    inputs=inputs.get(ticker))
             except Exception:
                 built = None
             if built is not None:
