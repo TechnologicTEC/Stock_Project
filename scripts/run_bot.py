@@ -116,7 +116,7 @@ def sessions_behind(newest: date_, through: date_) -> int:
     return behind
 
 
-UNAPPLIED_SPLIT = "unapplied_split"
+UNAPPLIED_SPLIT = risk.UNAPPLIED_SPLIT
 
 
 def _check_unapplied_splits(strategy: str, run_id: str, config: dict, today: date_,
@@ -371,7 +371,7 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
         _log(f"  ERROR insufficient data: {exc}")
         journal.record(
             run_id=run_id, strategy=strategy, action=journal.SKIP,
-            reason=str(exc), status=journal.ERROR, blocked_by="insufficient_data",
+            reason=str(exc), status=journal.ERROR, blocked_by=risk.INSUFFICIENT_DATA,
         )
         return 1        # genuinely wrong: the job should go red. No orders placed.
 

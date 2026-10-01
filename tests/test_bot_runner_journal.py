@@ -589,3 +589,131 @@ def test_a_failing_broker_never_breaks_the_run(curve):
     client = _SyncClient({}, set(), fail=True)
     run_bot._sync_official_equity("golden_cross", dict(CONFIG), client, _utc(TUE, 10, 30))
     assert curve[MON]["equity"] == 9_986.87                   # untouched, no exception
+
+
+# --------------------------------------------------------------------------
+# The 1 Oct 2026 rebalance that never happened.
+#
+# top_decile_long held APH through a split Alpaca's paper account ignored, so
+# every run journals a note about it — BEFORE prepare() reads the history. The
+# monthly gate asked "has anything run this month?", saw that note, and held
+# the September book. The runner tests above stub the split check out, which is
+# why none of them could see it. This one runs the real check, the real
+# strategy and the real history read, on the first of the month.
+# --------------------------------------------------------------------------
+
+OCT_1 = date(2026, 10, 1)
+
+
+class _Oct1(date):
+    @classmethod
+    def today(cls):
+        return OCT_1
+
+
+class _HeldClient(_Client):
+    def __init__(self, held):
+        super().__init__()
+        self._held = held
+
+    def get_all_positions(self):
+        return [type("P", (), {"symbol": t, "qty": 1.0, "market_value": 190.0})()
+                for t in self._held]
+
+
+def _september(held):
+    """A month that rebalanced on the 1st, then held: a snapshot row, hold rows."""
+    import datetime as dt
+    from engine.bot import decile_spread
+    snap = {"decided_at": dt.datetime(2026, 9, 1, 14, 28), "status": journal.SKIPPED,
+            "action": journal.HOLD, "ticker": None, "blocked_by": None,
+            "inputs": {decile_spread.SNAPSHOT_KEY: {"as_of": "2026-09-01",
+                                                    "top": list(held), "bottom": []}}}
+    holds = [{"decided_at": dt.datetime(2026, 9, d, 0, 50), "status": journal.SKIPPED,
+              "action": journal.HOLD, "ticker": None, "blocked_by": None, "inputs": None}
+             for d in range(2, 31)]
+    return list(reversed([snap] + holds))           # newest first, like the journal
+
+
+def _first_of_the_month(recorded, monkeypatch, *, history):
+    import datetime as dt
+    from engine.bot import corporate_actions, live
+
+    held = ["APH"] + [f"OLD{i:02d}" for i in range(1, 50)]      # 50 names
+    rows = [{"ticker": f"N{i:03d}", "rank": i, "score": 90 - i * 0.1}
+            for i in range(1, 504)]                            # none of them held
+
+    config = {**CONFIG, "strategy": "top_decile_long", "target_slots": 50,
+              "max_position_pct": 0.20, "max_orders_per_run": 110}
+    monkeypatch.setattr(run_bot.journal, "get_config", lambda _s: dict(config))
+    monkeypatch.setattr(run_bot, "date_", _Oct1)
+
+    # The split note, produced by the real detector from broker-shaped inputs.
+    monkeypatch.setattr(live, "account_view", lambda _p: {"available": True, "positions": [
+        {"ticker": "APH", "qty": 1.268, "avg_entry_price": 157.70, "current_price": 78.0}]})
+    monkeypatch.setattr(corporate_actions, "fetch_splits", lambda *a, **k: {
+        "APH": [{"ex_date": date(2026, 9, 3), "old_rate": 1, "new_rate": 2}]})
+    monkeypatch.setattr(journal, "fills", lambda _s: [])
+
+    # The history prepare() reads: last month, plus whatever this run has
+    # already written — which is the whole point.
+    def recent(_strategy, _limit=50):
+        this_run = [{"decided_at": dt.datetime(2026, 10, 1, 0, 51), "inputs": r.get("inputs"),
+                     **{k: r.get(k) for k in ("ticker", "action", "status", "blocked_by")}}
+                    for r in reversed(recorded)]
+        return this_run + history
+    monkeypatch.setattr(journal, "recent_decisions", recent)
+    monkeypatch.setattr("engine.screener.load_leaderboard",
+                        lambda: {"rows": rows, "generated_at": "2026-09-27"})
+
+    client = _HeldClient(held)
+    with patch.object(run_bot.accounts, "clients_for", return_value=(client, None)), \
+         patch.object(run_bot.accounts, "assert_paper", lambda _c: None), \
+         patch.object(run_bot, "_log_price_freshness", lambda *a, **k: None), \
+         patch.object(run_bot, "_sync_official_equity", lambda *a, **k: None):
+        code = run_bot.run("top_decile_long", dry_run=False,
+                           now=datetime(2026, 10, 1, 0, 51, tzinfo=timezone.utc))
+    return code, client
+
+
+def test_a_split_note_does_not_cost_the_month_its_rebalance(recorded, monkeypatch):
+    code, client = _first_of_the_month(recorded, monkeypatch,
+                                       history=_september(["APH"]))
+    assert code == 0
+    blocked = [r.get("blocked_by") for r in recorded]
+    assert risk.UNAPPLIED_SPLIT in blocked, "the split note should still be written"
+
+    from engine.bot import decile_spread
+    snapshots = [r for r in recorded if decile_spread.SNAPSHOT_KEY in (r.get("inputs") or {})]
+    assert len(snapshots) == 1, "a rebalance records its decile snapshot"
+    sold = {r["ticker"] for r in recorded
+            if r.get("action") == journal.SELL and r.get("status") == journal.SUBMITTED}
+    assert "OLD01" in sold and "APH" in sold, "the September book is closed out"
+
+
+def test_a_month_that_only_held_still_rebalances_on_the_next_run(recorded, monkeypatch):
+    """What production looked like on 2 Oct: two October runs had already held
+    (and journalled hold rows), but neither recorded a decile snapshot. The
+    next run must rebalance now, not wait for November."""
+    import datetime as dt
+    held_in_october = [{"decided_at": dt.datetime(2026, 10, 1, h, 0), "status": journal.SKIPPED,
+                        "action": journal.HOLD, "ticker": None, "blocked_by": None,
+                        "inputs": {"targets": ["APH"], "equity": 9500.0}}
+                       for h in (15, 0)]
+    _first_of_the_month(recorded, monkeypatch,
+                        history=held_in_october + _september(["APH"]))
+    from engine.bot import decile_spread
+    assert any(decile_spread.SNAPSHOT_KEY in (r.get("inputs") or {}) for r in recorded)
+
+
+def test_once_the_month_is_rebalanced_the_next_run_holds(recorded, monkeypatch):
+    import datetime as dt
+    from engine.bot import decile_spread
+    october = [{"decided_at": dt.datetime(2026, 10, 1, 0, 51), "status": journal.SKIPPED,
+                "action": journal.HOLD, "ticker": None, "blocked_by": None,
+                "inputs": {decile_spread.SNAPSHOT_KEY: {"as_of": "2026-10-01",
+                                                        "top": [], "bottom": []}}}]
+    _, client = _first_of_the_month(recorded, monkeypatch,
+                                    history=october + _september(["APH"]))
+    assert client.submitted == []
+    assert not any(decile_spread.SNAPSHOT_KEY in (r.get("inputs") or {}) for r in recorded)

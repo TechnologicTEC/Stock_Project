@@ -39,6 +39,11 @@ INSUFFICIENT_CASH = "insufficient_cash"
 # is paper. It marks a name declined because a fill in it would not have
 # been a believable price — see engine/bot/liquidity.
 LIQUIDITY = "liquidity"
+# Neither of these is a decision. A run that could not see its inputs stopped
+# before deciding anything; a split note is a diagnostic written every run.
+# screener_common.run_dates must not count either as "this strategy ran".
+INSUFFICIENT_DATA = "insufficient_data"
+UNAPPLIED_SPLIT = "unapplied_split"
 
 # Alpaca accepts fractional orders down to about $1 of notional. Anything
 # smaller is a rounding artifact of the sizing rule, not an intent to trade.

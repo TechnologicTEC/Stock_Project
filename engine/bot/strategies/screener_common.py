@@ -120,7 +120,7 @@ def notional_for(ctx) -> float:
     )
 
 
-# Rails that mean "this run never happened" rather than "this run decided
+# Rows that mean "this run never happened" rather than "this run decided
 # nothing". A day the global switch was off must not count as the month's
 # rebalance, or a single stopped day would skip a whole month of trading.
 def _is_non_run(decision: dict) -> bool:
@@ -131,6 +131,14 @@ def _is_non_run(decision: dict) -> bool:
     # change what a later LIVE run does — a diagnostic must not have side
     # effects on the thing it is diagnosing.
     if status == journal.DRY_RUN:
+        return True
+    # Rows that say nothing about whether the strategy decided anything. The
+    # split note is written BEFORE prepare() reads this history, so it used to
+    # count as an earlier run of the same day: on 1 Oct 2026 it told
+    # top_decile_long it had already run in October, and the rebalance never
+    # happened. A run that stopped on missing data decided nothing either, and
+    # counting it would lose the month's rebalance to one stale leaderboard.
+    if decision.get("blocked_by") in (risk.UNAPPLIED_SPLIT, risk.INSUFFICIENT_DATA):
         return True
     return (status == journal.BLOCKED
             and decision.get("blocked_by") in (risk.GLOBAL_SWITCH,

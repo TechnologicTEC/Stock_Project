@@ -30,6 +30,13 @@ def _decision(day, *, status=journal.SKIPPED, inputs=None, action=journal.HOLD):
             "action": action, "status": status, "blocked_by": None, "inputs": inputs}
 
 
+def _rebalance(day, *, status=journal.SKIPPED):
+    """The row a rebalance leaves behind: its decile snapshot. This, not just
+    any row, is what tells the strategy it has already rebalanced that month."""
+    return _decision(day, status=status, inputs={
+        decile_spread.SNAPSHOT_KEY: {"as_of": day.isoformat(), "top": [], "bottom": []}})
+
+
 def _ctx(rows=None, *, held=(), decisions=(), equity=10_000.0, slots=50, cap=0.20):
     rows = _rows() if rows is None else rows
     return strategies.Context(
@@ -148,7 +155,7 @@ def test_build_refuses_without_a_leaderboard():
 def test_between_rebalances_the_book_is_restated_not_emptied():
     """THE trap. Returning [] here would sell all fifty positions every day."""
     held = [f"T{i:03d}" for i in range(1, 51)]
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     targets = tdl.build(ctx)
     assert len(targets) == 50
     assert {t.ticker for t in targets} == set(held)
@@ -161,7 +168,7 @@ def test_a_name_that_left_the_decile_is_not_force_sold_mid_month():
     cadence exists to avoid. (Held as a full book on purpose: a one-name book
     is materially incomplete and correctly triggers a rebuild instead.)"""
     held = [f"T{i:03d}" for i in range(1, 50)] + ["T200"]
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     assert "T200" in [t.ticker for t in tdl.build(ctx)]
 
 
@@ -169,7 +176,7 @@ def test_a_book_that_lost_one_name_mid_month_is_not_rebuilt():
     """One position closing is normal. Re-evaluating all 50 for it would be
     the churn the monthly gate is there to prevent."""
     held = [f"T{i:03d}" for i in range(1, 50)]          # 49 of 50
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     assert not tdl.is_rebalance_run(ctx)
     assert len(tdl.build(ctx)) == 49                    # restated, not rebuilt
 
@@ -179,19 +186,41 @@ def test_a_half_filled_book_is_rebuilt_even_having_run_this_month():
     filled 8 of 50, and the monthly gate would have frozen it there until the
     1st."""
     held = [f"T{i:03d}" for i in range(1, 9)]           # 8 of 50
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     assert tdl.is_rebalance_run(ctx)
     assert len(tdl.build(ctx)) == 50
 
 
+def test_running_this_month_without_a_snapshot_still_rebalances():
+    """1 Oct 2026: the month's runs had all HELD (a split note fooled the
+    first one), so October had hold rows and no snapshot. Any row is not a
+    rebalance; only the snapshot is."""
+    held = [f"T{i:03d}" for i in range(100, 150)]
+    ctx = _ctx(held=held, decisions=[_decision(TODAY), _decision(TODAY - timedelta(days=1))])
+    assert tdl.is_rebalance_run(ctx)
+    assert {t.ticker for t in tdl.build(ctx)} == {f"T{i:03d}" for i in range(1, 51)}
+
+
+def test_a_dry_run_snapshot_is_not_the_months_rebalance():
+    held = [f"T{i:03d}" for i in range(1, 51)]
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY, status=journal.DRY_RUN)])
+    assert tdl.is_rebalance_run(ctx)
+
+
+def test_last_months_snapshot_is_not_this_months_rebalance():
+    held = [f"T{i:03d}" for i in range(1, 51)]
+    ctx = _ctx(held=held, decisions=[_rebalance(date(2026, 8, 31))])
+    assert tdl.is_rebalance_run(ctx)
+
+
 def test_a_run_in_a_previous_month_still_rebalances():
-    ctx = _ctx(held=["T200"], decisions=[_decision(date(2026, 8, 15))])
+    ctx = _ctx(held=["T200"], decisions=[_rebalance(date(2026, 8, 15))])
     assert "T200" not in [t.ticker for t in tdl.build(ctx)]
 
 
 def test_an_empty_book_rebalances_even_having_run_this_month():
     """Otherwise a full exit would leave the account in cash until the 1st."""
-    ctx = _ctx(decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(decisions=[_rebalance(TODAY - timedelta(days=1))])
     assert len(tdl.build(ctx)) == 50
 
 
@@ -199,7 +228,7 @@ def test_a_held_name_missing_from_the_leaderboard_is_held_mid_month():
     """Full book, one name no longer in the ranking at all. Missing data is not
     a sell signal — it leaves at the next rebalance, not today."""
     held = [f"T{i:03d}" for i in range(1, 50)] + ["GONE"]
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     targets = {t.ticker: t for t in tdl.build(ctx)}
     assert "GONE" in targets
     assert "not in the current leaderboard" in targets["GONE"].reason
@@ -228,7 +257,7 @@ def test_the_snapshot_row_places_no_order_and_blocks_nothing():
 def test_nothing_is_recorded_between_rebalances():
     held = [f"T{i:03d}" for i in range(1, 51)]
     assert tdl.notes(_ctx(held=held,
-                          decisions=[_decision(TODAY - timedelta(days=1))])) == []
+                          decisions=[_rebalance(TODAY - timedelta(days=1))])) == []
 
 
 def test_no_snapshot_without_a_leaderboard():
@@ -408,7 +437,7 @@ def test_price_basket_dedupes_and_normalises():
 
 def test_top_decile_holds_without_resizing_between_rebalances():
     held = [f"T{i:03d}" for i in range(1, 51)]
-    ctx = _ctx(held=held, decisions=[_decision(TODAY - timedelta(days=1))])
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1))])
     targets = tdl.build(ctx)
     assert targets and all(t.sizing == executor.HOLD for t in targets)
 

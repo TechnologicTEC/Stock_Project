@@ -132,6 +132,18 @@ def test_a_halted_day_does_not_count_as_the_months_run(rail):
     assert common.has_run_this_month(ctx) is False
 
 
+@pytest.mark.parametrize("status, rail", [(journal.SKIPPED, risk.UNAPPLIED_SPLIT),
+                                          (journal.ERROR, risk.INSUFFICIENT_DATA)])
+def test_rows_that_decided_nothing_do_not_count_as_the_months_run(status, rail):
+    """The split note is written before the strategy reads its history, so it
+    once passed for an earlier run the same day (1 Oct 2026). A run that
+    stopped on missing data decided nothing, and must not use up the month."""
+    ctx = _ctx(_rows(), decisions=[
+        _decision(TODAY, status=status, blocked_by=rail, ticker="APH"),
+    ])
+    assert common.has_run_this_month(ctx) is False
+
+
 def test_an_order_level_block_still_counts_as_a_run():
     # pending_order means we got as far as planning orders — the run happened.
     ctx = _ctx(_rows(), decisions=[

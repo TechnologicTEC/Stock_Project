@@ -115,7 +115,31 @@ def is_rebalance_run(ctx) -> bool:
     intended = min(slots, decile_size(rows)) if (slots and rows) else slots
     if common.book_is_incomplete(len(held), intended):
         return True
-    return not common.has_run_this_month(ctx)
+    return not rebalanced_this_month(ctx)
+
+
+def rebalanced_this_month(ctx) -> bool:
+    """Has a live run this month recorded a decile snapshot?
+
+    Every rebalance writes one (`notes`), and nothing else does, so this asks
+    the question directly. It used to ask "has anything run this month?",
+    which is a proxy, and on 1 Oct 2026 it broke: the APH split note, written
+    earlier in the same run, read as an October run, so the run held instead
+    of rebalancing — and every later run that month would have agreed with it,
+    because each of those held too. Asking for the snapshot heals that on the
+    next run instead of the next month.
+    """
+    from engine.bot import journal
+
+    for d in (ctx.extras or {}).get("decisions") or []:
+        if d.get("status") == journal.DRY_RUN:
+            continue
+        if not (d.get("inputs") or {}).get(decile_spread.SNAPSHOT_KEY):
+            continue
+        when = d.get("decided_at")
+        if when and when.year == ctx.today.year and when.month == ctx.today.month:
+            return True
+    return False
 
 
 def build(ctx) -> list[Target]:
