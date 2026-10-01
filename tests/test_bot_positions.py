@@ -47,10 +47,11 @@ def test_a_name_sold_out_completely_is_not_still_held():
 
 
 def test_a_partial_sell_leaves_the_remainder_at_the_same_cost_per_share():
+    # A trim, as the executor writes one: dollars, no share count.
     book = positions.book_from_fills([
         _fill("ALL", "buy", 4.0, 1_000.0, date(2026, 9, 1)),      # $250/share
-        _fill("ALL", "sell", 1.0, 270.0, date(2026, 9, 20)),
-    ])
+        _fill("ALL", "sell", None, 270.0, date(2026, 9, 20)),
+    ], fill_price=lambda ticker, day: 270.0)
     held = book["ALL"]
     assert held["qty"] == 3.0
     # Basis follows the shares, not the proceeds: 3 shares at the same $250.
@@ -166,16 +167,51 @@ def test_a_dollar_buy_and_a_share_sell_net_out():
     assert "CF" not in book
 
 
-def test_a_sell_with_no_share_count_closes_the_name():
-    """A sell we can't size in shares. The strategy decided to be out, so being
-    out is the safe reading — leaving it on the page as still held would show a
-    position the bot does not have."""
+def test_a_trim_that_cannot_be_priced_leaves_the_name_held():
+    """A dollar sell is a trim, never an exit (exits are in shares). Without a
+    price there is no saying how much smaller the holding got — but it is
+    still held, and dropping it would hide a position the bot has."""
     book = positions.book_from_fills(
-        [_buy("CF", 500.0, date(2026, 9, 1)),
-         _fill("CF", "sell", None, 520.0, date(2026, 9, 20))],
-        fill_price=lambda ticker, day: 100.0,
+        [_fill("CF", "buy", 5.0, 500.0, date(2026, 9, 1)),
+         _fill("CF", "sell", None, 60.0, date(2026, 9, 20))],
     )
-    assert "CF" not in book
+    assert book["CF"]["qty"] == 5.0
+
+
+def test_a_share_count_exit_closes_the_name_whatever_the_replay_estimated():
+    """1 Oct 2026, composite_rebalance. FSLR was bought for $667.12 during the
+    session on 1 Sep; the replay priced it at the next open and made it 3.3465
+    shares. Alpaca filled 3.3107, and sold exactly that on 1 Oct. Subtracting
+    one from the other left 0.036 shares — $6 of FSLR on the page, none in the
+    account."""
+    book = positions.book_from_fills(
+        [_buy("FSLR", 667.12, date(2026, 9, 1)),
+         _fill("FSLR", "sell", 3.310719602, None, date(2026, 10, 1))],
+        fill_price=lambda ticker, day: 199.35,
+    )
+    assert "FSLR" not in book
+
+
+def test_the_executors_own_orders_replay_to_the_book_it_left():
+    """Ask the executor, rather than assuming its shapes: plan an exit and a
+    trim, journal them as the runner does, and replay."""
+    from engine.bot import executor
+    from engine.bot.executor import Position, Target
+
+    held = [Position(ticker="GOOG", qty=2.001049853, market_value=692.0),
+            Position(ticker="MU", qty=0.7, market_value=772.0)]
+    orders = executor.plan([Target(ticker="MU", notional=629.0, reason="t")], held,
+                           equity=10_000.0)
+    by_ticker = {o.ticker: o for o in orders}
+    assert by_ticker["GOOG"].qty and not by_ticker["GOOG"].notional     # exit: shares
+    assert by_ticker["MU"].notional and not by_ticker["MU"].qty         # trim: dollars
+
+    fills = [_buy("GOOG", 667.12, date(2026, 9, 1)), _buy("MU", 667.12, date(2026, 9, 1))]
+    fills += [_fill(o.ticker, o.side, o.qty, o.notional, date(2026, 10, 1)) for o in orders]
+    book = positions.book_from_fills(fills, fill_price=lambda ticker, day: 330.0
+                                     if ticker == "GOOG" else 950.0)
+    assert set(book) == {"MU"}
+    assert book["MU"]["qty"] < 667.12 / 950.0                          # trimmed, still held
 
 
 # --------------------------------------------------------------------------

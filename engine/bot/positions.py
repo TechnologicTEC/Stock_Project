@@ -68,9 +68,11 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
     holding is real either way, and inventing a share count would be worse than
     admitting to not having one.
 
-    Sells reduce cost basis proportionally (average cost). That is the only
-    treatment available: the journal records a quantity and a notional per
-    order, not a per-lot ledger, so there is nothing to match a sale against.
+    **Sells carry shares for an exit and dollars for a trim.** A share-count
+    sell closes the name outright (see the loop). A trim reduces cost basis
+    proportionally (average cost). That is the only treatment available: the
+    journal records a quantity and a notional per order, not a per-lot ledger,
+    so there is nothing to match a sale against.
     """
     book: dict[str, dict] = {}
 
@@ -85,7 +87,8 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
         notional = fill.get("notional")
         value = abs(float(notional)) if notional is not None else None
 
-        qty = fill.get("qty")
+        shares = fill.get("qty")              # as journalled, before any estimate
+        qty = shares
         if qty is None and value and fill_price:
             price = fill_price(ticker, day)
             qty = (value / price) if price else None
@@ -104,12 +107,19 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
                 held["cost"] += value or 0.0
             continue
 
-        if qty is None:
-            # A sell we can't size. Closing the name is the safe reading: the
-            # strategy decided to be out of it, and showing it as still held
-            # would put a position on the page the bot does not have.
+        # The executor writes exactly two kinds of sell (executor.plan). A sell
+        # in SHARES is a full exit, sized from the broker's own count — so it
+        # closes the name, whatever this replay estimated. Subtracting it left
+        # dust: the estimate divides dollars by the next open, a fill is never
+        # exactly there, and on 1 Oct 2026 composite showed $6 of FSLR and $5
+        # of GOOG that Alpaca had sold in full.
+        if shares is not None:
             book.pop(ticker, None)
             continue
+
+        # A sell in DOLLARS is a trim: the name is still held, only smaller.
+        if qty is None:
+            continue                       # can't say how much smaller; still held
 
         if held is not None:
             # Average cost out with the shares, so what remains keeps the same
