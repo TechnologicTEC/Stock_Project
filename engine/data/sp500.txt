@@ -1,6 +1,6 @@
 # S&P 500 constituents — the neutral universe for screener validation.
 #
-# Snapshot fetched from Wikipedia's List_of_S&P_500_companies on 2026-07-16 and
+# Snapshot fetched from Wikipedia's List_of_S&P_500_companies on 2026-10-02 and
 # COMMITTED deliberately: a static list makes a validation run reproducible and
 # removes a network dependency from the batch job.
 #
@@ -11,8 +11,20 @@
 # the same names, where the bias hits every factor alike — but it is NOT a fair
 # estimate of absolute returns. Never quote a return level off this universe.
 #
-# Class shares use a dash (BRK-B), matching Alpaca/yfinance rather than BRK.B.
+# Class shares use a dash (BRK-B), matching SEC, Finnhub and yfinance. Alpaca
+# spells them BRK.B; engine/data_sources/alpaca_client converts at its boundary.
 # 503 tickers.
+#
+# Refreshed 2026-10-02 from the 2026-07-16 snapshot, because names that had
+# stopped trading were still being ranked (see screener.MAX_PRICE_AGE_DAYS).
+# Each addition was checked against SEC's ticker list and Alpaca (active,
+# tradable) before it went in, not taken on Wikipedia's word:
+#   out  AVB, EA         Alpaca: inactive since August
+#   out  EQR -> VMRK     Vivmark Residential, same SEC CIK (906107) as EQR
+#   out  BLDR, TAP, TTD  still trading; left the index
+#   in   BE, FERG, ILMN, RDDT
+#   in   P               Everpure, SEC CIK 1474432
+# No bot held any name that left.
 #
 # This file is the index verbatim, which lists three companies TWICE, once per
 # share class (GOOG/GOOGL, FOX/FOXA, NWS/NWSA). What we screen and trade is 500:
@@ -63,7 +75,6 @@ APTV
 ARE
 ARES
 ATO
-AVB
 AVGO
 AVY
 AWK
@@ -76,13 +87,13 @@ BALL
 BAX
 BBY
 BDX
+BE
 BEN
 BF-B
 BG
 BIIB
 BKNG
 BKR
-BLDR
 BLK
 BMY
 BNY
@@ -170,7 +181,6 @@ DUK
 DVA
 DVN
 DXCM
-EA
 EBAY
 ECHO
 ECL
@@ -184,7 +194,6 @@ EME
 EMR
 EOG
 EQIX
-EQR
 EQT
 ERIE
 ES
@@ -206,6 +215,7 @@ FDS
 FDX
 FDXF
 FE
+FERG
 FFIV
 FICO
 FIS
@@ -264,6 +274,7 @@ ICE
 IDXX
 IEX
 IFF
+ILMN
 INCY
 INTC
 INTU
@@ -374,6 +385,7 @@ ORCL
 ORLY
 OTIS
 OXY
+P
 PANW
 PAYX
 PCAR
@@ -406,6 +418,7 @@ PYPL
 Q
 QCOM
 RCL
+RDDT
 REG
 REGN
 RF
@@ -446,7 +459,6 @@ SYF
 SYK
 SYY
 T
-TAP
 TDG
 TDY
 TECH
@@ -468,7 +480,6 @@ TSCO
 TSLA
 TSN
 TT
-TTD
 TTWO
 TXN
 TXT
@@ -489,6 +500,7 @@ VICI
 VLO
 VLTO
 VMC
+VMRK
 VRSK
 VRSN
 VRT
