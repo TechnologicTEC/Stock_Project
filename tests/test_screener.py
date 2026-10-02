@@ -880,3 +880,67 @@ def test_a_name_missing_one_factor_still_makes_the_leaderboard():
     lb = screener.build_leaderboard([_sr("KO", 70.0, {"valuation": None})])
     assert [r["ticker"] for r in lb["rows"]] == ["KO"]
     assert lb["n_withheld"] == 0
+
+
+# --------------------------------------------------------------------------
+# A name that has stopped trading is withheld, not ranked on its last price.
+#
+# On the 27 Sep 2026 leaderboard EQR, AVB and EA were ranked on prices 41-54
+# days old — taken over or delisted in August — while the other 496 names had
+# a close 0-3 days old. EA sat in the bottom decile top_decile_long tracks.
+# --------------------------------------------------------------------------
+
+def _closes_ending(day, n=30):
+    days = pd.bdate_range(end=day, periods=n).date
+    return pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0,
+                         "volume": 1}, index=pd.Index(days, name="date"))
+
+
+def test_screen_tickers_records_the_newest_price_it_scored_on():
+    last = date(2026, 9, 25)
+    raw = {"LIVE": _raw("LIVE", fundamentals={"peTTM": 15.0}, price_df=_closes_ending(last)),
+           "NONE": _raw("NONE", fundamentals={"peTTM": 15.0})}
+    with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
+        got = {r.ticker: r.last_price_date for r in screener.screen_tickers(["LIVE", "NONE"])}
+    assert got == {"LIVE": last, "NONE": None}
+
+
+def _dated(ticker, score, days_old):
+    r = _sr(ticker, score)
+    r.last_price_date = (None if days_old is None
+                         else date.today() - timedelta(days=days_old))
+    return r
+
+
+def test_a_name_whose_prices_stopped_is_withheld_and_named():
+    lb = screener.build_leaderboard([
+        _dated("LIVE", 70.0, 2),
+        _dated("EA", 90.0, 54),                       # would have ranked first
+    ])
+    assert [r["ticker"] for r in lb["rows"]] == ["LIVE"]
+    assert lb["stale_price"] == ["EA"]
+
+
+def test_the_cut_off_absorbs_a_missed_weekly_fetch():
+    lb = screener.build_leaderboard([
+        _dated("WEEK", 70.0, 9),
+        _dated("EDGE", 65.0, screener.MAX_PRICE_AGE_DAYS),
+        _dated("OVER", 60.0, screener.MAX_PRICE_AGE_DAYS + 1),
+    ])
+    assert [r["ticker"] for r in lb["rows"]] == ["WEEK", "EDGE"]
+    assert lb["stale_price"] == ["OVER"]
+
+
+def test_no_prices_at_all_is_a_failed_fetch_not_a_delisting():
+    """An outage at Alpaca must not empty the ranking: a held name missing from
+    it is sold at the next rebalance."""
+    lb = screener.build_leaderboard([_dated("BLIP", 70.0, None)])
+    assert [r["ticker"] for r in lb["rows"]] == ["BLIP"]
+    assert lb["stale_price"] == []
+
+
+def test_a_repair_keeps_a_stale_name_out_too():
+    payload = screener.build_leaderboard([_dated("AAA", 70.0, 2), _dated("EA", 60.0, 54)])
+    out = screener.repair_leaderboard(payload, [_dated("BBB", 65.0, 50)])
+    assert [r["ticker"] for r in out["rows"]] == ["AAA"]
+    assert out["stale_price"] == ["BBB", "EA"]

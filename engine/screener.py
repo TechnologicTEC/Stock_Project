@@ -346,6 +346,9 @@ class ScreenerResult:
     factors: dict[str, FactorResult]
     data_errors: list[str]
     company_name: str | None = None    # display only; defaulted so existing callers are unaffected
+    # The newest price the momentum factor saw. None when there were no prices
+    # at all, which is a different thing from old ones — see MAX_PRICE_AGE_DAYS.
+    last_price_date: date | None = None
 
 
 # --------------------------------------------------------------------------
@@ -1073,6 +1076,7 @@ def screen_tickers(tickers: list[str]) -> list[ScreenerResult]:
                 factors=factors,
                 data_errors=raw_by_ticker[t].errors,
                 company_name=raw_by_ticker[t].company_name,
+                last_price_date=_newest_price_date(raw_by_ticker[t].price_df),
             )
         )
 
@@ -1162,6 +1166,38 @@ LEADERBOARD_CACHE_KEY = "leaderboard:sp500"
 LEADERBOARD_TTL_SECONDS = 21 * 24 * 60 * 60
 
 
+# A name whose newest price is older than this has stopped trading, and is
+# withheld rather than ranked. Measured on the 27 Sep 2026 leaderboard: 496 of
+# 500 names had a close 0-3 days old, and the other three were EQR 41, AVB 44
+# and EA 54 days — taken over or delisted in August, still ranked on their last
+# price, and one of them sitting in the bottom decile top_decile_long tracks.
+# Nothing fell in between. 14 absorbs one missed weekly price fetch (~9 days)
+# and matches the bots' own limit on a leaderboard's age.
+#
+# A name with NO prices is not withheld here: that is a failed fetch, not a
+# company that stopped trading, and an outage at Alpaca must not empty the
+# ranking — a held name missing from it is sold at the next rebalance.
+MAX_PRICE_AGE_DAYS = 14
+
+
+def _newest_price_date(price_df) -> date | None:
+    if price_df is None or price_df.empty:
+        return None
+    newest = price_df.index.max()
+    return newest.date() if hasattr(newest, "date") else newest
+
+
+def _stale_price(result: ScreenerResult, today: date) -> bool:
+    last = result.last_price_date
+    return last is not None and (today - last).days > MAX_PRICE_AGE_DAYS
+
+
+def _rankable(result: ScreenerResult, today: date) -> bool:
+    return (result.overall_score is not None
+            and _weight_covered(result) >= MIN_FACTOR_WEIGHT - 1e-9
+            and not _stale_price(result, today))
+
+
 def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500") -> dict:
     """A compact, JSON-friendly ranked payload from live screen results.
 
@@ -1173,8 +1209,8 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
     can screen in chunks and concatenate — under ABSOLUTE scoring each ticker's
     score is independent of the others, so chunked results rank identically to one
     big call."""
-    scored = sorted((r for r in results
-                     if r.overall_score is not None and _weight_covered(r) >= MIN_FACTOR_WEIGHT - 1e-9),
+    today = date.today()
+    scored = sorted((r for r in results if _rankable(r, today)),
                     key=lambda r: -r.overall_score)
     ranked = _rerank([_leaderboard_row(r) for r in scored])
     return {
@@ -1185,6 +1221,7 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
         "n_no_sector": _count_without_sector(scored),
         "n_withheld": sum(1 for r in results if r.overall_score is not None
                           and _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9),
+        "stale_price": sorted(r.ticker for r in results if _stale_price(r, today)),
         "rows": ranked,
     }
 
@@ -1232,9 +1269,8 @@ def repair_leaderboard(payload: dict, results: list[ScreenerResult]) -> dict:
     kept = [row for row in (payload.get("rows") or [])
             if (row.get("ticker") or "").upper() not in fresh_by_ticker]
 
-    added = [_leaderboard_row(r) for r in results
-             if r.overall_score is not None
-             and _weight_covered(r) >= MIN_FACTOR_WEIGHT - 1e-9]
+    today = date.today()
+    added = [_leaderboard_row(r) for r in results if _rankable(r, today)]
 
     out = dict(payload)
     out["rows"] = _rerank(kept + added)
@@ -1242,6 +1278,9 @@ def repair_leaderboard(payload: dict, results: list[ScreenerResult]) -> dict:
     out["repaired_at"] = date.today().isoformat()
     out["n_repaired"] = len(added)
     out["n_withheld"] = sum(1 for r in results if _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9)
+    out["stale_price"] = sorted(set(payload.get("stale_price") or ())
+                                - set(fresh_by_ticker)
+                                | {r.ticker for r in results if _stale_price(r, today)})
     return out
 
 

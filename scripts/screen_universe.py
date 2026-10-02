@@ -147,6 +147,9 @@ def main() -> None:
 
     elapsed = (time.time() - started) / 60
     print(f"\nscored {payload['n_scored']}/{payload['n_requested']} in {elapsed:.1f} min", flush=True)
+    if payload.get("stale_price"):
+        print(f"withheld for prices over {screener.MAX_PRICE_AGE_DAYS} days old (stopped "
+              f"trading?): {', '.join(payload['stale_price'])}", flush=True)
     print("Top 15 by live score:", flush=True)
     for row in payload["rows"][:15]:
         print(f"  {row['rank']:>3}. {row['ticker']:6} {row['score']:5.1f}  {row['recommendation']}", flush=True)
