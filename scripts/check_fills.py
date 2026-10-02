@@ -43,6 +43,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from db.session import init_db                              # noqa: E402
 from engine.bot import accounts, journal                    # noqa: E402
+from engine.data_sources.alpaca_client import from_alpaca  # noqa: E402
 
 # A market order hitting the opening auction should match the open to a couple of
 # basis points. 0.5% is loose enough not to cry wolf over a wide open, tight
@@ -216,11 +217,11 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
 
         wanted: dict[str, list[date_]] = {}
         for o in orders:
-            wanted.setdefault(o.symbol.upper(), []).append(o.filled_at.date())
+            wanted.setdefault(from_alpaca(o.symbol), []).append(o.filled_at.date())
         bars = {t: _bars_for(t, d) for t, d in wanted.items()}
 
         for o in orders:
-            ticker, day = o.symbol.upper(), o.filled_at.date()
+            ticker, day = from_alpaca(o.symbol), o.filled_at.date()
             price = float(o.filled_avg_price)
             result = compare(price, bars.get(ticker, {}).get(day),
                              tolerance_pct=tolerance,

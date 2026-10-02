@@ -367,3 +367,73 @@ def test_a_failing_second_opinion_never_breaks_the_fetch():
     with patch.object(alpaca_client, "_data_client", return_value=_Client()):
         bars = alpaca_client.get_historical_bars("X", date(2026, 6, 24), date(2026, 6, 25))
     assert _closes_from(bars) == [100.0, 45.0]
+
+
+# --------------------------------------------------------------------------
+# Class shares: BRK-B on our side, BRK.B at Alpaca.
+#
+# Alpaca answers "invalid symbol: BRK-B", so until Oct 2026 BRK-B and BF-B
+# never had a price. The fake below behaves the same way, rather than
+# accepting whatever it is handed.
+# --------------------------------------------------------------------------
+
+class _DotOnlyClient:
+    """Like Alpaca's data API: dash symbols are refused, results keyed by dot."""
+    def __init__(self):
+        self.asked = []
+
+    def _check(self, symbol):
+        self.asked.append(symbol)
+        if "-" in symbol:
+            raise RuntimeError(f'{{"message":"invalid symbol: {symbol}"}}')
+
+    def get_stock_bars(self, req):
+        self._check(req.symbol_or_symbols)
+        return {req.symbol_or_symbols: [_Bar(date(2026, 9, 30))]}
+
+    def get_stock_latest_quote(self, req):
+        self._check(req.symbol_or_symbols)
+        return {req.symbol_or_symbols: SimpleNamespace(
+            ask_price=501.0, bid_price=500.0, timestamp=datetime(2026, 9, 30, 20, 0))}
+
+    def get_stock_latest_trade(self, req):
+        self._check(req.symbol_or_symbols)
+        return {req.symbol_or_symbols: SimpleNamespace(
+            price=500.5, timestamp=datetime(2026, 9, 30, 20, 0))}
+
+
+@pytest.mark.parametrize("ours, theirs", [("BRK-B", "BRK.B"), ("BF-B", "BF.B"),
+                                          ("brk-b", "BRK.B"), ("AAPL", "AAPL")])
+def test_the_two_spellings_convert_both_ways(ours, theirs):
+    assert alpaca_client.to_alpaca(ours) == theirs
+    assert alpaca_client.from_alpaca(theirs) == ours.upper()
+
+
+def test_a_class_share_gets_its_price_history():
+    client = _DotOnlyClient()
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars = alpaca_client.get_historical_bars("BRK-B", date(2026, 9, 1), date(2026, 9, 30))
+    assert bars and client.asked == ["BRK.B"]
+
+
+def test_a_class_share_gets_quotes_and_trades_reported_in_our_spelling():
+    client = _DotOnlyClient()
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        quote = alpaca_client.get_latest_quote("BRK-B")
+        trade = alpaca_client.get_latest_trade("BRK-B")
+    assert quote["ticker"] == trade["ticker"] == "BRK-B"
+    assert quote["bid_price"] == 500.0 and trade["price"] == 500.5
+
+
+def test_paper_trading_positions_and_orders_come_back_in_our_spelling():
+    tc = MagicMock()
+    tc.get_all_positions.return_value = [SimpleNamespace(**{**vars(_fake_position()),
+                                                            "symbol": "BRK.B"})]
+    tc.get_orders.return_value = [_fake_order(symbol="BF.B")]
+    tc.submit_order.return_value = _fake_order(symbol="BRK.B")
+    with _patch_trading(tc):
+        assert alpaca_client.get_positions()[0]["symbol"] == "BRK-B"
+        assert alpaca_client.get_orders()[0]["symbol"] == "BF-B"
+        placed = alpaca_client.submit_market_order("BRK-B", 1, "buy")
+    assert tc.submit_order.call_args.args[0].symbol == "BRK.B"
+    assert placed["symbol"] == "BRK-B"

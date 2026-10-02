@@ -717,3 +717,47 @@ def test_once_the_month_is_rebalanced_the_next_run_holds(recorded, monkeypatch):
                                     history=october + _september(["APH"]))
     assert client.submitted == []
     assert not any(decile_spread.SNAPSHOT_KEY in (r.get("inputs") or {}) for r in recorded)
+
+
+# --------------------------------------------------------------------------
+# Class shares through a whole run. The bot thinks in BRK-B; Alpaca holds and
+# reports BRK.B. If the two ever met unconverted, a held BRK.B would read as
+# "not in the target book" and be sold.
+# --------------------------------------------------------------------------
+
+class _DotClient(_Client):
+    def __init__(self, held=()):
+        super().__init__()
+        self._held = held
+
+    def get_all_positions(self):
+        return [type("P", (), {"symbol": s, "qty": 20.0, "market_value": 10_000.0})()
+                for s in self._held]
+
+
+def test_a_held_class_share_is_not_sold_as_missing_from_the_book(recorded):
+    client = _DotClient(held=["BRK.B"])
+    targets = [Target(ticker="BRK-B", notional=10_000.0, reason="t")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+    assert client.submitted == []
+    assert not [r for r in recorded if r.get("action") == journal.SELL]
+
+
+def test_a_class_share_is_ordered_in_alpacas_spelling_and_journalled_in_ours(recorded):
+    client = _DotClient()
+    targets = [Target(ticker="BRK-B", notional=5_000.0, reason="t")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+    assert [req.symbol for req in client.submitted] == ["BRK.B"]
+    assert [r["ticker"] for r in recorded if r.get("action") == journal.BUY] == ["BRK-B"]
+
+
+def test_an_open_class_share_order_holds_back_another_one(recorded):
+    class _Open:
+        symbol = "BRK.B"
+
+    client = _DotClient()
+    client._open_orders = [_Open()]
+    targets = [Target(ticker="BRK-B", notional=5_000.0, reason="t")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+    assert client.submitted == []
+    assert [r.get("blocked_by") for r in recorded] == [risk.PENDING_ORDER]

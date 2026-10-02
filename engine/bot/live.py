@@ -62,6 +62,8 @@ def account_view(key_env_prefix: str) -> dict:
 
 
 def _position(p) -> dict:
+    from engine.data_sources.alpaca_client import from_alpaca
+
     """One Alpaca position, flattened to plain floats.
 
     `unrealized_plpc` arrives as a fraction (0.065 = +6.5%) — kept as one here so
@@ -71,7 +73,7 @@ def _position(p) -> dict:
         return float(value) if value not in (None, "") else None
 
     return {
-        "ticker": (p.symbol or "").upper(),
+        "ticker": from_alpaca(p.symbol),
         "qty": _f(p.qty) or 0.0,
         "avg_entry_price": _f(p.avg_entry_price),
         "current_price": _f(p.current_price),

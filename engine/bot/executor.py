@@ -244,7 +244,14 @@ def open_order_tickers(client) -> set[str]:
     on, per ticker rather than per run — one stuck order shouldn't freeze the
     other nineteen slots.
     """
-    return {(o.symbol or "").upper() for o in open_orders(client)}
+    return open_order_tickers_from(open_orders(client))
+
+
+def open_order_tickers_from(orders) -> set[str]:
+    """Our tickers for a list of broker orders (BRK.B comes back as BRK-B)."""
+    from engine.data_sources.alpaca_client import from_alpaca
+
+    return {from_alpaca(o.symbol) for o in orders or ()}
 
 
 def open_orders(client) -> list:
@@ -284,9 +291,11 @@ def committed_to_buys(orders) -> float:
 
 
 def current_positions(client) -> list[Position]:
+    from engine.data_sources.alpaca_client import from_alpaca
+
     return [
         Position(
-            ticker=p.symbol.upper(),
+            ticker=from_alpaca(p.symbol),
             qty=float(p.qty or 0.0),
             market_value=float(p.market_value or 0.0),
         )
@@ -366,8 +375,10 @@ def submit(
         )
         return True          # cleared the rails; see the docstring on why not False
 
+    from engine.data_sources.alpaca_client import to_alpaca
+
     req = MarketOrderRequest(
-        symbol=order.ticker.upper(),
+        symbol=to_alpaca(order.ticker),
         side=OrderSide.BUY if order.side == "buy" else OrderSide.SELL,
         time_in_force=TimeInForce.DAY,       # fractional orders accept DAY only
         client_order_id=order_id,

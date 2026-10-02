@@ -34,6 +34,25 @@ class AlpacaConfigError(RuntimeError):
     pass
 
 
+# Class shares are spelled two ways. Everything on our side writes BRK-B: the
+# S&P snapshot, SEC's ticker list, Finnhub, yfinance, the journal, the price
+# cache. Alpaca writes BRK.B, and answers "invalid symbol: BRK-B" — so until
+# Oct 2026 BRK-B and BF-B never had a price, the leaderboard ranked them with
+# no momentum score and the validation job reconstructed nothing for them.
+# Convert at the boundary, both ways, so no other module sees Alpaca's form: a
+# position that came back as BRK.B while the bot's targets said BRK-B would
+# read as "held, not in the book" and be sold.
+
+def to_alpaca(ticker: str) -> str:
+    """Our ticker -> the symbol Alpaca expects (BRK-B -> BRK.B)."""
+    return (ticker or "").strip().upper().replace("-", ".")
+
+
+def from_alpaca(symbol: str) -> str:
+    """Alpaca's symbol -> our ticker (BRK.B -> BRK-B)."""
+    return (symbol or "").strip().upper().replace(".", "-")
+
+
 # A one-day move this large is almost always a corporate-action artefact rather
 # than a price. Real ones happen (GL fell 53% on a short-seller report), which
 # is why this only triggers a COMPARISON rather than a correction.
@@ -112,9 +131,9 @@ def get_latest_quote(ticker: str, feed: str = "delayed_sip") -> dict:
     the default `iex` feed, whose single-venue quotes are often wildly wide/stale
     (e.g. AAPL bid 291.60 / ask 321.19 vs. a real 308.44 / 308.47). Drives the
     bid/ask on the Paper Trading page and the portfolio's backup mid-price."""
-    ticker = ticker.upper()
-    req = StockLatestQuoteRequest(symbol_or_symbols=ticker, feed=feed)
-    quote = _data_client().get_stock_latest_quote(req)[ticker]
+    ticker, symbol = from_alpaca(ticker), to_alpaca(ticker)
+    req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=feed)
+    quote = _data_client().get_stock_latest_quote(req)[symbol]
     return {
         "ticker": ticker,
         "ask_price": quote.ask_price,
@@ -128,9 +147,9 @@ def get_latest_trade(ticker: str, feed: str = "iex") -> dict:
     """The most recent trade price. Defaults to `iex` (real-time-ish) — the
     'current price' on the Paper Trading page, and already accurate for liquid
     names, unlike the IEX *quote*."""
-    ticker = ticker.upper()
-    req = StockLatestTradeRequest(symbol_or_symbols=ticker, feed=feed)
-    trade = _data_client().get_stock_latest_trade(req)[ticker]
+    ticker, symbol = from_alpaca(ticker), to_alpaca(ticker)
+    req = StockLatestTradeRequest(symbol_or_symbols=symbol, feed=feed)
+    trade = _data_client().get_stock_latest_trade(req)[symbol]
     return {"ticker": ticker, "price": trade.price, "timestamp": trade.timestamp.isoformat(), "feed": feed}
 
 
@@ -154,7 +173,7 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
     against the live API: end-of-start-of-day returns 31 Aug, 21:00 UTC returns
     1 Sep, and now-minus-5-minutes is a 403.
     """
-    ticker = ticker.upper()
+    symbol = to_alpaca(ticker)
     end_dt = datetime.combine(end, time.max)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         minutes=RECENT_DATA_LAG_MINUTES)
@@ -164,7 +183,7 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
         return []                    # window entirely inside the delay period
 
     req = StockBarsRequest(
-        symbol_or_symbols=ticker,
+        symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=start_dt,
         end=end_dt,
@@ -188,7 +207,7 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
         # adjustment). The two sources silently disagreed before.
         adjustment="split",
     )
-    bars = _data_client().get_stock_bars(req)[ticker]
+    bars = _data_client().get_stock_bars(req)[symbol]
 
     # Neither adjustment mode is right for every name, so pick the one that
     # actually produces a continuous series.
@@ -207,9 +226,9 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
     # The extra call only happens on the rare name that trips the threshold.
     if _largest_one_day_move(bars) > SPLIT_CLIFF_MOVE:
         try:
-            raw_req = StockBarsRequest(symbol_or_symbols=ticker, timeframe=TimeFrame.Day,
+            raw_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
                                        start=start_dt, end=end_dt, adjustment="raw")
-            raw_bars = _data_client().get_stock_bars(raw_req)[ticker]
+            raw_bars = _data_client().get_stock_bars(raw_req)[symbol]
             if raw_bars and _largest_one_day_move(raw_bars) < _largest_one_day_move(bars):
                 bars = raw_bars
         except Exception:                # noqa: BLE001 — a second opinion, not a requirement
@@ -277,7 +296,7 @@ def get_account() -> dict:
 def get_positions() -> list[dict]:
     return [
         {
-            "symbol": p.symbol,
+            "symbol": from_alpaca(p.symbol),
             "qty": _num(p.qty),
             "side": _enum_value(p.side),
             "avg_entry_price": _num(p.avg_entry_price),
@@ -295,7 +314,7 @@ def get_positions() -> list[dict]:
 def _order_to_dict(o) -> dict:
     return {
         "id": str(o.id),
-        "symbol": o.symbol,
+        "symbol": from_alpaca(o.symbol),
         "qty": _num(o.qty),
         "filled_qty": _num(o.filled_qty),
         "side": _enum_value(o.side),
@@ -328,7 +347,7 @@ def _order_side(side: str) -> OrderSide:
 
 def submit_market_order(symbol: str, qty: float, side: str) -> dict:
     req = MarketOrderRequest(
-        symbol=symbol.upper(), qty=qty, side=_order_side(side), time_in_force=TimeInForce.DAY
+        symbol=to_alpaca(symbol), qty=qty, side=_order_side(side), time_in_force=TimeInForce.DAY
     )
     return _order_to_dict(_trading_client().submit_order(req))
 
@@ -337,7 +356,7 @@ def submit_limit_order(symbol: str, qty: float, side: str, limit_price: float, e
     # extended_hours=True routes to pre-market / after-hours / the overnight
     # (24/5) session — Alpaca only allows this on limit DAY orders.
     req = LimitOrderRequest(
-        symbol=symbol.upper(), qty=qty, side=_order_side(side),
+        symbol=to_alpaca(symbol), qty=qty, side=_order_side(side),
         time_in_force=TimeInForce.DAY, limit_price=limit_price, extended_hours=extended_hours,
     )
     return _order_to_dict(_trading_client().submit_order(req))

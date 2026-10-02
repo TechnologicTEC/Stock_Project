@@ -404,7 +404,7 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     # order is invisible to it — see executor.open_order_tickers for the holiday
     # case that turns into a doubled position.
     unfilled = executor.open_orders(trading_client)
-    pending = {(o.symbol or "").upper() for o in unfilled}
+    pending = executor.open_order_tickers_from(unfilled)
     held_back = [o for o in orders if o.ticker.upper() in pending] if pending else []
     if pending:
         _log(f"  {len(pending)} symbol(s) with unfilled orders: {', '.join(sorted(pending))}")

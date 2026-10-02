@@ -131,8 +131,9 @@ def fetch_splits(key_env_prefix: str, tickers, start: date_, end: date_) -> dict
     import requests
 
     from engine.bot import accounts
+    from engine.data_sources.alpaca_client import from_alpaca, to_alpaca
 
-    tickers = sorted({(t or "").upper() for t in tickers if t})
+    tickers = sorted({to_alpaca(t) for t in tickers if t})
     if not tickers:
         return {}
 
@@ -154,7 +155,7 @@ def fetch_splits(key_env_prefix: str, tickers, start: date_, end: date_) -> dict
     out: dict[str, list[dict]] = {}
     for events in payload.values():
         for event in events or ():
-            symbol = (event.get("symbol") or "").upper()
+            symbol = from_alpaca(event.get("symbol"))
             raw_date = event.get("ex_date") or event.get("process_date")
             if not symbol or not raw_date:
                 continue
