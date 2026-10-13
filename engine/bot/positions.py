@@ -89,7 +89,17 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
 
         shares = fill.get("qty")              # as journalled, before any estimate
         qty = shares
-        if qty is None and value and fill_price:
+        # What the broker actually filled, once a live run has recorded it
+        # (engine/bot/fill_sync). Exact, so it replaces the estimate below —
+        # shares AND cost, since a $181.79 order buys $181.79 at the fill
+        # price, not at the open.
+        filled = fill.get("filled_qty")
+        filled_px = fill.get("filled_avg_price")
+        if filled is not None:
+            qty = abs(float(filled))
+            if filled_px:
+                value = qty * float(filled_px)
+        elif qty is None and value and fill_price:
             price = fill_price(ticker, day)
             qty = (value / price) if price else None
         qty = abs(float(qty)) if qty is not None else None
@@ -101,7 +111,8 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
         if _is_buy(fill.get("action")):
             if held is None:
                 book[ticker] = {"qty": qty or 0.0, "cost": value or 0.0,
-                                "since": day, "opened_at": when}
+                                "since": day, "opened_at": when,
+                                "filled": filled is not None}
             else:
                 held["qty"] += qty or 0.0
                 held["cost"] += value or 0.0
@@ -162,6 +173,13 @@ def fill_price_lookup(bars: dict[str, list]):
         return None
 
     return _price
+
+
+def confirmed(fills: list[dict]) -> set[str]:
+    """Tickers whose current holding opened with a fill the broker has
+    confirmed (recorded by fill_sync). Those are held, not pending, whatever
+    the snapshot timing says — see `enrich`."""
+    return {t for t, h in book_from_fills(fills).items() if h.get("filled")}
 
 
 def opened_at(fills: list[dict]) -> dict[str, datetime]:
@@ -335,7 +353,8 @@ def _is_pending(opened: date_ | None, when: datetime | None,
 
 def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
            since=None, opened_at=None, today: date_ | None = None,
-           confirmed_through: date_ | None = None) -> list[dict]:
+           confirmed_through: date_ | None = None,
+           filled: set[str] | None = None) -> list[dict]:
     """Join broker (or reconstructed) positions to everything else the page knows.
 
     Adds `name`, `weight` (share of equity), `days_held`, `score`/`rank`/
@@ -365,6 +384,11 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
     timestamp so `_is_pending` can ask the real question. Without it the
     comparison falls back to dates alone, which is the old behaviour.
 
+    `filled` settles it where it can: a holding whose opening order the broker
+    has confirmed (`confirmed(fills)`) is never pending. The timing rule above
+    is the fallback for the gap between a fill at the open and the next run
+    recording it.
+
     Marked `pending` rather than hidden: an order the bot has placed is real and
     worth showing — it just isn't a holding yet. Pass `confirmed_through=None`
     (the live broker path, where every row IS a position) and nothing is flagged.
@@ -375,6 +399,7 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
     names, ranks = names or {}, ranks or {}
     reasons, since = reasons or {}, since or {}
     opened_at = opened_at or {}
+    filled = filled or set()
 
     rows = []
     for position in positions or ():
@@ -389,7 +414,8 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
         row["reason"] = reasons.get(ticker)
         row["since"] = opened
         row["days_held"] = (today - opened).days if (opened and today) else None
-        row["pending"] = _is_pending(opened, opened_at.get(ticker), confirmed_through)
+        row["pending"] = (ticker not in filled
+                          and _is_pending(opened, opened_at.get(ticker), confirmed_through))
         row.update(ranks.get(ticker) or
                    {"score": None, "rank": None, "recommendation": None})
         rows.append(row)

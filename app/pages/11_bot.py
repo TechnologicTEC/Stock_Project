@@ -733,6 +733,8 @@ for tab, r in zip(tabs, tab_rows):
                 # The timestamp, not just the date: a run during market hours
                 # fills before that evening's snapshot. See positions._is_pending.
                 opened_at=bot_positions.opened_at(fills),
+                # A fill the broker confirmed is held, whatever the timing says.
+                filled=bot_positions.confirmed(fills),
                 today=now.date(),
                 # Live rows are positions by definition; only a replayed book can
                 # be holding an order that hasn't filled.

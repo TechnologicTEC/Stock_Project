@@ -169,6 +169,28 @@ def _check_unapplied_splits(strategy: str, run_id: str, config: dict, today: dat
         )
 
 
+def _sync_fills(strategy: str, client, *, dry_run: bool = False) -> None:
+    """Record what the broker did with this strategy's earlier orders.
+
+    See engine/bot/fill_sync. Updates journal rows in place; never inserts one,
+    so it cannot make this run look like an earlier one. Skipped on a dry run,
+    which writes nothing real. Never raises: a broker read that fails leaves the
+    rows SUBMITTED for the next run, and must not stop this one trading.
+    """
+    if dry_run:
+        return
+    from engine.bot import fill_sync
+
+    try:
+        counts = fill_sync.sync(strategy, client)
+    except Exception as exc:                 # noqa: BLE001 — see docstring
+        _log(f"  fill sync: unavailable ({type(exc).__name__})")
+        return
+    if counts["filled"] or counts["cancelled"]:
+        _log(f"  fill sync: {counts['filled']} filled, {counts['cancelled']} cancelled, "
+             f"{counts['waiting']} still working")
+
+
 def _sync_official_equity(strategy: str, config: dict, client, now: datetime,
                           *, dry_run: bool = False) -> None:
     """Make the stored curve match the broker's official daily record.
@@ -353,6 +375,7 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
     _log_price_freshness(today, now)
+    _sync_fills(strategy, trading_client, dry_run=dry_run)
     _check_unapplied_splits(strategy, run_id, config, today, dry_run=dry_run)
 
     # Gather, then decide. `prepare` is the only place a strategy does I/O; if it

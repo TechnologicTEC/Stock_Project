@@ -192,6 +192,52 @@ def mark_cancelled(order_ids: list[str]) -> int:
     return changed
 
 
+def awaiting_fill(strategy: str) -> list[dict]:
+    """This strategy's orders that reached the broker and have no recorded
+    outcome yet — the rows `fill_sync` asks Alpaca about. OLDEST first."""
+    with get_session() as session:
+        rows = session.execute(
+            select(BotDecision)
+            .where(BotDecision.strategy == strategy,
+                   BotDecision.status == SUBMITTED,
+                   BotDecision.client_order_id.is_not(None))
+            .order_by(BotDecision.decided_at)
+        ).scalars().all()
+        return [{"id": d.id, "client_order_id": d.client_order_id,
+                 "decided_at": d.decided_at} for d in rows]
+
+
+def record_outcomes(outcomes: list[dict]) -> int:
+    """Write back what the broker did with submitted orders. Returns rows changed.
+
+    Each outcome is `{client_order_id, status, filled_qty, filled_avg_price,
+    filled_at, note}` from `fill_sync.outcome`. Only rows still reading
+    SUBMITTED are touched, the same rule as `mark_cancelled`: a recorded fill
+    is never rewritten. Updates rows in place and never inserts one — an
+    inserted row would read as a run (see screener_common.run_dates).
+    """
+    by_id = {o["client_order_id"]: o for o in outcomes if o.get("client_order_id")}
+    if not by_id:
+        return 0
+    changed = 0
+    with get_session() as session:
+        rows = session.execute(
+            select(BotDecision)
+            .where(BotDecision.client_order_id.in_(list(by_id)))
+            .where(BotDecision.status == SUBMITTED)
+        ).scalars().all()
+        for row in rows:
+            o = by_id[row.client_order_id]
+            row.status = o["status"]
+            row.filled_qty = o.get("filled_qty")
+            row.filled_avg_price = o.get("filled_avg_price")
+            row.filled_at = o.get("filled_at")
+            if o.get("note"):
+                row.reason = f"{o['note']} {row.reason}"
+            changed += 1
+    return changed
+
+
 def recent_decisions(strategy: str | None = None, limit: int = 50) -> list[dict]:
     """Newest-first, for the bot page. `strategy=None` spans all of them."""
     with get_session() as session:
@@ -205,6 +251,8 @@ def recent_decisions(strategy: str | None = None, limit: int = 50) -> list[dict]
                 "decided_at": d.decided_at, "action": d.action, "reason": d.reason,
                 "status": d.status, "blocked_by": d.blocked_by,
                 "qty": d.qty, "notional": d.notional,
+                "filled_qty": d.filled_qty, "filled_avg_price": d.filled_avg_price,
+                "filled_at": d.filled_at,
                 "inputs": json.loads(d.inputs_json) if d.inputs_json else None,
             }
             for d in rows
@@ -226,10 +274,11 @@ def fills(strategy: str) -> list[dict]:
     full exit leaves no dust). Requiring a quantity here would silently drop
     every buy the bot has ever made and rebuild every book as empty.
 
-    SUBMITTED counts as a trade because the journal has no filled state to move
-    to — `scripts/check_fills.py` grades fills by reading Alpaca and does not
-    write back. So SUBMITTED means "reached the broker and was not pulled";
-    CANCELLED and ERROR rows are excluded by the same filter.
+    SUBMITTED and FILLED both count. Each live run moves an order to FILLED,
+    with the broker's own share count and price, once Alpaca has filled it
+    (engine/bot/fill_sync); until then SUBMITTED means "reached the broker and
+    was not pulled", and the replay estimates. CANCELLED and ERROR rows are
+    excluded by the same filter.
     """
     with get_session() as session:
         rows = session.execute(
@@ -245,7 +294,8 @@ def fills(strategy: str) -> list[dict]:
             {
                 "ticker": d.ticker, "decided_at": d.decided_at, "action": d.action,
                 "qty": d.qty, "notional": d.notional, "reason": d.reason,
-                "status": d.status,
+                "status": d.status, "filled_qty": d.filled_qty,
+                "filled_avg_price": d.filled_avg_price, "filled_at": d.filled_at,
             }
             for d in rows
         ]

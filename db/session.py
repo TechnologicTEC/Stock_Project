@@ -279,6 +279,13 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("cash_flows", "user_id", "ALTER TABLE cash_flows ADD COLUMN user_id INTEGER"),
     ("screener_scores", "user_id", "ALTER TABLE screener_scores ADD COLUMN user_id INTEGER"),
     ("backtest_runs", "user_id", "ALTER TABLE backtest_runs ADD COLUMN user_id INTEGER"),
+    # The one exception to "no more entries" above, by choice (Oct 2026): the
+    # bot reads these columns on every run and page load, so a local db file
+    # created before them would fail outright. Postgres gets them from Alembic
+    # revision e2a7c5f19b03.
+    ("bot_decisions", "filled_qty", "ALTER TABLE bot_decisions ADD COLUMN filled_qty FLOAT"),
+    ("bot_decisions", "filled_avg_price", "ALTER TABLE bot_decisions ADD COLUMN filled_avg_price FLOAT"),
+    ("bot_decisions", "filled_at", "ALTER TABLE bot_decisions ADD COLUMN filled_at DATETIME"),
 ]
 
 

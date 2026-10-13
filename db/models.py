@@ -380,6 +380,13 @@ class BotDecision(Base):
     client_order_id: Mapped[str | None] = mapped_column(String(80), index=True, nullable=True)
     qty: Mapped[float | None] = mapped_column(Float, nullable=True)
     notional: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What the broker actually did with the order, written back by the next
+    # live run (engine/bot/fill_sync). `qty`/`notional` are what was ASKED for;
+    # these are what happened. Null until then, and for good on a row that
+    # never reached the broker.
+    filled_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filled_avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filled_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
 class BotEquitySnapshot(Base):
