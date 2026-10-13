@@ -62,7 +62,17 @@ def bot_tickers(days: int = BOT_LOOKBACK_DAYS) -> list[str]:
     Read from the journal rather than from Alpaca so this needs no broker keys,
     and so a name stays covered after it is sold — a past fill is still worth
     grading.
+
+    Plus every name a bot still HOLDS, however long ago it was bought. The
+    30-day order window alone dropped a name a month after its only buy: NVTS
+    (bought 3 Sep) stopped updating on 6 Oct, and the keyless bot page priced
+    it at $11.97 while Alpaca had it at $10.25 — the creator panel's holdings
+    added up to ~$520 more than the account was worth. S&P names bought on
+    1 Sep fell back to the weekly screen's prices the same way. Held is the
+    same journal replay the page uses, so the two can't disagree about it.
     """
+    from engine.bot import journal, positions
+
     cutoff = date.today() - timedelta(days=days)
     with get_session() as s:
         rows = s.execute(text(
@@ -70,7 +80,11 @@ def bot_tickers(days: int = BOT_LOOKBACK_DAYS) -> list[str]:
             "WHERE ticker IS NOT NULL AND status IN ('submitted', 'filled') "
             "AND decided_at >= :cutoff"
         ), {"cutoff": cutoff}).all()
-    return sorted({(r[0] or "").upper() for r in rows if r[0]})
+        strategies = [r[0] for r in s.execute(text(
+            "SELECT DISTINCT strategy FROM bot_decisions")).all()]
+    held = {t for strategy in strategies
+            for t in positions.held_since(journal.fills(strategy))}
+    return sorted({(r[0] or "").upper() for r in rows if r[0]} | held)
 
 
 def main() -> None:

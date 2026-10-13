@@ -113,3 +113,33 @@ def test_one_bot_price_failure_does_not_abort_the_rest():
             patch.object(warm_cache.price_history, "refresh", side_effect=flaky))
         warm_cache.main()
     assert "GOOG" in [c.args[0] for c in refresh.call_args_list]
+
+
+# --------------------------------------------------------------------------
+# bot_tickers itself, against real journal rows (the tests above stub it out).
+#
+# It used to cover only names ORDERED in the last 30 days, so a name bought
+# once and held dropped off a month later: NVTS (bought 3 Sep) stopped
+# updating on 6 Oct, and the keyless bot page valued it at a week-old price.
+# --------------------------------------------------------------------------
+
+def _journal(ticker, action, days_ago, *, qty=None, notional=None, strategy="creator_conviction"):
+    from datetime import datetime, timedelta
+    from db.models import BotDecision
+    from db.session import get_session
+    with get_session() as s:
+        s.add(BotDecision(
+            run_id="r", strategy=strategy, ticker=ticker, action=action, reason="t",
+            status="submitted", qty=qty, notional=notional,
+            decided_at=datetime.utcnow() - timedelta(days=days_ago)))
+
+
+def test_a_name_still_held_is_warmed_however_long_ago_it_was_bought():
+    _journal("NVTS", "buy", 40, notional=2_750.0)                 # held, bought long ago
+    _journal("CF", "buy", 60, notional=500.0, strategy="score_threshold")
+    _journal("CF", "sell", 45, qty=4.0, strategy="score_threshold")  # closed long ago
+    _journal("MU", "buy", 2, notional=600.0, strategy="composite_rebalance")
+    got = warm_cache.bot_tickers()
+    assert "NVTS" in got            # the bug: dropped 30 days after its only buy
+    assert "MU" in got              # recent orders still covered
+    assert "CF" not in got          # sold and outside the window: nothing to price
