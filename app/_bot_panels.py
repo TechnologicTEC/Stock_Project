@@ -261,7 +261,19 @@ def _score_threshold(cfg: dict, view: dict) -> None:
 # Creator conviction — each holding's clock, and the queue waiting for cash
 # --------------------------------------------------------------------------
 
+# Short words for why the liquidity screen passed a queued name over; the full
+# reason is the pill's tooltip.
+_SKIP_LABEL = {
+    "penny": "under $1",
+    "illiquid": "thinly traded",
+    "unmeasured": "no price data",
+    "thin_history": "too little history",
+    "participation": "order too large",
+}
+
+
 def _creator(cfg: dict, view: dict) -> None:
+    from engine.bot import liquidity, risk
     from engine.bot import positions as bot_positions
     from engine.bot.strategies import creator_conviction as cc
 
@@ -291,6 +303,21 @@ def _creator(cfg: dict, view: dict) -> None:
     queue = sorted((e for e in board if cc.qualifies(e)[0]
                     and (e.get("ticker") or "").upper() not in held), key=cc.stack_key)
 
+    # The bot walks this queue through the liquidity screen and passes over a
+    # name that fails it; the panel used to number every qualifier, so a thin
+    # name could read "queued 1" while the bot skipped it. Same screen, same
+    # price fetch (see _cache.bot_liquidity_frames). The order size only feeds
+    # the participation test, which can't bind below ~$200k of equity, so the
+    # configured starting equity is a safe stand-in where the live figure isn't
+    # available (the keyless Space).
+    slots = int(cfg.get("target_slots") or cc.DEFAULT_SLOTS)
+    equity = view.get("equity") or float(cfg.get("starting_equity") or 10_000.0)
+    notional = risk.position_notional(equity, slots, cfg.get("max_position_pct") or 1.0)
+    frames = _cache.bot_liquidity_frames(tuple((e.get("ticker") or "").upper() for e in queue))
+    _tradable, excluded = liquidity.screen([(e.get("ticker") or "").upper() for e in queue],
+                                           frames, notional)
+    skipped = {a.ticker.upper(): a for a in excluded}
+
     # Held first, the one closest to being sold at the top; then the queue in the
     # order it would be bought.
     held_order = sorted(held, key=lambda t: (clocks[t].until if clocks.get(t) else date.min, t))
@@ -298,17 +325,23 @@ def _creator(cfg: dict, view: dict) -> None:
     rows += [(e, False) for e in queue]
 
     body = []
-    for place, (e, is_held) in enumerate(rows[:14]):
+    position = 0                                  # place in the order the bot would buy
+    for e, is_held in rows[:14]:
         ticker = (e.get("ticker") or "").upper()
         bull = int((e.get("stances") or {}).get("bullish") or 0)
         seen = e.get("last_seen")
+        left = None
         if is_held:
             c = clocks.get(ticker)
             left = c.days_left(today) if c else None
             flag = '<span class="cp-pill">held</span>'
+        elif ticker in skipped:
+            a = skipped[ticker]
+            flag = (f'<span class="cp-pill" title="{_esc(a.reason)}">skipped: '
+                    f'{_esc(_SKIP_LABEL.get(a.code, a.code))}</span>')
         else:
-            left = None
-            flag = f'<span class="cp-pill">queued {place - len(held_order) + 1}</span>'
+            position += 1
+            flag = f'<span class="cp-pill">queued {position}</span>'
         links = " ".join(_video_link(v) for v in (e.get("videos") or [])[:4] if v.get("url"))
         body.append(
             f'<tr><td><span class="tick">{_esc(ticker)}</span> {flag}</td>'
@@ -318,7 +351,6 @@ def _creator(cfg: dict, view: dict) -> None:
             f'<td class="num">{left if left is not None else "—"}</td>'
             f'<td class="dim">{links or "—"}</td></tr>')
 
-    slots = int(cfg.get("target_slots") or cc.DEFAULT_SLOTS)
     added = cc.DAYS_ADDED
     _theme.panel(
         "Holdings and the queue",
@@ -334,11 +366,14 @@ def _creator(cfg: dict, view: dict) -> None:
         f"bullish mention, +{added['neutral']} for a neutral one, never above "
         f"{cc.MAX_DAYS_LEFT}; at zero it is sold. <b>Queued</b> names clear the bar and are "
         "waiting for a slot and the cash — newest mention first, the number is the order "
-        "they would be bought in.</p>"
+        f"they would be bought in. A queued name must also pass the liquidity check (at least "
+        f"${liquidity.MIN_CLOSE:,.0f} a share and ${liquidity.MIN_DOLLAR_VOLUME / 1e6:,.0f}M a day "
+        "traded); one that fails is shown as <b>skipped</b> and the bot passes over it.</p>"
         + (f'<p class="cp-foot">Newest mention anywhere is {silence} day(s) old; the run refuses '
            f"past {cc.MAX_FEED_SILENCE_DAYS}, so a stalled scan cannot run every clock down "
            "and liquidate the book.</p>" if silence is not None else ""),
-        tag=f"{len(held)} held · {len(queue)} queued",
+        tag=f"{len(held)} held · {len(queue) - len(skipped)} queued"
+            + (f" · {len(skipped)} skipped" if skipped else ""),
     )
 
 

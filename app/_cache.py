@@ -202,6 +202,19 @@ def bot_creator_clock_inputs() -> tuple[dict, dict]:
 
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_liquidity_frames(tickers: tuple[str, ...]) -> dict:
+    """Price frames for the creator queue's liquidity check — the same fetch
+    the strategy's prepare() makes, so the panel judges what the bot judges.
+    Cached, because a name not yet in the price cache is fetched on first read."""
+    from engine.bot import liquidity
+
+    try:
+        return liquidity.fetch_frames(tickers, date.today())
+    except Exception:                        # noqa: BLE001 — a panel, not the page
+        return {}
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def bot_position_names(tickers: tuple[str, ...]) -> dict[str, str]:
     """{TICKER: company name} for a strategy's holdings.
 

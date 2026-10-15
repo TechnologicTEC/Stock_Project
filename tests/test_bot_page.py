@@ -114,7 +114,7 @@ _UNSET = object()      # so `spread=None` can mean "no snapshot yet", not "defau
 
 def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET,
-         fills=_UNSET, names=_UNSET, rebuilt=_UNSET, clock=_UNSET):
+         fills=_UNSET, names=_UNSET, rebuilt=_UNSET, clock=_UNSET, liquidity=_UNSET):
     """Render the page with every external read stubbed.
 
     The panel readers are stubbed here too. Without them the strategy panels
@@ -147,6 +147,8 @@ def _run(configs=None, curve=None, decisions=None, view=None, env=None,
                return_value=_spread() if spread is _UNSET else spread), \
          patch("app._cache.bot_sma_frame",
                return_value=_sma() if sma is _UNSET else sma), \
+         patch("app._cache.bot_liquidity_frames",
+               side_effect=_liquid_frames if liquidity is _UNSET else liquidity), \
          patch.dict("os.environ", env or {}, clear=False):
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=60)
@@ -536,6 +538,18 @@ def _creator_mention(ticker, days_ago, bullish=3):
                         "stance": "bullish"}] * bullish}
 
 
+def _frame(close, volume, sessions=60):
+    import pandas as pd
+    days = pd.bdate_range(end=datetime.now().date(), periods=sessions).date
+    return pd.DataFrame({"open": close, "high": close, "low": close, "close": close,
+                         "volume": volume}, index=pd.Index(days, name="date"))
+
+
+def _liquid_frames(tickers):
+    """Every name trades $100M a day at $100, so it clears the liquidity screen."""
+    return {t: _frame(100.0, 1_000_000) for t in tickers}
+
+
 def _held(ticker):
     return {"ticker": ticker, "qty": 10.0, "avg_entry_price": 100.0,
             "current_price": 110.0, "market_value": 1_100.0, "unrealized_pl": 100.0,
@@ -798,3 +812,33 @@ def test_two_affected_names_both_appear():
 
 def test_nothing_is_shown_when_no_split_was_missed():
     assert "broker artefact" not in _body(_run())
+
+
+# --------------------------------------------------------------------------
+# The queue goes through the same liquidity screen the bot does.
+# --------------------------------------------------------------------------
+
+def test_a_queued_name_the_bot_would_pass_over_is_shown_as_skipped():
+    """VNRX traded around $0.38 while it was in the creator window. The bot's
+    screen passes over anything under $1; the panel used to number it in line
+    regardless, so a name the bot would never buy could read 'queued 1'."""
+    def frames(tickers):
+        out = _liquid_frames(tickers)
+        out["VNRX"] = _frame(0.38, 50_000_000)          # $19M a day, but under $1
+        return out
+
+    mentions = [_creator_mention("VNRX", 1), _creator_mention("AMZN", 2)]
+    at = _run(configs=[_config("creator_conviction", target_slots=8)],
+              mentions=mentions, view=_account_view(positions=[]), liquidity=frames)
+    text = _page_text(at)
+    assert "skipped: under $1" in text
+    assert "queued 1" in text and "queued 2" not in text   # AMZN is first in line
+    assert "0 held · 1 queued · 1 skipped" in text
+
+
+def test_every_reason_the_screen_can_give_has_a_label():
+    from app import _bot_panels
+    from engine.bot import liquidity
+    codes = {liquidity.PENNY, liquidity.ILLIQUID, liquidity.UNMEASURED,
+             liquidity.THIN_HISTORY, liquidity.PARTICIPATION}
+    assert codes <= set(_bot_panels._SKIP_LABEL)
