@@ -31,7 +31,7 @@ def _row(m: dict) -> str:
     return (
         f"<tr><td {_TD}><strong>{m['ticker']}</strong></td>"
         f"<td {_TD}>{m.get('company_name') or '—'}</td>"
-        f"<td {_TD}>{_STANCE.get(m.get('stance'), '—')}</td>"
+        f"<td {_TD}>{'Sponsored' if m.get('sponsored') else _STANCE.get(m.get('stance'), '—')}</td>"
         f"<td {_TD}>{score}</td>"
         f"<td {_TD}>{m.get('recommendation') or '—'}</td></tr>"
     )

@@ -286,6 +286,8 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("bot_decisions", "filled_qty", "ALTER TABLE bot_decisions ADD COLUMN filled_qty FLOAT"),
     ("bot_decisions", "filled_avg_price", "ALTER TABLE bot_decisions ADD COLUMN filled_avg_price FLOAT"),
     ("bot_decisions", "filled_at", "ALTER TABLE bot_decisions ADD COLUMN filled_at DATETIME"),
+    # Same reasoning, Postgres revision a3c9e7d15f22.
+    ("video_mentions", "sponsored", "ALTER TABLE video_mentions ADD COLUMN sponsored BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

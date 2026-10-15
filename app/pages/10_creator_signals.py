@@ -167,7 +167,8 @@ for sig in signals:
         c = st.columns([1.2, 3, 1.7, 1.4, 1.7, 1.4])
         c[0].markdown(f"**{m['ticker']}**")
         c[1].write(m["company_name"] or "—")
-        c[2].write(_STANCE.get(m["stance"], "· —"))
+        # A paid segment is shown, but as what it is rather than as a view.
+        c[2].write("💲 Sponsored" if m.get("sponsored") else _STANCE.get(m["stance"], "· —"))
         c[3].write(f"{m['screener_score']:.0f}/100" if m["screener_score"] is not None else "—")
         c[4].write(m["recommendation"] or "—")
         _add_button(c[5], m["ticker"], key=f"add_{sig['video_id']}_{m['ticker']}")

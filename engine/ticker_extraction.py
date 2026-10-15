@@ -38,6 +38,7 @@ class Mention:
     company_name: str | None = None
     stance: str = "unknown"           # bullish | bearish | neutral | unknown
     confidence: float | None = None
+    sponsored: bool = False           # set by engine/sponsorship after extraction
 
 
 class TransientExtractionError(RuntimeError):

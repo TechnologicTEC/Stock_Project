@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date as date_, datetime
 
-from sqlalchemy import Float, String, Text, UniqueConstraint
+from sqlalchemy import Float, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from engine.time_utils import utcnow
@@ -318,6 +318,10 @@ class VideoMention(Base):
     screener_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)
     screened_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # The creator was paid to present this stock (a "sponsored segment"). Kept
+    # and shown, but never counted as the creator's view — see
+    # engine/sponsorship.py and creator_signals.mention_leaderboard.
+    sponsored: Mapped[bool] = mapped_column(default=False, server_default=false())
 
 
 # --------------------------------------------------------------------------

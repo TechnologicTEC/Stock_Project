@@ -128,6 +128,13 @@ def _screen_and_store_mentions(video_id: str, transcript: str) -> int:
     if not mentions:
         print(f"    {video_id} mentions: none", flush=True)
         return 0
+    # Before anything is stored: a mention from a paid segment must never be
+    # stored as the creator's own view, even for one run. May raise
+    # TransientExtractionError too, which defers the whole video.
+    from engine import sponsorship
+    paid = sponsorship.sponsored_tickers(transcript, mentions)
+    for m in mentions:
+        m.sponsored = m.ticker in paid
 
     scored = {}
     try:
@@ -143,8 +150,10 @@ def _screen_and_store_mentions(video_id: str, transcript: str) -> int:
                 video_id=video_id, ticker=m.ticker, company_name=m.company_name, stance=m.stance,
                 confidence=m.confidence, screener_score=(r.overall_score if r else None),
                 recommendation=(r.recommendation if r else None), screened_at=utcnow(),
+                sponsored=m.sponsored,
             ))
-    print(f"    {video_id} mentions: {', '.join(f'{m.ticker}[{m.stance}]' for m in mentions)}", flush=True)
+    labels = [f"{m.ticker}[{m.stance}{', sponsored' if m.sponsored else ''}]" for m in mentions]
+    print(f"    {video_id} mentions: {', '.join(labels)}", flush=True)
     return len(mentions)
 
 
@@ -221,7 +230,7 @@ def _shape(s, video: CreatorVideo, creators: dict) -> dict:
         "mentions": [{
             "ticker": m.ticker, "company_name": m.company_name, "stance": m.stance,
             "screener_score": m.screener_score, "recommendation": m.recommendation,
-            "confidence": m.confidence,
+            "confidence": m.confidence, "sponsored": bool(m.sponsored),
         } for m in mentions],
     }
 
@@ -289,6 +298,9 @@ def mention_leaderboard(days: int = LEADERBOARD_DAYS,
             select(VideoMention, CreatorVideo.published_at, CreatorVideo.processed_at,
                    CreatorVideo.title, CreatorVideo.url)
             .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
+            # A paid segment is an advert, not the creator coming back to a
+            # stock — Tane, 16 Oct 2026. See engine/sponsorship.
+            .where(VideoMention.sponsored.is_(False))
         ).all()
 
     tally: dict[str, dict] = {}
@@ -350,6 +362,7 @@ def mention_history(tickers, since: datetime) -> dict[str, list[tuple[datetime, 
                    CreatorVideo.published_at, CreatorVideo.processed_at)
             .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
             .where(VideoMention.ticker.in_(wanted))
+            .where(VideoMention.sponsored.is_(False))   # a paid segment adds no days
         ).all()
 
     out: dict[str, list[tuple[datetime, str]]] = {}
@@ -375,6 +388,7 @@ def ticker_stance(ticker: str, days: int = LEADERBOARD_DAYS) -> dict | None:
             select(VideoMention.stance, CreatorVideo.published_at, CreatorVideo.processed_at)
             .join(CreatorVideo, CreatorVideo.video_id == VideoMention.video_id)
             .where(VideoMention.ticker == ticker)
+            .where(VideoMention.sponsored.is_(False))   # an advert is not sentiment
         ).all()
 
     counts = {"bullish": 0, "bearish": 0, "neutral": 0}
