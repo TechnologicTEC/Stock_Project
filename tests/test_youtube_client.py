@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from engine.data_sources import supadata_client
 from engine.data_sources import youtube_client as yt
 
 _FEED = """<?xml version="1.0" encoding="UTF-8"?>
@@ -55,9 +56,14 @@ def test_latest_videos_raises_after_all_retries_fail():
             yt.latest_videos("UCxxxx", retries=2)
 
 
+# A transcript has to read as English to be kept (yt.looks_english), so the
+# fixtures say something, rather than "hello world".
+_SPOKEN = "In this video we look at the market and the stocks that you want to own."
+
+
 def test_get_transcript_ok_and_empty():
-    with patch("engine.data_sources.youtube_client._fetch_transcript_text", return_value="hello world"):
-        assert yt.get_transcript("v") == ("ok", "hello world")
+    with patch("engine.data_sources.youtube_client._fetch_transcript_text", return_value=_SPOKEN):
+        assert yt.get_transcript("v") == ("ok", _SPOKEN)
     with patch("engine.data_sources.youtube_client._fetch_transcript_text", return_value="   "):
         assert yt.get_transcript("v") == ("no_captions", None)
 
@@ -90,9 +96,9 @@ _CHANNEL_HTML = (
 
 def test_get_transcript_prefers_supadata_when_configured():
     with patch("engine.data_sources.supadata_client.is_configured", return_value=True), \
-         patch("engine.data_sources.supadata_client.get_transcript_text", return_value="body"), \
+         patch("engine.data_sources.supadata_client.get_transcript_text", return_value=_SPOKEN), \
          patch("engine.data_sources.youtube_client._direct_transcript") as direct:
-        assert yt.get_transcript("v") == ("ok", "body")
+        assert yt.get_transcript("v") == ("ok", _SPOKEN)
     direct.assert_not_called()
 
 
@@ -129,8 +135,8 @@ def test_supadata_quota_failure_falls_back_to_the_direct_path():
 
 def test_get_transcript_uses_direct_path_when_supadata_unconfigured():
     with patch("engine.data_sources.supadata_client.is_configured", return_value=False), \
-         patch("engine.data_sources.youtube_client._direct_transcript", return_value=("ok", "t")) as direct:
-        assert yt.get_transcript("v") == ("ok", "t")
+         patch("engine.data_sources.youtube_client._direct_transcript", return_value=("ok", _SPOKEN)) as direct:
+        assert yt.get_transcript("v") == ("ok", _SPOKEN)
     direct.assert_called_once()
 
 
@@ -251,3 +257,53 @@ def test_resolve_raises_when_page_has_no_channel_id():
                return_value=Mock(status_code=200, text="<html>nothing here</html>")):
         with pytest.raises(ValueError, match="Couldn't find a channel id"):
             yt.resolve_channel("@nobody")
+
+
+# --------------------------------------------------------------------------
+# Refusing a transcript that isn't English, whatever the source says.
+# --------------------------------------------------------------------------
+
+# From the stored 13 Oct 2026 ZipTrader transcript — machine-translated Bengali.
+_BENGALI = ("প্রথমত, চার্চিল ক্যাপিটাল একাদশ (Churchill Capital XI), বা সিসিসিআই (CCXI) । "
+            "সুতরাং, আপনাকে বুঝতে হবে, এটি বর্তমানে একটি স্প্যাক (SPAC) এবং এটি এজিলিটি "
+            "রোবোটিক্স নামক একটি হিউম্যানয়েড রোবট কোম্পানির সাথে একীভূত হচ্ছে।")
+# The same passage, from the English track of the same video.
+_ENGLISH = ("Number one, Churchill Capital XI, or CCXI. So, you have to understand, this one "
+            "right now is a SPAC, and it's merging with a humanoid robot company called "
+            "Agility Robotics. This is one that we've been talking about in the playbook.")
+_SPANISH = ("Numero uno, Churchill Capital XI, o CCXI. Hay que entender que ahora mismo es una "
+            "SPAC y se esta fusionando con una empresa de robots humanoides llamada Agility.")
+
+
+@pytest.mark.parametrize("text, english", [(_ENGLISH, True), (_BENGALI, False),
+                                           (_SPANISH, False), ("", False), (None, False)])
+def test_looks_english(text, english):
+    assert yt.looks_english(text) is english
+
+
+def test_supadata_saying_not_english_is_final_and_skips_the_direct_fetch():
+    err = supadata_client.NotEnglish("bn", ["bn", "en"])
+    with patch.object(supadata_client, "is_configured", return_value=True), \
+         patch.object(supadata_client, "get_transcript_text", side_effect=err), \
+         patch.object(yt, "_direct_transcript") as direct:
+        assert yt.get_transcript("v") == ("not_english", None)
+    direct.assert_not_called()
+
+
+def test_an_unlabelled_bengali_transcript_is_still_caught():
+    with patch.object(supadata_client, "is_configured", return_value=True), \
+         patch.object(supadata_client, "get_transcript_text", return_value=_BENGALI):
+        assert yt.get_transcript("v") == ("not_english", None)
+
+
+def test_the_direct_fetch_is_checked_too():
+    with patch.object(supadata_client, "is_configured", return_value=False), \
+         patch.object(yt, "_fetch_transcript_text", return_value=_BENGALI):
+        assert yt.get_transcript("v") == ("not_english", None)
+
+
+def test_the_direct_fetch_names_english():
+    with patch("youtube_transcript_api.YouTubeTranscriptApi") as api_cls:
+        api_cls.return_value.fetch.return_value = [Mock(text=_ENGLISH)]
+        yt._fetch_transcript_text("vid")
+    assert api_cls.return_value.fetch.call_args.kwargs["languages"] == ["en"]

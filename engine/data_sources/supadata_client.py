@@ -27,6 +27,14 @@ from engine import credentials
 _BASE = "https://api.supadata.ai/v1/transcript"
 _WATCH_URL = "https://www.youtube.com/watch?v="
 _POLL_INTERVAL_SECONDS = 1.0        # the docs' recommended interval
+
+# Ask for English by name. Without `lang`, Supadata returns "the first available
+# language" — and YouTube now auto-translates ZipTrader's videos into ~19
+# caption tracks with Bangla listed first. Six videos (10 Sep - 13 Oct 2026,
+# five of them in the last fortnight) were stored in Bengali, and extraction
+# from the translation flipped a stance and missed a bearish call (13 Oct: ONCY
+# read bullish where the English says neutral; LCID bearish not found at all).
+TRANSCRIPT_LANG = "en"
 _DEFAULT_MAX_WAIT_SECONDS = 180.0
 
 
@@ -40,6 +48,25 @@ class TranscriptUnavailable(SupadataError):
 
 class QuotaExceeded(SupadataError):
     """HTTP 429 — rate or monthly-credit limit; retry on a later run."""
+
+
+class NotEnglish(SupadataError):
+    """English was asked for and another language came back — which Supadata
+    does when the video has no English track. Not worth retrying."""
+
+    def __init__(self, lang: str | None, available=None):
+        self.lang, self.available = lang, list(available or [])
+        super().__init__(f"transcript came back as {lang!r}, not English "
+                         f"(available: {', '.join(self.available) or 'unknown'})")
+
+
+def _require_english(body: dict) -> None:
+    """Supadata reports the language it returned; refuse anything but English.
+    A response with no `lang` at all is let through to the content check,
+    youtube_client.looks_english."""
+    lang = (body.get("lang") or "").strip().lower()
+    if lang and not lang.startswith(TRANSCRIPT_LANG):
+        raise NotEnglish(lang, body.get("availableLangs"))
 
 
 def _api_key() -> str | None:
@@ -103,6 +130,7 @@ def _poll_job(job_id: str, deadline: float) -> str:
         body = resp.json()
         status = body.get("status")
         if status == "completed":
+            _require_english(body)
             return body.get("content") or ""
         if status == "failed":
             message = (body.get("error") or {}).get("message") or "job failed"
@@ -114,11 +142,13 @@ def _poll_job(job_id: str, deadline: float) -> str:
 def get_transcript_text(video_id: str) -> str:
     """Plain-text transcript for a YouTube video id.
 
-    Raises TranscriptUnavailable (206), QuotaExceeded (429), or SupadataError.
+    Raises TranscriptUnavailable (206), QuotaExceeded (429), NotEnglish, or
+    SupadataError.
     """
     resp = requests.get(
         _BASE,
-        params={"url": _WATCH_URL + video_id, "text": "true", "mode": mode()},
+        params={"url": _WATCH_URL + video_id, "text": "true", "mode": mode(),
+                "lang": TRANSCRIPT_LANG},
         headers=_headers(),
         timeout=30,
     )
@@ -126,4 +156,5 @@ def get_transcript_text(video_id: str) -> str:
     body = resp.json()
     if resp.status_code == 202 or "jobId" in body:      # long video -> async job
         return _poll_job(body["jobId"], time.time() + _max_wait())
+    _require_english(body)
     return body.get("content") or ""

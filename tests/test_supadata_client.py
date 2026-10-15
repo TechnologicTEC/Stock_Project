@@ -108,3 +108,41 @@ def test_missing_key_raises_before_any_request(monkeypatch):
         with pytest.raises(sd.SupadataError, match="not set"):
             sd.get_transcript_text("abc123")
     get.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# Language. Without `lang`, Supadata returns "the first available language",
+# and YouTube now auto-translates ZipTrader's videos into ~19 tracks with
+# Bangla first: six videos were stored in Bengali by 13 Oct 2026.
+# --------------------------------------------------------------------------
+
+def test_english_is_asked_for_by_name():
+    with patch("engine.data_sources.supadata_client.requests.get",
+               return_value=_resp(200, {"content": "words", "lang": "en"})) as get:
+        sd.get_transcript_text("vid")
+    assert get.call_args.kwargs["params"]["lang"] == "en"
+
+
+def test_a_transcript_in_another_language_is_refused():
+    body = {"content": "বাংলা", "lang": "bn", "availableLangs": ["bn", "en", "es"]}
+    with patch("engine.data_sources.supadata_client.requests.get", return_value=_resp(200, body)):
+        with pytest.raises(sd.NotEnglish) as caught:
+            sd.get_transcript_text("vid")
+    assert caught.value.lang == "bn" and "en" in caught.value.available
+
+
+@pytest.mark.parametrize("lang", ["en", "en-US", None])
+def test_english_or_unlabelled_passes_through(lang):
+    """No `lang` at all is left to the content check in youtube_client."""
+    body = {"content": "words", **({"lang": lang} if lang else {})}
+    with patch("engine.data_sources.supadata_client.requests.get", return_value=_resp(200, body)):
+        assert sd.get_transcript_text("vid") == "words"
+
+
+def test_a_long_video_job_is_held_to_english_too():
+    responses = [_resp(202, {"jobId": "j1"}),
+                 _resp(200, {"status": "completed", "content": "x", "lang": "bn"})]
+    with patch("engine.data_sources.supadata_client.requests.get", side_effect=responses), \
+         patch("engine.data_sources.supadata_client.time.sleep"):
+        with pytest.raises(sd.NotEnglish):
+            sd.get_transcript_text("vid")

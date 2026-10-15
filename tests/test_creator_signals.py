@@ -397,3 +397,27 @@ def test_the_page_window_matches_the_strategy_that_decides_on_it():
     from engine.bot.strategies import creator_conviction
 
     assert creator_signals.BOT_WINDOW_DAYS == creator_conviction.WINDOW_DAYS
+
+
+# --------------------------------------------------------------------------
+# A non-English transcript, through the real Supadata + YouTube clients.
+# Six ZipTrader videos were stored in Bengali by 13 Oct 2026 and extracted from.
+# --------------------------------------------------------------------------
+
+def test_a_bengali_transcript_is_stored_as_not_english_and_never_extracted(monkeypatch):
+    from unittest.mock import Mock
+    from engine.data_sources import supadata_client
+    monkeypatch.setenv("SUPADATA_API_KEY", "sd_test")
+    body = {"content": "প্রথমত, চার্চিল ক্যাপিটাল একাদশ", "lang": "bn",
+            "availableLangs": ["bn", "en"]}
+    reply = Mock(status_code=200, json=Mock(return_value=body), text="")
+    with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("BN1")]), \
+         patch.object(supadata_client.requests, "get", return_value=reply) as get, \
+         patch("engine.ticker_extraction.extract_mentions") as extract:
+        creator_signals.scan_creators()
+        creator_signals.scan_creators()                # the next run must not pay again
+    with get_session() as s:
+        row = s.execute(select(CreatorVideo).where(CreatorVideo.video_id == "BN1")).scalar_one()
+    assert (row.transcript_status, row.transcript) == ("not_english", None)
+    assert get.call_count == 1 and get.call_args.kwargs["params"]["lang"] == "en"
+    extract.assert_not_called()

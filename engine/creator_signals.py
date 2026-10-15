@@ -30,7 +30,10 @@ DEFAULT_CREATORS = [
 
 # transcript_status values we persist immediately (terminal). blocked/error are
 # left unstored so the video is re-detected and retried on the next run.
-_PERSIST_STATUSES = {"ok", "no_captions"}
+# not_english is terminal: English was asked for by name, so asking again would
+# only spend another Supadata credit on the same answer. Stored without a
+# transcript, so it is never extracted from (extraction reads status "ok").
+_PERSIST_STATUSES = {"ok", "no_captions", "not_english"}
 
 
 def seed_default_creators() -> int:

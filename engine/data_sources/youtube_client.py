@@ -212,7 +212,7 @@ def _fetch_transcript_text(video_id: str) -> str:
 
     api = YouTubeTranscriptApi(proxy_config=_proxy_config())
     if hasattr(api, "fetch"):                       # v1.x instance API
-        return " ".join(seg.text for seg in api.fetch(video_id))
+        return " ".join(seg.text for seg in api.fetch(video_id, languages=["en"]))  # English by name, as with Supadata
     return " ".join(s["text"] for s in YouTubeTranscriptApi.get_transcript(video_id))  # legacy static API
 
 
@@ -222,6 +222,44 @@ def _fetch_transcript_text(video_id: str) -> str:
 _NO_CAPTION_ERRORS = {"TranscriptsDisabled", "NoTranscriptFound", "NoTranscriptAvailable",
                       "VideoUnavailable", "VideoUnplayable"}
 _BLOCKED_HINTS = ("block", "ipblocked", "toomanyrequests", "requestblocked", "429")
+
+
+# What an English transcript looks like, measured on the 47 English transcripts
+# stored by Oct 2026: 100% Latin letters, and the commonest English words make up
+# at least 22.9% of the words (median 26%). The six Bengali ones were at most
+# 2.1% Latin; Spanish or French text is all Latin but scores 0% on the word
+# list, which is why it takes both. The cut-offs sit well inside the gaps.
+_MIN_LATIN_SHARE = 0.90
+_MIN_ENGLISH_WORD_SHARE = 0.10
+_ENGLISH_WORDS = frozenset({"the", "and", "to", "of", "a", "is", "that", "it",
+                            "you", "in", "this", "for", "on", "we", "i"})
+_SAMPLE_CHARS = 20_000
+
+
+def looks_english(text: str | None) -> bool:
+    """Is this transcript English? A check on the text itself, independent of
+    whatever language the source says it returned."""
+    import unicodedata
+
+    sample = (text or "")[:_SAMPLE_CHARS]
+    letters = [ch for ch in sample if ch.isalpha()]
+    if not letters:
+        return False
+    latin = sum(1 for ch in letters if unicodedata.name(ch, "").startswith("LATIN"))
+    if latin / len(letters) < _MIN_LATIN_SHARE:
+        return False
+    words = re.findall(r"[a-z']+", sample.lower())
+    common = sum(1 for w in words if w in _ENGLISH_WORDS)
+    return bool(words) and common / len(words) >= _MIN_ENGLISH_WORD_SHARE
+
+
+def _checked(status: str, text: str | None, video_id: str) -> tuple[str, str | None]:
+    """Refuse a non-English transcript rather than extract from a translation."""
+    if status == "ok" and not looks_english(text):
+        logger.warning("Transcript for %s is not English; stored as not_english, "
+                       "not extracted", video_id)
+        return "not_english", None
+    return status, text
 
 
 def _direct_transcript(video_id: str) -> tuple[str, str | None]:
@@ -241,7 +279,11 @@ def _direct_transcript(video_id: str) -> tuple[str, str | None]:
 
 
 def get_transcript(video_id: str) -> tuple[str, str | None]:
-    """(status, text): status is ok | no_captions | blocked | error.
+    """(status, text): status is ok | no_captions | not_english | blocked | error.
+
+    `not_english`: the only transcript to be had is in another language. It is
+    not extracted from (a machine translation shifts stances — see
+    supadata_client.TRANSCRIPT_LANG) and not retried.
 
     Prefers the Supadata API when a key is set — it fetches server-side, so it
     works from the datacenter IPs that YouTube blocks. Falls back to the direct
@@ -251,12 +293,15 @@ def get_transcript(video_id: str) -> tuple[str, str | None]:
     if supadata_client.is_configured():
         try:
             text = supadata_client.get_transcript_text(video_id)
-            return ("ok", text) if (text and text.strip()) else ("no_captions", None)
+            return _checked("ok", text, video_id) if (text and text.strip()) else ("no_captions", None)
         except supadata_client.TranscriptUnavailable:
             return "no_captions", None   # authoritative: don't retry this one forever
+        except supadata_client.NotEnglish as exc:
+            logger.warning("Supadata transcript for %s: %s", video_id, exc)
+            return "not_english", None   # authoritative too: English was asked for by name
         except Exception as exc:
             # Never swallow this silently: a misconfigured key or bad param looks
             # identical to an IP block once we fall through to the direct fetch.
             logger.warning("Supadata transcript for %s failed (%s: %s) — falling back to the direct fetch",
                            video_id, type(exc).__name__, exc)
-    return _direct_transcript(video_id)
+    return _checked(*_direct_transcript(video_id), video_id)
