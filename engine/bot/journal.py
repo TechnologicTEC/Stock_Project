@@ -192,6 +192,31 @@ def mark_cancelled(order_ids: list[str]) -> int:
     return changed
 
 
+def recorded_fills(since: date_, strategy: str | None = None) -> list[dict]:
+    """Every order the broker filled on or after `since`, with what it filled
+    at and when — as written back by fill_sync. OLDEST fill first.
+
+    Includes `decided_at`, when the bot placed it, so a reader can tell an
+    order queued for the open from one placed mid-session by a late run.
+    """
+    from datetime import datetime as _dt
+
+    with get_session() as session:
+        stmt = (select(BotDecision)
+                .where(BotDecision.status == FILLED,
+                       BotDecision.filled_at.is_not(None),
+                       BotDecision.filled_avg_price.is_not(None),
+                       BotDecision.filled_at >= _dt.combine(since, _dt.min.time()))
+                .order_by(BotDecision.filled_at))
+        if strategy:
+            stmt = stmt.where(BotDecision.strategy == strategy)
+        return [{"strategy": d.strategy, "ticker": d.ticker, "action": d.action,
+                 "filled_qty": d.filled_qty, "filled_avg_price": d.filled_avg_price,
+                 "filled_at": d.filled_at, "decided_at": d.decided_at,
+                 "client_order_id": d.client_order_id}
+                for d in session.execute(stmt).scalars().all()]
+
+
 def awaiting_fill(strategy: str) -> list[dict]:
     """This strategy's orders that reached the broker and have no recorded
     outcome yet — the rows `fill_sync` asks Alpaca about. OLDEST first."""

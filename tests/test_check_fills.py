@@ -121,60 +121,98 @@ def test_an_unknown_fill_time_still_grades_against_the_open():
     assert check_fills.compare(103.5, BAR, minutes_after_open=None)["verdict"] == check_fills.WIDE
 
 
-def test_minutes_after_open_is_none_when_the_calendar_is_unavailable():
-    from datetime import datetime, timezone
-    filled = datetime(2026, 9, 1, 14, 20, tzinfo=timezone.utc)
-    assert check_fills._minutes_after_open(filled, {}) is None
+# --------------------------------------------------------------------------
+# Timing, in New York time. Replaces the Alpaca calendar call: the regular
+# session opens at 9:30 New York every trading day, and New York time follows
+# daylight saving by itself.
+# --------------------------------------------------------------------------
+
+def test_minutes_after_open_in_summer():
+    from datetime import datetime
+    filled = datetime(2026, 9, 1, 14, 20)                    # naive UTC = 10:20 New York (EDT)
+    assert check_fills._minutes_after_open(filled) == pytest.approx(50.0)
 
 
-def test_minutes_after_open_measures_from_the_real_bell():
-    from datetime import datetime, time, timezone
-    filled = datetime(2026, 9, 1, 14, 20, tzinfo=timezone.utc)   # 10:20 ET
-    opens = {date(2026, 9, 1): datetime.combine(date(2026, 9, 1), time(9, 30))}
-    mins = check_fills._minutes_after_open(filled, opens)
-    assert mins == pytest.approx(50.0, abs=1.0)
+def test_minutes_after_open_in_winter():
+    """After US clocks go back on 1 Nov the bell is 14:30 UTC, not 13:30."""
+    from datetime import datetime
+    filled = datetime(2026, 11, 3, 14, 30, 30)               # 09:30:30 New York (EST)
+    assert check_fills._minutes_after_open(filled) == pytest.approx(0.5)
 
 
-def test_session_opens_accepts_the_shape_alpaca_actually_returns():
-    """alpaca-py returns `open` as a naive market-local DATETIME, not a time.
-    Assuming a time raised, the broad except swallowed it, and every intraday
-    fill was silently graded against the open — the exact bug this replaced."""
-    from datetime import datetime as _dt
-
-    class _Day:
-        def __init__(self, d):
-            self.date = d
-            self.open = _dt(d.year, d.month, d.day, 9, 30)      # a datetime
-            self.close = _dt(d.year, d.month, d.day, 16, 0)
-
-    class _Client:
-        def get_calendar(self, req):
-            return [_Day(date(2026, 9, 1))]
-
-    opens = check_fills._session_opens(_Client(), date(2026, 8, 25))
-    assert opens[date(2026, 9, 1)] == _dt(2026, 9, 1, 9, 30)
+def test_an_order_placed_after_the_close_is_not_a_late_run():
+    from datetime import datetime
+    placed = datetime(2026, 10, 1, 0, 51)                    # 20:51 New York on 30 Sep
+    assert check_fills.placed_in_session(placed, date(2026, 10, 1)) is None
 
 
-def test_session_opens_also_accepts_a_plain_time():
-    from datetime import datetime as _dt
-    from datetime import time as _time
-
-    class _Day:
-        date = date(2026, 9, 1)
-        open = _time(9, 30)
-        close = _time(16, 0)
-
-    class _Client:
-        def get_calendar(self, req):
-            return [_Day()]
-
-    opens = check_fills._session_opens(_Client(), date(2026, 8, 25))
-    assert opens[date(2026, 9, 1)] == _dt(2026, 9, 1, 9, 30)
+def test_an_order_placed_before_the_open_is_not_a_late_run():
+    from datetime import datetime
+    placed = datetime(2026, 10, 1, 12, 0)                    # 08:00 New York, pre-market
+    assert check_fills.placed_in_session(placed, date(2026, 10, 1)) is None
 
 
-def test_a_failing_calendar_degrades_to_grading_against_the_open():
-    class _Client:
-        def get_calendar(self, req):
-            raise RuntimeError("403")
+def test_an_order_placed_after_the_bell_is_a_late_run():
+    """The 08:30 UTC run landing at 15:06 UTC — 11:06 New York, mid-session."""
+    from datetime import datetime
+    placed = datetime(2026, 9, 24, 15, 6)
+    got = check_fills.placed_in_session(placed, date(2026, 9, 24))
+    assert got is not None and (got.hour, got.minute) == (11, 6)
 
-    assert check_fills._session_opens(_Client(), date(2026, 8, 25)) == {}
+
+# --------------------------------------------------------------------------
+# A whole run, from recorded fills in the test database.
+# --------------------------------------------------------------------------
+
+def _record(strategy, ticker, *, placed, filled, price, action="buy", qty=1.0):
+    from db.models import BotDecision
+    from db.session import get_session
+    with get_session() as s:
+        s.add(BotDecision(run_id="r", strategy=strategy, ticker=ticker, action=action, reason="t",
+                          status="filled", client_order_id=f"{strategy}-{ticker}-{filled}",
+                          notional=100.0, filled_qty=qty, filled_avg_price=price,
+                          filled_at=filled, decided_at=placed))
+
+
+def _configs(*names):
+    from engine.bot import journal
+    for n in names:
+        journal.upsert_config(n, key_env_prefix="ALPACA_GOLDEN_CROSS")
+
+
+def test_each_fill_is_graded_once_even_with_a_retired_row_on_the_same_account(capsys, monkeypatch):
+    """spy_harness and golden_cross share an Alpaca account. Reading the account
+    graded every SPY fill under both names; reading the records grades it once."""
+    from datetime import datetime, timedelta
+    _configs("spy_harness", "golden_cross")
+    day = datetime.utcnow().date() - timedelta(days=2)
+    _record("golden_cross", "SPY", placed=datetime.combine(day, datetime.min.time()) - timedelta(hours=3),
+            filled=datetime.combine(day, datetime.min.time()) + timedelta(hours=13, minutes=30, seconds=2),
+            price=100.02)
+    monkeypatch.setattr(check_fills, "_bars_for",
+                        lambda t, days: {d: _bar(open_=100.0) for d in days})
+    assert check_fills.run(None, days=30, tolerance=0.5) == 0
+    out = capsys.readouterr().out
+    assert out.count(" SPY ") == 1
+    assert "spy_harness" not in out
+
+
+def test_a_late_run_is_labelled_on_its_line_and_in_the_summary(capsys, monkeypatch):
+    from datetime import datetime, timedelta
+    _configs("creator_conviction")
+    day = datetime.utcnow().date() - timedelta(days=2)
+    base = datetime.combine(day, datetime.min.time())
+    # Placed 15:06 UTC, filled 15:06:30 UTC: mid-session, at a price inside the range.
+    _record("creator_conviction", "AMD", placed=base + timedelta(hours=15, minutes=6),
+            filled=base + timedelta(hours=15, minutes=6, seconds=30), price=101.5)
+    monkeypatch.setattr(check_fills, "_bars_for",
+                        lambda t, days: {d: _bar(open_=100.0, high=102.0, low=99.0) for d in days})
+    assert check_fills.run(None, days=30, tolerance=0.5) == 0
+    out = capsys.readouterr().out
+    assert "[intraday]" in out and "late run: placed" in out
+    assert "placed after the opening bell by a late or manual run" in out
+
+
+def test_nothing_recorded_is_nothing_to_grade(capsys):
+    _configs("golden_cross")
+    assert check_fills.run(None, days=30, tolerance=0.5) == 2

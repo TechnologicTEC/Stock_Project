@@ -1,6 +1,14 @@
 """
 Execution quality: did each fill land where it should have?
 
+Reads the fills the bot itself recorded (engine/bot/fill_sync writes the
+broker's price, share count and time back to each order row), so it needs no
+broker keys and grades each order once, under the strategy that placed it. It
+used to read each Alpaca account instead, which graded golden_cross's SPY
+fills twice: the retired spy_harness row points at the same account. A fill
+reaches the records at the next live run, so the newest few hours may be
+missing.
+
 The bot submits market DAY orders after the close, so every one of them queues
 and fills at the NEXT OPEN. That is a deliberate, known bias — it's identical
 across all five strategies, so it cannot distort the comparison between them —
@@ -41,9 +49,20 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from datetime import time as time_                          # noqa: E402
+from datetime import timezone                               # noqa: E402
+from zoneinfo import ZoneInfo                               # noqa: E402
+
 from db.session import init_db                              # noqa: E402
-from engine.bot import accounts, journal                    # noqa: E402
-from engine.data_sources.alpaca_client import from_alpaca  # noqa: E402
+from engine.bot import journal                              # noqa: E402
+
+NY = ZoneInfo("America/New_York")
+# The regular session opens at 9:30 New York time every trading day, half days
+# included (they close early, not open late). Working in New York time follows
+# daylight saving by itself — 13:30 UTC in summer, 14:30 in winter — which is
+# what the Alpaca calendar call this replaced was there to get right.
+OPENING_BELL = time_(9, 30)
+CLOSING_BELL = time_(16, 0)
 
 # A market order hitting the opening auction should match the open to a couple of
 # basis points. 0.5% is loose enough not to cry wolf over a wide open, tight
@@ -111,64 +130,35 @@ def compare(fill_price: float, bar: dict | None, *,
             "note": f"more than {tolerance_pct}% from the open"}
 
 
-def _filled_orders(client, since: date_) -> list:
-    from alpaca.trading.enums import QueryOrderStatus
-    from alpaca.trading.requests import GetOrdersRequest
-
-    req = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=500)
-    out = []
-    for o in client.get_orders(filter=req):
-        if not o.filled_at or not o.filled_avg_price:
-            continue
-        if o.filled_at.date() < since:
-            continue
-        out.append(o)
-    return sorted(out, key=lambda o: o.filled_at)
+def _new_york(naive_utc: datetime) -> datetime:
+    """A journal timestamp (naive UTC, engine/time_utils) in New York time."""
+    aware = naive_utc if naive_utc.tzinfo else naive_utc.replace(tzinfo=timezone.utc)
+    return aware.astimezone(NY)
 
 
-def _session_opens(client, since: date_) -> dict:
-    """{date: opening bell as an aware UTC datetime} from Alpaca's own calendar.
-
-    Read rather than assumed: the bell is 13:30 UTC in summer and 14:30 in
-    winter, and a half-day trading session still opens at the usual time but a
-    hardcoded guess would drift twice a year. Returns {} on any failure — every
-    fill then grades as an opening fill, which is the previous behaviour.
-    """
-    try:
-        from alpaca.trading.requests import GetCalendarRequest
-
-        days = client.get_calendar(GetCalendarRequest(start=since, end=date_.today()))
-        out = {}
-        for d in days:
-            when = getattr(d, "open", None)
-            if when is None:
-                continue
-            # alpaca-py hands back a naive market-local DATETIME here, not a
-            # time — combining it as though it were a time raises, and an
-            # over-broad except then turned that into "no calendar at all",
-            # which silently graded every mid-session fill against the open.
-            # Accept either shape rather than trusting one.
-            out[d.date] = (when.replace(tzinfo=None) if isinstance(when, datetime)
-                           else datetime.combine(d.date, when))
-        return out
-    except Exception:                            # noqa: BLE001 — a diagnostic
-        return {}
-
-
-def _minutes_after_open(filled_at, opens: dict) -> float | None:
-    """How long after the bell this filled, or None if we cannot tell."""
-    bell = opens.get(filled_at.date())
-    if bell is None:
-        return None
-    # `filled_at` is UTC-aware; the calendar's time is market-local. Compare in
-    # market-local terms by shifting the fill into the same frame.
-    try:
-        from zoneinfo import ZoneInfo
-
-        local = filled_at.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
-    except Exception:                            # noqa: BLE001
-        return None
+def _minutes_after_open(filled_at: datetime) -> float:
+    """How long after that day's opening bell this filled."""
+    local = _new_york(filled_at)
+    bell = datetime.combine(local.date(), OPENING_BELL, tzinfo=NY)
     return (local - bell).total_seconds() / 60.0
+
+
+def placed_in_session(decided_at: datetime | None, fill_day: date_) -> datetime | None:
+    """When the order was placed, in New York time, if that was during the
+    session it filled in — else None.
+
+    The bot means to place orders outside the session so they queue for the
+    open. One placed after the bell is a late run (the 08:30 UTC run has
+    landed hours late, after the open) or a manual daytime run, and filling
+    mid-session is then exactly what should happen. Saying so on the line
+    replaces checking the run's start time by hand.
+    """
+    if decided_at is None:
+        return None
+    placed = _new_york(decided_at)
+    if placed.date() == fill_day and OPENING_BELL <= placed.time() < CLOSING_BELL:
+        return placed
+    return None
 
 
 def _bars_for(ticker: str, days: list[date_]) -> dict[date_, dict]:
@@ -195,45 +185,46 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
         return 2
 
     counts = {OK: 0, WIDE: 0, IMPOSSIBLE: 0, INTRADAY: 0, UNGRADED: 0}
+    late_runs = 0
+
+    fills = journal.recorded_fills(since)
+    by_strategy: dict[str, list[dict]] = {}
+    for f in fills:
+        by_strategy.setdefault(f["strategy"], []).append(f)
 
     for config in configs:
         name = config["strategy"]
-        print(f"\n{name}  ({config['key_env_prefix']}_*)")
-
-        try:
-            client, _ = accounts.clients_for(config["key_env_prefix"])
-            orders = _filled_orders(client, since)
-            opens = _session_opens(client, since)
-        except accounts.BotAccountError as exc:
-            print(f"  skipped — {exc}")          # a missing key pair is not a failure
-            continue
-        except Exception as exc:                 # noqa: BLE001
-            print(f"  skipped — Alpaca read failed: {type(exc).__name__}: {exc}")
-            continue
-
-        if not orders:
-            print(f"  no fills in the last {days} days")
-            continue
+        mine = by_strategy.get(name) or []
+        if not mine:
+            continue                         # a retired row (spy_harness) has nothing of its own
+        print(f"\n{name}")
 
         wanted: dict[str, list[date_]] = {}
-        for o in orders:
-            wanted.setdefault(from_alpaca(o.symbol), []).append(o.filled_at.date())
+        for f in mine:
+            wanted.setdefault(f["ticker"], []).append(_new_york(f["filled_at"]).date())
         bars = {t: _bars_for(t, d) for t, d in wanted.items()}
 
-        for o in orders:
-            ticker, day = from_alpaca(o.symbol), o.filled_at.date()
-            price = float(o.filled_avg_price)
+        for f in mine:
+            ticker, day = f["ticker"], _new_york(f["filled_at"]).date()
+            price = float(f["filled_avg_price"])
             result = compare(price, bars.get(ticker, {}).get(day),
                              tolerance_pct=tolerance,
-                             minutes_after_open=_minutes_after_open(o.filled_at, opens))
-
+                             minutes_after_open=_minutes_after_open(f["filled_at"]))
             counts[result["verdict"]] = counts.get(result["verdict"], 0) + 1
 
+            note = result["note"]
+            placed = placed_in_session(f.get("decided_at"), day)
+            if placed is not None:
+                late_runs += 1
+                note += f" (late run: placed {placed:%H:%M} New York, after the open)"
+
             diff = f"{result['diff_pct']:+.4f}%" if result["diff_pct"] is not None else "     —"
-            side = str(getattr(o.side, "value", o.side)).upper()
-            print(f"  {day}  {side:<4} {ticker:<6} {float(o.filled_qty):>10.4f} @ "
+            print(f"  {day}  {f['action'].upper():<4} {ticker:<6} {float(f['filled_qty'] or 0):>10.4f} @ "
                   f"${price:>10,.4f}   vs open {diff:>10}   "
-                  f"[{result['verdict']}] {result['note']}")
+                  f"[{result['verdict']}] {note}")
+
+    if not fills:
+        print(f"No recorded fills in the last {days} days.")
 
     print()
     graded = sum(n for v, n in counts.items() if v != UNGRADED)
@@ -251,6 +242,9 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
         print(f"{counts[INTRADAY]} of {graded} fills happened mid-session, not at the "
               "open — graded against the day's range instead, because only an order "
               "queued before the bell is meant to match the opening price.")
+    if late_runs:
+        print(f"{late_runs} order(s) were placed after the opening bell by a late or manual "
+              "run, so a mid-session fill was the expected outcome, not a fault.")
     if counts[IMPOSSIBLE]:
         print(f"{counts[IMPOSSIBLE]} fill(s) landed OUTSIDE the day's high-low range. "
               "The fill and the price bar disagree about what happened — a wrong "
