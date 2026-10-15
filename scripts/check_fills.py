@@ -73,9 +73,15 @@ OK, WIDE, IMPOSSIBLE, UNGRADED = "ok", "wide", "impossible", "ungraded"
 INTRADAY = "intraday"
 
 # How long after the opening bell a fill can still be called an opening fill.
-# The auction itself prints within seconds; five minutes is slack for the
-# broker stamping `filled_at` and for a slow paper simulator.
-OPEN_WINDOW_MINUTES = 5
+# One minute, not five (Tane, 16 Oct 2026). Alpaca's paper simulator has no
+# opening auction: it fills from live prices after the bell, half of the 38
+# opening fills to date within 2 seconds, but some 3-4.5 minutes later, by
+# which point a busy open had moved the stock 0.6-2.3% (HPE 09:33:13, FSLR
+# 09:33:17, EXE 09:34:10, NVTS 09:34:27 — each inside the range that traded at
+# that minute). Those are mid-session fills and are graded as such. Inside the
+# first minute a gap from the open is still flagged: across all 38 the paper
+# fills cost +7.9 bp on average, $21 in total, so it isn't a systematic bias.
+OPEN_WINDOW_MINUTES = 1
 
 
 def compare(fill_price: float, bar: dict | None, *,
@@ -252,8 +258,10 @@ def run(strategy: str | None, *, days: int, tolerance: float) -> int:
               "nobody could actually have got.")
     if counts[WIDE]:
         print(f"{counts[WIDE]} of {at_open} opening fill(s) are off their open by more "
-              f"than {tolerance}%. That is a plumbing problem — routing, session, or "
-              "price source — not a bad strategy.")
+              f"than {tolerance}%. On a paper account that is usually the simulator, which "
+              "has no opening auction and fills from live prices in the first minute — "
+              "check the fill against that minute's range before suspecting routing, the "
+              "session, or the price source. Either way it is not a bad strategy.")
     if counts[WIDE] or counts[IMPOSSIBLE]:
         return 1
 

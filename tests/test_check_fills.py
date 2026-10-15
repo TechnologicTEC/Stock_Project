@@ -103,8 +103,17 @@ def test_a_mid_session_fill_is_still_caught_if_it_never_traded_there():
 
 
 def test_a_fill_inside_the_opening_window_is_still_graded_on_the_open():
-    assert check_fills.compare(103.5, BAR, minutes_after_open=2)["verdict"] == check_fills.WIDE
-    assert check_fills.compare(100.2, BAR, minutes_after_open=2)["verdict"] == check_fills.OK
+    assert check_fills.compare(103.5, BAR, minutes_after_open=0.5)["verdict"] == check_fills.WIDE
+    assert check_fills.compare(100.2, BAR, minutes_after_open=0.5)["verdict"] == check_fills.OK
+
+
+def test_a_fill_minutes_after_the_bell_is_not_an_opening_fill():
+    """HPE, 1 Oct 2026: queued overnight, filled at 09:33:13 by the paper
+    simulator, 2.34% under the 65.53 open — inside the 63.60-64.10 that traded
+    that minute. It was graded 'wide' against the open; it is a mid-session fill."""
+    hpe = {"open": 65.53, "high": 66.11, "low": 63.20, "close": 63.75}
+    r = check_fills.compare(63.9937, hpe, minutes_after_open=3 + 13 / 60)
+    assert r["verdict"] == check_fills.INTRADAY
 
 
 def test_the_window_boundary_is_inclusive():
