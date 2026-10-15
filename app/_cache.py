@@ -312,6 +312,33 @@ def bot_sma_frame(ticker: str, lookback_days: int) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def bot_why_held(strategy: str, held: tuple[str, ...], config: dict) -> dict[str, str]:
+    """{TICKER: why the strategy's next run keeps or sells it}, for `held`.
+
+    Read through the strategy's own inputs and its own keep/sell rule
+    (`strategies.why_held`), dated by the UTC day the runner uses. Empty when
+    those inputs can't be read — a ranking too old to trade on, say — because
+    the bot would not act then either, so there is no decision to explain.
+    """
+    from datetime import timezone as _tz
+
+    from engine.bot import strategies
+    from engine.bot.executor import Position
+
+    today = datetime.now(_tz.utc).date()
+    try:
+        extras = strategies.prepare_why_held(strategy, config=config, today=today)
+    except Exception:                        # noqa: BLE001 — a column, not the page
+        return {}
+    ctx = strategies.Context(
+        strategy=strategy, equity=0.0, cash=0.0, config=config, today=today,
+        positions=tuple(Position(ticker=t, qty=1.0, market_value=0.0) for t in held),
+        extras=extras,
+    )
+    return strategies.why_held(strategy, ctx)
+
+
 def clear() -> None:
     """Drop all cached results. Call after any write so nothing shows stale."""
     st.cache_data.clear()

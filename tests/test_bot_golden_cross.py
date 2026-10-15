@@ -227,3 +227,32 @@ def test_unknown_strategy_names_are_rejected_by_both_hooks():
         strategies.prepare("nope", config={}, today=date(2026, 9, 1))
     with pytest.raises(KeyError):
         strategies.build("nope", _ctx({}))
+
+
+# --------------------------------------------------------------------------
+# why_held — the bot page's "why it's held"
+# --------------------------------------------------------------------------
+
+def _held(closes, held=("SPY",)):
+    from engine.bot.executor import Position
+    ctx = _ctx(closes)
+    return strategies.Context(**{**ctx.__dict__, "positions": tuple(
+        Position(ticker=t, qty=1.0, market_value=1.0) for t in held)})
+
+
+def test_why_held_quotes_the_averages_build_decided_on():
+    ctx = _held({"SPY": _rising()})
+    fast, slow = golden_cross.moving_averages(_rising())
+    assert golden_cross.why_held(ctx)["SPY"] == (
+        f"Golden cross: 50-day ${fast.iloc[-1]:,.2f} is above the 200-day "
+        f"${slow.iloc[-1]:,.2f}. Sold if it drops below.")
+
+
+def test_why_held_says_a_turned_cross_is_sold_as_build_does():
+    ctx = _held({"SPY": _falling()})
+    assert golden_cross.build(ctx) == []
+    assert golden_cross.why_held(ctx)["SPY"].endswith("so the next run sells it.")
+
+
+def test_why_held_says_nothing_where_build_would_refuse():
+    assert golden_cross.why_held(_held({"SPY": _rising(n=100)})) == {}

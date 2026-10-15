@@ -102,13 +102,47 @@ def moving_averages(closes):
     return ta.sma(closes, length=FAST), ta.sma(closes, length=SLOW)
 
 
+def cross_state(series) -> tuple[bool, float, float]:
+    """(golden cross on?, 50-day now, 200-day now) — the decision and the two
+    numbers it was made on, from the backtest's own signal."""
+    from engine.backtest import _signal_sma_cross
+
+    signal = _signal_sma_cross(series)
+    fast, slow = moving_averages(series)
+    return float(signal.iloc[-1]) >= 1.0, float(fast.iloc[-1]), float(slow.iloc[-1])
+
+
+def why_held(ctx) -> dict[str, str]:
+    """{TICKER: why the next run keeps or sells it} for each holding.
+
+    A name without the history `build` needs is left out rather than guessed
+    at — `build` would refuse to run on it, so there is no decision to explain.
+    """
+    closes = (ctx.extras or {}).get("closes") or {}
+    out = {}
+    for ticker in sorted(ctx.held_tickers()):
+        if ticker not in UNIVERSE:
+            out[ticker] = "Not in this strategy's universe, so the next run sells it."
+            continue
+        series = closes.get(ticker)
+        if series is None or len(series) < SLOW:
+            continue
+        crossed, fast_now, slow_now = cross_state(series)
+        if crossed:
+            out[ticker] = (f"Golden cross: {FAST}-day ${fast_now:,.2f} is above the "
+                           f"{SLOW}-day ${slow_now:,.2f}. Sold if it drops below.")
+        else:
+            out[ticker] = (f"The {FAST}-day ${fast_now:,.2f} is below the {SLOW}-day "
+                           f"${slow_now:,.2f}, so the next run sells it.")
+    return out
+
+
 def build(ctx) -> list[Target]:
     """The target book: each universe name whose 50-day SMA is above its 200-day.
 
     Raises `StrategyDataError` for any name without enough history — see the
     module docstring for why that must not be a silent empty book.
     """
-    from engine.backtest import _signal_sma_cross
     from engine.bot.strategies import StrategyDataError
 
     closes = (ctx.extras or {}).get("closes") or {}
@@ -128,11 +162,9 @@ def build(ctx) -> list[Target]:
                 "Refusing to run rather than reading a data gap as a sell signal."
             )
 
-        signal = _signal_sma_cross(series)
-        fast, slow = moving_averages(series)
-        fast_now, slow_now = float(fast.iloc[-1]), float(slow.iloc[-1])
+        crossed, fast_now, slow_now = cross_state(series)
 
-        if float(signal.iloc[-1]) >= 1.0:
+        if crossed:
             # HOLD, not LEVEL: bought at the shared size when the cross turns on,
             # then left alone until it turns off. At 100% of the account the two
             # were the same thing — with no cash, the target always equalled the

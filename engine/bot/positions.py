@@ -112,7 +112,8 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
             if held is None:
                 book[ticker] = {"qty": qty or 0.0, "cost": value or 0.0,
                                 "since": day, "opened_at": when,
-                                "filled": filled is not None}
+                                "filled": filled is not None,
+                                "reason": fill.get("reason")}
             else:
                 held["qty"] += qty or 0.0
                 held["cost"] += value or 0.0
@@ -190,6 +191,17 @@ def opened_at(fills: list[dict]) -> dict[str, datetime]:
     """
     return {t: h["opened_at"] for t, h in book_from_fills(fills).items()
             if h.get("opened_at")}
+
+
+def bought_reasons(fills: list[dict]) -> dict[str, str]:
+    """{TICKER: the reason journalled on the buy that opened its current holding}.
+
+    Read from the full trade history (`journal.fills`, unlimited), never from
+    the page's recent-decisions window: a holding bought in the first week
+    outlives any fixed number of newer rows — top_decile_long writes up to 110
+    orders a rebalance — and its reason would quietly turn into a dash.
+    """
+    return {t: h["reason"] for t, h in book_from_fills(fills).items() if h.get("reason")}
 
 
 def held_since(fills: list[dict]) -> dict[str, date_]:
@@ -352,13 +364,15 @@ def _is_pending(opened: date_ | None, when: datetime | None,
 
 
 def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
-           since=None, opened_at=None, today: date_ | None = None,
+           bought=None, since=None, opened_at=None, today: date_ | None = None,
            confirmed_through: date_ | None = None,
            filled: set[str] | None = None) -> list[dict]:
     """Join broker (or reconstructed) positions to everything else the page knows.
 
     Adds `name`, `weight` (share of equity), `days_held`, `score`/`rank`/
-    `recommendation`, `reason` and `pending`. Every one of them is optional — a
+    `recommendation`, `reason`, `bought_reason` and `pending`. `reason` is why
+    the strategy holds it NOW (`strategies.why_held`); `bought_reason` is why it
+    was bought (`bought_reasons`). Every one of them is optional — a
     name that isn't in the ranking, a strategy with no ranking at all, and a
     book read before the journal has a matching row all have to render, so a
     missing join is None rather than an omitted key.
@@ -397,7 +411,7 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
     name taking over".
     """
     names, ranks = names or {}, ranks or {}
-    reasons, since = reasons or {}, since or {}
+    reasons, since, bought = reasons or {}, since or {}, bought or {}
     opened_at = opened_at or {}
     filled = filled or set()
 
@@ -412,6 +426,7 @@ def enrich(positions, *, equity=None, names=None, ranks=None, reasons=None,
         row["name"] = names.get(ticker)
         row["weight"] = (value / equity) if (value is not None and equity) else None
         row["reason"] = reasons.get(ticker)
+        row["bought_reason"] = bought.get(ticker)
         row["since"] = opened
         row["days_held"] = (today - opened).days if (opened and today) else None
         row["pending"] = (ticker not in filled
@@ -432,18 +447,3 @@ def split_pending(rows) -> tuple[list[dict], list[dict]]:
     held = [r for r in rows or () if not r.get("pending")]
     pending = [r for r in rows or () if r.get("pending")]
     return held, pending
-
-
-def latest_reasons(decisions) -> dict[str, str]:
-    """{TICKER: the most recent journalled reason for it}.
-
-    `decisions` must be NEWEST first (`journal.recent_decisions` order): the
-    first reason seen for a ticker wins, which is the strategy explaining its
-    current stance in its own vocabulary.
-    """
-    out: dict[str, str] = {}
-    for decision in decisions or ():
-        ticker = (decision.get("ticker") or "").upper()
-        if ticker and ticker not in out and decision.get("reason"):
-            out[ticker] = decision["reason"]
-    return out

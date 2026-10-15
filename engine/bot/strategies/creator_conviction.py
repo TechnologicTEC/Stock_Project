@@ -165,6 +165,20 @@ def prepare(config: dict, today: date_) -> dict:
     }
 
 
+def prepare_holdings(config: dict, today: date_) -> dict:
+    """Only what `why_held` needs: the mention window and the clock inputs.
+
+    For the bot page, which explains the current book and has no use for the
+    queue's price frames — `prepare` fetches those, and a page render should
+    not pay for a liquidity check it never shows in this column.
+    """
+    from engine import creator_signals
+
+    opened, history = load_clock_inputs()
+    return {"board": creator_signals.mention_leaderboard(days=WINDOW_DAYS, min_mentions=1),
+            "opened": opened, "history": history}
+
+
 def load_clock_inputs() -> tuple[dict, dict]:
     """(opened, history): when each journal-held name was bought, and every
     mention of it since. The bot page reads the same pair, so the clock it shows
@@ -348,23 +362,43 @@ def _slots(ctx) -> int:
 def _keep(ctx, notional: float) -> list[Target]:
     """Held names whose clock is still running and whose creator hasn't turned.
     Anything not restated here is closed by the planner."""
+    return [Target(ticker=ticker, notional=notional, sizing=executor.HOLD, reason=reason)
+            for ticker, (keep, reason) in _verdicts(ctx).items() if keep]
+
+
+def _verdicts(ctx) -> dict[str, tuple[bool, str]]:
+    """{TICKER: (keep?, why)} for every holding. Shared by `_keep` and
+    `why_held`, so the page shows the decision the next run will make."""
     extras = ctx.extras or {}
     by_ticker = {(e.get("ticker") or "").upper(): e for e in extras.get("board") or []}
     opened = extras.get("opened") or {}
     history = extras.get("history") or {}
 
-    kept = []
+    out = {}
     for ticker in sorted(ctx.held_tickers()):
         entry = by_ticker.get(ticker)
         stances = (entry or {}).get("stances") or {}
-        if entry is not None and int(stances.get("bearish") or 0) > int(stances.get("bullish") or 0):
-            continue                                  # the creator turned
+        bullish, bearish = int(stances.get("bullish") or 0), int(stances.get("bearish") or 0)
+        if entry is not None and bearish > bullish:
+            out[ticker] = (False, f"The creator has turned: {bearish} bearish against "
+                                  f"{bullish} bullish in {WINDOW_DAYS} days, so the next "
+                                  "run sells it.")
+            continue
         c = holding_clock(ticker, opened, history, entry)
-        if c is None or c.days_left(ctx.today) <= 0:
-            continue                                  # time's up
-        kept.append(Target(ticker=ticker, notional=notional, sizing=executor.HOLD,
-                           reason=_hold_reason(c, ctx.today)))
-    return kept
+        if c is None:
+            out[ticker] = (False, "No buy or counting mention to start a clock from, so "
+                                  "the next run sells it.")
+        elif c.days_left(ctx.today) <= 0:
+            out[ticker] = (False, f"Its clock ran out on {c.until:%d %b}, so the next run "
+                                  "sells it.")
+        else:
+            out[ticker] = (True, _hold_reason(c, ctx.today))
+    return out
+
+
+def why_held(ctx) -> dict[str, str]:
+    """{TICKER: why the next run keeps or sells it} for each holding."""
+    return {ticker: reason for ticker, (_keep_it, reason) in _verdicts(ctx).items()}
 
 
 def _queue(ctx, free: int, notional: float) -> tuple[list, list]:

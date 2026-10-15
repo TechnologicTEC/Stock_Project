@@ -389,24 +389,24 @@ def test_enrich_orders_by_position_size():
     assert [r["ticker"] for r in rows] == ["BIG", "SMALL"]
 
 
-def test_latest_reasons_keeps_the_newest_explanation_per_ticker():
-    reasons = positions.latest_reasons([
-        {"ticker": "MU", "reason": "Score 79.4 — still Strong Buy"},
-        {"ticker": "MU", "reason": "Score 81.0 — bought"},
-        {"ticker": None, "reason": "Book already matches"},
+def test_bought_reasons_is_the_buy_that_opened_the_current_holding():
+    """Sold and bought again: the reason is the second buy's, and a top-up on
+    an open holding doesn't replace it — it says why the position was opened."""
+    reasons = positions.bought_reasons([
+        {**_buy("MU", 500.0, date(2026, 9, 1)), "reason": "first entry"},
+        {**_fill("MU", "sell", 4.0, None, date(2026, 9, 5)), "reason": "exit"},
+        {**_buy("MU", 500.0, date(2026, 9, 8)), "reason": "second entry"},
+        {**_buy("MU", 50.0, date(2026, 9, 9)), "reason": "top-up"},
+        {**_buy("CF", 500.0, date(2026, 9, 1)), "reason": "rank 3"},
+        {**_fill("CF", "sell", 2.0, None, date(2026, 9, 10)), "reason": "exit"},
     ])
-    assert reasons == {"MU": "Score 79.4 — still Strong Buy"}
+    assert reasons == {"MU": "second entry"}
 
 
-# --------------------------------------------------------------------------
-# Orders in flight are not holdings
-#
-# A reconstructed book replays SUBMITTED rows and the journal never marks them
-# FILLED, so a buy counted as owned the instant it is placed. The bot submits
-# after the close and its orders queue until the next open — so on 2026-09-07
-# score_threshold placed three, and the panel listed ten holdings for an
-# account Alpaca said held seven, beside a slots strip correctly reading 7/20.
-# --------------------------------------------------------------------------
+def test_enrich_carries_the_buy_reason_beside_the_current_one():
+    rows = positions.enrich([{"ticker": "MU", "market_value": 500.0}],
+                            reasons={"MU": "now"}, bought={"MU": "then"})
+    assert rows[0]["reason"] == "now" and rows[0]["bought_reason"] == "then"
 
 def _row(ticker, market_value=100.0):
     return {"ticker": ticker, "market_value": market_value}

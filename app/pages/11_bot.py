@@ -187,10 +187,36 @@ def _slots_cell(held: int, slots: int) -> str:
 # journal has no intraday move to report.
 # --------------------------------------------------------------------------
 
+# The buy reason is history, kept short so it never outweighs the line above
+# it; the whole text rides along as the tooltip. Creator's buy reasons carry a
+# liquidity sentence and run past 250 characters.
+BOUGHT_REASON_CHARS = 110
+
+
+def _why_cell(r: dict) -> str:
+    """Why it's held now, then — smaller, underneath — why it was bought.
+
+    The first line is the strategy's own rule applied today
+    (`strategies.why_held`), so it says what the next run will do. The second
+    is the journalled reason on the buy that opened the holding: true when it
+    was written and dated so, never passed off as current.
+    """
+    now = _esc(r.get("reason") or "—")
+    bought = r.get("bought_reason")
+    if not bought:
+        return now
+    since = r.get("since")
+    label = f"Bought {since:%d %b}" if since else "Bought"
+    short = bought if len(bought) <= BOUGHT_REASON_CHARS else (
+        bought[:BOUGHT_REASON_CHARS].rsplit(" ", 1)[0] + "…")
+    return (f'{now}<span class="sub" style="margin-top:4px" title="{_esc(bought)}">'
+            f'{label}: {_esc(short)}</span>')
+
+
 def _positions_table(rows: list[dict]) -> str:
     has_today = any(r.get("change_today_pct") is not None for r in rows)
     has_score = any(r.get("score") is not None for r in rows)
-    has_reason = any(r.get("reason") for r in rows)
+    has_reason = any(r.get("reason") or r.get("bought_reason") for r in rows)
     has_held = any(r.get("days_held") is not None for r in rows)
 
     head = ['<th>Holding</th>', '<th class="num">Value</th>', '<th class="num">P&amp;L</th>']
@@ -248,7 +274,7 @@ def _positions_table(rows: list[dict]) -> str:
                              f"{rank_html}</td>")
         if has_reason:
             cells.append(f'<td class="dim" style="max-width:230px;font-size:12px">'
-                         f'{_esc(r.get("reason") or "—")}</td>')
+                         f'{_why_cell(r)}</td>')
         body.append(f"<tr>{''.join(cells)}</tr>")
 
     return ('<div class="cp-scroll"><table class="cp-table"><thead><tr>'
@@ -728,7 +754,11 @@ for tab, r in zip(tabs, tab_rows):
                 equity=equity_now,
                 names=_cache.bot_position_names(tuple(p["ticker"] for p in raw)),
                 ranks=bot_positions.rank_index(leaderboard_rows),
-                reasons=bot_positions.latest_reasons(r["decisions"]),
+                # Why it's held NOW, in the strategy's own rule — and, below
+                # it, why it was bought, from the full trade history.
+                reasons=_cache.bot_why_held(
+                    name, tuple(sorted(p["ticker"].upper() for p in raw)), cfg),
+                bought=bot_positions.bought_reasons(fills),
                 since=bot_positions.held_since(fills),
                 # The timestamp, not just the date: a run during market hours
                 # fills before that evening's snapshot. See positions._is_pending.

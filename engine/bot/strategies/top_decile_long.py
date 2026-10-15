@@ -144,11 +144,9 @@ def rebalanced_this_month(ctx) -> bool:
 
 def build(ctx) -> list[Target]:
     rows = common.rows_from(ctx)
-    top, _bottom = deciles(rows)
     lookup = common.by_ticker(rows)
     held = ctx.held_tickers()
     notional = common.notional_for(ctx)
-    slots = int(ctx.config.get("target_slots") or decile_size(rows))
 
     # Between rebalances the book is simply held. Restating it — rather than
     # returning [] — is what stops the planner reading "nothing to do" as
@@ -170,9 +168,40 @@ def build(ctx) -> list[Target]:
             reason=f"Rank {row.get('rank')} of {len(rows)} · decile 1 "
                    f"(score {row.get('score')}).",
         )
-        for row in top[:slots]
-        if row.get("ticker")
+        for row in book_rows(ctx, rows)
     ]
+
+
+def book_rows(ctx, rows: list[dict]) -> list[dict]:
+    """The leaderboard rows a rebalance buys: the top decile, up to `slots`."""
+    top, _bottom = deciles(rows)
+    slots = int(ctx.config.get("target_slots") or decile_size(rows))
+    return [row for row in top[:slots] if row.get("ticker")]
+
+
+def why_held(ctx) -> dict[str, str]:
+    """{TICKER: what the next rebalance does to it, and why} for each holding.
+
+    Membership of `book_rows` is the whole exit rule — there is no buffer band
+    (see the module docstring) — so that is the question asked here too.
+    """
+    rows = common.rows_from(ctx)
+    lookup = common.by_ticker(rows)
+    book = {(row.get("ticker") or "").upper() for row in book_rows(ctx, rows)}
+    when = common.next_rebalance(is_rebalance_run(ctx), ctx.today)
+    size = len(book)
+    out = {}
+    for ticker in sorted(ctx.held_tickers()):
+        rank = (lookup.get(ticker) or {}).get("rank")
+        if not rank:
+            out[ticker] = f"Not in the current ranking, so it is sold {when}."
+        elif ticker in book:
+            out[ticker] = (f"Rank {rank} of {len(rows)}: in the top {size}, "
+                           f"so it is kept {when}.")
+        else:
+            out[ticker] = (f"Rank {rank} of {len(rows)}: outside the top {size}, "
+                           f"so it is sold {when} unless it climbs back.")
+    return out
 
 
 def notes(ctx) -> list[dict]:

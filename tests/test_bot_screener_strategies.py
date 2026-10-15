@@ -435,3 +435,60 @@ def test_the_incomplete_threshold_is_half_not_any_shortfall():
     assert not common.book_is_incomplete(49, 50)
     assert not common.book_is_incomplete(14, 15)
     assert not common.book_is_incomplete(0, 0)          # no intent, no verdict
+
+
+# --------------------------------------------------------------------------
+# why_held — the bot page's "why it's held", which must say what build does
+# --------------------------------------------------------------------------
+
+def test_composite_why_held_agrees_with_the_rebalance_it_describes():
+    """On a rebalance run, "kept" must mean build keeps it and "sold" must mean
+    build drops it — the page states the bot's rule, never a second one."""
+    held = ["T03", "T20", "T45"]
+    ctx = _ctx(_rows(), held=held, slots=15)
+    kept = {t.ticker for t in comp.build(ctx)}
+    why = comp.why_held(ctx)
+    for ticker in held:
+        assert ("so it is kept" in why[ticker]) == (ticker in kept), why[ticker]
+    assert why["T45"] == ("Rank 45 of 60: outside the top 30, so it is sold at the "
+                          "next run (this month's rebalance) unless it climbs back.")
+
+
+def test_composite_why_held_names_next_months_rebalance_once_this_ones_is_done():
+    ctx = _ctx(_rows(), held=[f"T{i:02d}" for i in range(1, 16)],
+               decisions=[_decision(TODAY - timedelta(days=1))])
+    assert comp.why_held(ctx)["T01"] == ("Rank 1 of 60: inside the top 30, so it is kept "
+                                         "at the October rebalance.")
+
+
+def test_composite_why_held_says_an_unranked_name_goes_at_the_rebalance():
+    ctx = _ctx(_rows(), held=["GONE"], slots=15)
+    assert "Not in the current ranking, so it is sold" in comp.why_held(ctx)["GONE"]
+
+
+@pytest.mark.parametrize("score, decisions, sold", [
+    (80.0, (), False),                       # above the entry
+    (70.0, (), False),                       # hold band
+    (60.0, (), True),                        # below the exit, no buy on record
+    (50.0, (), True),                        # below the hard floor
+])
+def test_threshold_why_held_agrees_with_build(score, decisions, sold):
+    rows = [{"rank": 1, "ticker": "AAA", "score": score}]
+    ctx = _ctx(rows, held=["AAA"], decisions=decisions, strategy="score_threshold", slots=20)
+    kept = {t.ticker for t in thr.build(ctx)}
+    why = thr.why_held(ctx)["AAA"]
+    assert ("AAA" not in kept) == sold
+    assert ("the next run sells it" in why) == sold, why
+
+
+def test_threshold_why_held_states_the_exit_line_for_a_name_in_the_band():
+    rows = [{"rank": 1, "ticker": "AAA", "score": 70.0}]
+    ctx = _ctx(rows, held=["AAA"], strategy="score_threshold", slots=20)
+    assert thr.why_held(ctx)["AAA"] == "Score 70.0: in the 65–75 hold band. Sold if it drops below 65."
+
+
+def test_the_registry_never_raises_for_the_page():
+    """A broken input costs the column its first line, not the holdings table."""
+    ctx = _ctx([], held=["AAA"])                # no rows: rows_from raises
+    assert strategies.why_held("composite_rebalance", ctx) == {}
+    assert strategies.why_held("spy_harness", ctx) == {}

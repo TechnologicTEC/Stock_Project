@@ -163,6 +163,15 @@ def book_is_incomplete(held_count: int, intended: int) -> bool:
     return held_count < intended * INCOMPLETE_BOOK_FRACTION
 
 
+def next_rebalance(rebalance_next: bool, today: date_) -> str:
+    """When a monthly strategy next re-reads the ranking, in words — for the
+    bot page's "why it's held", which is a promise about that day."""
+    if rebalance_next:
+        return "at the next run (this month's rebalance)"
+    first_of_next = date_(today.year + today.month // 12, today.month % 12 + 1, 1)
+    return f"at the {first_of_next:%B} rebalance"
+
+
 def run_dates(ctx) -> list[date_]:
     """Distinct dates on which this strategy actually ran, newest first."""
     seen = set()

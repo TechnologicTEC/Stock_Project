@@ -445,3 +445,25 @@ def test_top_decile_holds_without_resizing_between_rebalances():
 def test_top_decile_does_resize_on_the_monthly_rebalance():
     targets = tdl.build(_ctx(held=["T007"]))
     assert targets and all(t.sizing == executor.LEVEL for t in targets)
+
+
+# --------------------------------------------------------------------------
+# why_held — the bot page's "why it's held"
+# --------------------------------------------------------------------------
+
+def test_why_held_agrees_with_the_rebalance_it_describes():
+    held = ["T010", "T050", "T051", "T300"]
+    ctx = _ctx(held=held)                       # nothing this month: a rebalance run
+    kept = {t.ticker for t in tdl.build(ctx)}
+    why = tdl.why_held(ctx)
+    for ticker in held:
+        assert ("so it is kept" in why[ticker]) == (ticker in kept), why[ticker]
+    assert why["T051"] == ("Rank 51 of 503: outside the top 50, so it is sold at the next "
+                           "run (this month's rebalance) unless it climbs back.")
+
+
+def test_why_held_between_rebalances_names_next_month():
+    held = [f"T{i:03d}" for i in range(1, 51)]
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=3))])
+    assert tdl.why_held(ctx)["T001"] == ("Rank 1 of 503: in the top 50, so it is kept "
+                                         "at the October rebalance.")

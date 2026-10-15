@@ -114,14 +114,16 @@ _UNSET = object()      # so `spread=None` can mean "no snapshot yet", not "defau
 
 def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          leaderboard=_UNSET, mentions=_UNSET, spread=_UNSET, sma=_UNSET,
-         fills=_UNSET, names=_UNSET, rebuilt=_UNSET, clock=_UNSET, liquidity=_UNSET):
+         fills=_UNSET, names=_UNSET, rebuilt=_UNSET, clock=_UNSET, liquidity=_UNSET,
+         why=_UNSET):
     """Render the page with every external read stubbed.
 
     The panel readers are stubbed here too. Without them the strategy panels
     reach the real leaderboard and price cache, which makes the suite depend on
     a warm database and quietly turns these into integration tests. The same
     applies to the holdings readers added with the redesign — `bot_fills`,
-    `bot_position_names` and `bot_reconstructed_book` all hit the DB.
+    `bot_position_names` and `bot_reconstructed_book` all hit the DB — and to
+    `bot_why_held`, which runs each strategy's own `prepare`.
     """
     configs = [_config()] if configs is None else configs
     curve = _curve() if curve is None else curve
@@ -148,7 +150,8 @@ def _run(configs=None, curve=None, decisions=None, view=None, env=None,
          patch("app._cache.bot_sma_frame",
                return_value=_sma() if sma is _UNSET else sma), \
          patch("app._cache.bot_liquidity_frames",
-               side_effect=_liquid_frames if liquidity is _UNSET else liquidity), \
+               side_effect=_liquid_frames if liquidity is _UNSET else liquidity),          patch("app._cache.bot_why_held",
+               return_value={} if why is _UNSET else why), \
          patch.dict("os.environ", env or {}, clear=False):
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=60)
@@ -285,11 +288,43 @@ def test_decision_journal_shows_blocked_rows_with_the_rail_that_refused():
     assert "Already submitted today" in body
 
 
-def test_positions_carry_the_journalled_reason_as_why_its_held():
-    at = _run(decisions=[_decision(reason="Harness holds SPY at full weight.")])
+def test_why_its_held_leads_with_the_strategys_current_reason():
+    at = _run(why={"SPY": "Golden cross: 50-day $600.00 is above the 200-day $580.00."})
     body = _body(at)
     assert "Why it&#x27;s held" in body or "Why it's held" in body
-    assert "Harness holds SPY at full weight." in body
+    assert "Golden cross: 50-day $600.00 is above the 200-day $580.00." in body
+
+
+def test_the_buy_reason_comes_from_the_trade_history_not_the_decision_window():
+    """The page loads only the newest few hundred decisions. A name bought on
+    day one outlives that window — top_decile_long writes up to 110 orders a
+    rebalance — so its buy reason is read from the full fills, and still shows
+    when no recent decision mentions the ticker at all."""
+    at = _run(decisions=[_decision(ticker=None, action=journal.HOLD,
+                                   reason="Book already matches the target.")])
+    body = _body(at)
+    assert "Bought 18 Aug: Harness holds SPY at full weight." in body
+
+
+def test_a_newer_journal_row_no_longer_poses_as_why_its_held():
+    """The old column showed the newest row naming the ticker, so a refused
+    top-up ("Not enough cash") or a blocked duplicate stood in for the reason
+    the position is held."""
+    at = _run(decisions=[_decision(status=journal.BLOCKED, blocked_by=risk.INSUFFICIENT_CASH,
+                                   reason="Not enough cash: $324.79 wanted.")],
+              why={"SPY": "Held for the test."})
+    cell = re.search(r'<td class="dim" style="max-width:230px;font-size:12px">(.*?)</td>',
+                     _body(at)).group(1)
+    assert "Held for the test." in cell
+    assert "Not enough cash" not in cell
+
+
+def test_a_long_buy_reason_is_shortened_with_the_full_text_as_a_tooltip():
+    reason = "Creator conviction: 3 bullish mentions in 30 days. " + "Liquid enough. " * 20
+    fills = [{**_fills()[0], "reason": reason}]
+    body = _body(_run(fills=fills))
+    assert "…" in body
+    assert f'title="{reason}"' in body
 
 
 def test_missing_alpaca_keys_costs_one_panel_not_the_page():

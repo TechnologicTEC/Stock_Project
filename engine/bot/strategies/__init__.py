@@ -157,6 +157,26 @@ NOTES: dict[str, object] = {
 }
 
 
+# Per-strategy "why is each holding still held": {TICKER: one sentence} saying
+# what the NEXT run will do with it and why, in the strategy's own rule. For
+# the bot page. A HOLD target places no order, so these sentences never reach
+# the journal — the journal only knows why a name was BOUGHT, which goes stale
+# the day after. Each `why_held` shares its keep/sell rule with `build`.
+def _why_module(name: str):
+    import importlib
+    return importlib.import_module(f"engine.bot.strategies.{name}")
+
+
+WHY_HELD: tuple[str, ...] = (
+    "golden_cross", "composite_rebalance", "score_threshold",
+    "creator_conviction", "top_decile_long",
+)
+
+# Strategies whose `why_held` needs less than their full `prepare` — creator's
+# prepare prices the whole buy queue, which a page render has no use for.
+_WHY_HELD_PREPARE: dict[str, str] = {"creator_conviction": "prepare_holdings"}
+
+
 # Short names, for anywhere the full label does not fit — the bot page's tab
 # strip above all. The full labels run to 40 characters, which pushed the last
 # tabs off the edge of the row behind a scroll chevron.
@@ -226,3 +246,26 @@ def notes(name: str, ctx: Context) -> list[dict]:
         return list(reporter(ctx) or [])
     except Exception:                    # noqa: BLE001 — see docstring
         return []
+
+
+def prepare_why_held(name: str, *, config: dict, today: date_) -> dict:
+    """The inputs `why_held` needs — the strategy's own `prepare` unless it
+    registers something lighter. May raise, exactly as `prepare` does."""
+    if name not in WHY_HELD:
+        return {}
+    light = _WHY_HELD_PREPARE.get(name)
+    if light:
+        return getattr(_why_module(name), light)(config, today)
+    return prepare(name, config=config, today=today)
+
+
+def why_held(name: str, ctx: Context) -> dict[str, str]:
+    """{TICKER: why the next run keeps or sells it}. Never raises: an empty
+    answer leaves the page showing only why each name was bought, which is
+    true, where a failure here would take the holdings table down with it."""
+    if name not in WHY_HELD:
+        return {}
+    try:
+        return dict(_why_module(name).why_held(ctx) or {})
+    except Exception:                    # noqa: BLE001 — see docstring
+        return {}

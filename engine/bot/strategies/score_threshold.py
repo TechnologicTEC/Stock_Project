@@ -76,35 +76,10 @@ def build(ctx) -> list[Target]:
     # 1. Decide what to keep. Anything dropped here simply isn't in the target
     #    book, and the planner closes it.
     for ticker in sorted(held):
-        row = lookup.get(ticker)
-        if row is None or row.get("score") is None:
-            targets.append(Target(
-                ticker=ticker, notional=notional, sizing=executor.HOLD,
-                reason="Not in the current leaderboard — holding rather than reading "
-                       "missing data as a sell.",
-            ))
-            continue
-
-        score = float(row["score"])
-
-        if score < HARD_EXIT_SCORE:
-            continue        # hard floor: no minimum hold defers this
-
-        if score < EXIT_SCORE:
-            runs = common.runs_since_buy(ctx, ticker)
-            if runs is not None and runs < MIN_HOLD_RUNS:
-                targets.append(Target(
-                    ticker=ticker, notional=notional, sizing=executor.HOLD,
-                    reason=f"Score {score} is below the {EXIT_SCORE:.0f} exit, but only "
-                           f"{runs} run(s) held — minimum hold is {MIN_HOLD_RUNS}.",
-                ))
-            continue        # otherwise it goes
-
-        targets.append(Target(
-            ticker=ticker, notional=notional, sizing=executor.HOLD,
-            reason=f"Score {score} — {'above the entry' if score >= ENTRY_SCORE else 'in the hold band'}"
-                   f", exits below {EXIT_SCORE:.0f}.",
-        ))
+        keep, reason = _verdict(ctx, ticker, lookup.get(ticker))
+        if keep:
+            targets.append(Target(ticker=ticker, notional=notional,
+                                  sizing=executor.HOLD, reason=reason))
 
     # 2. Fill free slots with qualifying names, best first. Never reaches below
     #    the entry score to fill a slot — an empty slot stays as cash.
@@ -125,3 +100,38 @@ def build(ctx) -> list[Target]:
         ))
 
     return targets
+
+
+def _verdict(ctx, ticker: str, row: dict | None) -> tuple[bool, str]:
+    """(keep?, why) for one held name — the exit rules, in priority order.
+
+    Shared by `build` and `why_held`, so the page's "why it's held" is the
+    decision the next run will make rather than a second reading of the rules.
+    """
+    if row is None or row.get("score") is None:
+        return True, ("Not in the current leaderboard — holding rather than reading "
+                      "missing data as a sell.")
+
+    score = float(row["score"])
+
+    if score < HARD_EXIT_SCORE:
+        # Hard floor: no minimum hold defers this.
+        return False, (f"Score {score} is below {HARD_EXIT_SCORE:.0f}, the index median, "
+                       "so the next run sells it.")
+
+    if score < EXIT_SCORE:
+        runs = common.runs_since_buy(ctx, ticker)
+        if runs is not None and runs < MIN_HOLD_RUNS:
+            return True, (f"Score {score} is below the {EXIT_SCORE:.0f} exit, but only "
+                          f"{runs} run(s) held — minimum hold is {MIN_HOLD_RUNS}.")
+        return False, f"Score {score} is below the {EXIT_SCORE:.0f} exit, so the next run sells it."
+
+    band = (f"above the {ENTRY_SCORE:.0f} entry" if score >= ENTRY_SCORE
+            else f"in the {EXIT_SCORE:.0f}–{ENTRY_SCORE:.0f} hold band")
+    return True, f"Score {score}: {band}. Sold if it drops below {EXIT_SCORE:.0f}."
+
+
+def why_held(ctx) -> dict[str, str]:
+    """{TICKER: why the next run keeps or sells it} for each holding."""
+    lookup = common.by_ticker(common.rows_from(ctx))
+    return {t: _verdict(ctx, t, lookup.get(t))[1] for t in sorted(ctx.held_tickers())}

@@ -58,14 +58,7 @@ def build(ctx) -> list[Target]:
     # holdings (rather than returning []) matters: an empty target book means
     # "sell everything" to the planner, so "do nothing this run" has to be
     # written as "these are still my targets".
-    # Rebalance when the book is short as well as when the month turns. This
-    # strategy is always fully invested and always ~`slots` names, so holding
-    # fewer is a broken state, not a resting one — a partly-filled rebalance
-    # would otherwise be frozen in place until the 1st. See top_decile_long's
-    # is_rebalance_run for the same argument at length.
-    intended = min(slots, len(rows)) if rows else slots
-    if (held and not common.book_is_incomplete(len(held), intended)
-            and common.has_run_this_month(ctx)):
+    if not is_rebalance_run(ctx, rows):
         return [
             Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t)))
@@ -76,7 +69,7 @@ def build(ctx) -> list[Target]:
     # top of the ranking. Keeps come first so an existing position is never sold
     # merely to buy a name one rank above it.
     keeps = [t for t in sorted(held, key=lambda t: _rank_of(lookup.get(t)))
-             if _rank_of(lookup.get(t)) <= EXIT_RANK]
+             if kept_at_rebalance(lookup.get(t))]
     keeps = keeps[:slots]
 
     targets = [
@@ -99,6 +92,49 @@ def build(ctx) -> list[Target]:
         ))
 
     return targets
+
+
+def is_rebalance_run(ctx, rows: list[dict]) -> bool:
+    """Rebalance when the month turns, and when the book is short. This
+    strategy is always fully invested and always ~`slots` names, so holding
+    fewer is a broken state, not a resting one — a partly-filled rebalance
+    would otherwise be frozen in place until the 1st. See top_decile_long's
+    is_rebalance_run for the same argument at length."""
+    held = ctx.held_tickers()
+    slots = int(ctx.config.get("target_slots") or TARGET_RANK)
+    intended = min(slots, len(rows)) if rows else slots
+    return not (held and not common.book_is_incomplete(len(held), intended)
+                and common.has_run_this_month(ctx))
+
+
+def kept_at_rebalance(row: dict | None) -> bool:
+    """The buffer band: a held name survives a rebalance until it falls past
+    EXIT_RANK."""
+    return _rank_of(row) <= EXIT_RANK
+
+
+def why_held(ctx) -> dict[str, str]:
+    """{TICKER: what the next rebalance does to it, and why} for each holding.
+
+    Asks the same question `build` asks at a rebalance — `kept_at_rebalance` —
+    so the page states the rule the bot will act on, not the rank it was
+    bought at.
+    """
+    rows = common.rows_from(ctx)
+    lookup = common.by_ticker(rows)
+    when = common.next_rebalance(is_rebalance_run(ctx, rows), ctx.today)
+    out = {}
+    for ticker in sorted(ctx.held_tickers()):
+        row = lookup.get(ticker)
+        if not (row or {}).get("rank"):
+            out[ticker] = f"Not in the current ranking, so it is sold {when}."
+        elif kept_at_rebalance(row):
+            out[ticker] = (f"Rank {row['rank']} of {len(rows)}: inside the top "
+                           f"{EXIT_RANK}, so it is kept {when}.")
+        else:
+            out[ticker] = (f"Rank {row['rank']} of {len(rows)}: outside the top "
+                           f"{EXIT_RANK}, so it is sold {when} unless it climbs back.")
+    return out
 
 
 def _rank_of(row: dict | None) -> int:

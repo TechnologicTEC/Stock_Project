@@ -571,3 +571,30 @@ def test_a_failing_note_reporter_never_breaks_a_run_that_traded():
     orders — the orders are the thing that has to be right."""
     with patch.object(cc, "liquidity_notes", side_effect=RuntimeError("boom")):
         assert strategies.notes("creator_conviction", _ctx([])) == []
+
+
+# --------------------------------------------------------------------------
+# why_held — the bot page's "why it's held", which must say what build does
+# --------------------------------------------------------------------------
+
+def test_why_held_agrees_with_build_for_every_way_a_holding_ends():
+    board = [_entry("TURNED", bullish=1, bearish=3), _entry("LIVE", bullish=3)]
+    ctx = _ctx(board, held=["LIVE", "EXPIRED", "TURNED"],
+               opened={"LIVE": _at(5), "EXPIRED": _at(30), "TURNED": _at(1)})
+    kept = set(_tickers(cc.build(ctx)))
+    why = cc.why_held(ctx)
+    assert kept & {"LIVE", "EXPIRED", "TURNED"} == {"LIVE"}
+    assert why["LIVE"].startswith("25 day(s) left (bought 23 Sep); sold on 23 Oct")
+    assert why["EXPIRED"] == "Its clock ran out on 28 Sep, so the next run sells it."
+    assert why["TURNED"] == ("The creator has turned: 3 bearish against 1 bullish in "
+                             f"{cc.WINDOW_DAYS} days, so the next run sells it.")
+
+
+def test_prepare_holdings_reads_the_clock_without_pricing_the_queue():
+    with patch("engine.creator_signals.mention_leaderboard",
+               return_value=[_entry("NVTS", bullish=3)]), \
+         patch.object(cc, "load_clock_inputs", return_value=({"NVTS": _at(5)}, {})), \
+         patch.object(liquidity, "fetch_frames") as fetch:
+        extras = cc.prepare_holdings({}, TODAY)
+    fetch.assert_not_called()
+    assert set(extras) == {"board", "opened", "history"}
