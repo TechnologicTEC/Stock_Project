@@ -146,6 +146,22 @@ def plan(spin_offs: list[dict], *, raw_close=None) -> list[dict]:
     return items
 
 
+def force(items: list[dict], keys) -> list[str]:
+    """Mark held-back items a person has confirmed as "apply". `keys` are
+    "TICKER@YYYY-MM-DD". Only "cache doesn't show the drop" can be forced — the
+    check that a real move on the same day can fool: SPGI rose 1.9% on its
+    spin-off day (1 Jul 2026) because its whole sector rose 3-4%, so the drop
+    the check looks for never showed. Returns the keys that matched nothing
+    forceable, so a typo isn't silently ignored."""
+    wanted = {k.strip().upper() for k in keys or ()}
+    for item in items:
+        key = f'{item["ticker"]}@{item["ex_date"]}'
+        if key in wanted and item.get("status") == "cache doesn't show the drop":
+            item["status"], item["forced"] = "apply", True
+            wanted.discard(key)
+    return sorted(wanted)
+
+
 def apply(items: list[dict]) -> list[dict]:
     """Scale the cached rows before each ex-date and record it — one
     transaction per spin-off, so a row is never scaled without the record that
@@ -169,7 +185,8 @@ def apply(items: list[dict]) -> list[dict]:
                         low=PriceCache.low * f, close=PriceCache.close * f))
             done.setdefault(ticker, []).append(
                 {"ex_date": item["ex_date"], "factor": f, "new_symbol": item["new_symbol"],
-                 "rate": item["rate"], "applied_at": utcnow().isoformat(timespec="seconds")})
+                 "rate": item["rate"], "forced": bool(item.get("forced")),
+                 "applied_at": utcnow().isoformat(timespec="seconds")})
             payload = json.dumps(done)
             if row is None:
                 session.add(ApiCache(cache_key=ADJUSTMENTS_KEY, value_json=payload,

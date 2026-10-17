@@ -187,3 +187,25 @@ def test_get_spin_offs_raises_rather_than_reporting_none():
          patch("requests.get", return_value=_Resp({}, status=500)):
         with pytest.raises(requests.HTTPError):
             alpaca_client.get_spin_offs(["CTVA"], EX, EX)
+
+
+# --------------------------------------------------------------------------
+# --force: a person overrides "cache doesn't show the drop"
+# --------------------------------------------------------------------------
+
+def test_force_applies_only_a_held_back_spin_off_and_records_it():
+    """SPGI rose 1.9% on its spin-off day because its sector rose 3-4%."""
+    _seed(prev=12.40, on_ex=12.57)
+    items = spinoffs.plan([CTVA], raw_close=_raw_close)
+    assert items[0]["status"] == "cache doesn't show the drop"
+
+    assert spinoffs.force(items, ["ctva@2026-10-01", "SPGI@2026-07-01"]) == ["SPGI@2026-07-01"]
+    assert items[0]["status"] == "apply" and items[0]["forced"]
+    spinoffs.apply(items)
+    assert spinoffs.recorded()["CTVA"][0]["forced"] is True
+
+
+def test_force_cannot_override_the_other_checks():
+    items = spinoffs.plan([CTVA], raw_close=_raw_close)          # no cached prices
+    assert spinoffs.force(items, ["CTVA@2026-10-01"]) == ["CTVA@2026-10-01"]
+    assert items[0]["status"] == "no cached prices"

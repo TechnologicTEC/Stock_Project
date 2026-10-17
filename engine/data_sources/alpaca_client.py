@@ -173,6 +173,23 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
     against the live API: end-of-start-of-day returns 31 Aug, 21:00 UTC returns
     1 Sep, and now-minus-5-minutes is a 403.
     """
+    return get_bars_and_mode(ticker, start, end)[0]
+
+
+def get_bars_and_mode(ticker: str, start: date, end: date, *,
+                      mode: str | None = None) -> tuple[list[dict], str]:
+    """`get_historical_bars`, plus which adjustment the bars came back in
+    ("split" or "raw"), and `mode="raw"` to ask for raw directly.
+
+    The choice between the two (below) is made per fetch, from the bars in that
+    window, and a window can decide differently from the next. HON has a
+    reverse split and a spin-off on 29 Jun 2026 that nearly cancel: a window
+    containing that day picks raw, and one ending before it has no cliff to see
+    and stays split-adjusted - double. Four rows fetched that way on 16 Sep sat
+    at 2x their neighbours. So the caller (engine/price_history) remembers a
+    "raw" decision and passes it back in. Raw is still checked on the way: if it
+    shows a cliff of its own (a real split since), the choice is made afresh.
+    """
     symbol = to_alpaca(ticker)
     end_dt = datetime.combine(end, time.max)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
@@ -180,7 +197,14 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
     end_dt = min(end_dt, cutoff)
     start_dt = datetime.combine(start, datetime.min.time())
     if end_dt <= start_dt:
-        return []                    # window entirely inside the delay period
+        return [], mode or "split"   # window entirely inside the delay period
+
+    if mode == "raw":
+        raw_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
+                                   start=start_dt, end=end_dt, adjustment="raw")
+        raw_bars = _data_client().get_stock_bars(raw_req)[symbol]
+        if _largest_one_day_move(raw_bars) <= SPLIT_CLIFF_MOVE:
+            return _rows(raw_bars), "raw"
 
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
@@ -208,17 +232,19 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
         adjustment="split",
     )
     bars = _data_client().get_stock_bars(req)[symbol]
+    used = "split"
 
     # Neither adjustment mode is right for every name, so pick the one that
     # actually produces a continuous series.
     #
     # "split" is correct for a genuine split: APH went 2-for-1 on 2026-09-03 and
     # raw reads 160.08 -> 82.07, a 49% cliff that nothing downstream can tell
-    # from a crash. But Alpaca also carries a reverse-split for HON on
-    # 2026-06-29, alongside a spin-off, that never happened to the price — so
-    # applying it INVENTS a cliff: raw runs 232.21 -> 227.80 (3.7%) while split
-    # gives 464.42 -> 227.80 (50.9%). Honeywell then looks to the screener like
-    # it halved, and gets marked down for it.
+    # from a crash. But HON's 1-for-2 reverse split on 2026-06-29 came with a
+    # spin-off (0.5 HONA a share) that took back about half the price, so the
+    # two nearly cancel: raw runs 232.21 -> 227.80 (-1.9%; the real move counting
+    # HONA was -3.5%) while split gives 464.42 -> 227.80 (-50.9%), and Honeywell
+    # looked to the screener like it halved. (The reverse split was first
+    # thought spurious; it is real, offset by the spin-off. Oct 2026.)
     #
     # So: when the adjusted series still contains a cliff, fetch raw and keep
     # whichever moved less. A real crash looks identical in both (GL fell 53%
@@ -230,10 +256,14 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
                                        start=start_dt, end=end_dt, adjustment="raw")
             raw_bars = _data_client().get_stock_bars(raw_req)[symbol]
             if raw_bars and _largest_one_day_move(raw_bars) < _largest_one_day_move(bars):
-                bars = raw_bars
+                bars, used = raw_bars, "raw"
         except Exception:                # noqa: BLE001 — a second opinion, not a requirement
             pass
 
+    return _rows(bars), used
+
+
+def _rows(bars) -> list[dict]:
     return [
         {
             "date": b.timestamp.date(),

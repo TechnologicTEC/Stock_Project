@@ -295,9 +295,9 @@ def test_bars_are_requested_split_adjusted():
 # Picking the adjustment that actually produces a continuous series.
 #
 # "split" is right for a genuine split (APH 2-for-1, where raw shows a 49%
-# cliff). It is WRONG for HON, where Alpaca carries a reverse-split alongside a
-# June 2026 spin-off that never happened to the price — applying it invents a
-# 50.9% cliff where raw runs continuously at 3.7%.
+# cliff). It is WRONG for HON, whose June 2026 reverse split came with a
+# spin-off that took back about half the price — split shows a 50.9% cliff
+# where raw runs nearly continuously.
 # --------------------------------------------------------------------------
 
 class _CloseBar:
@@ -367,6 +367,36 @@ def test_a_failing_second_opinion_never_breaks_the_fetch():
     with patch.object(alpaca_client, "_data_client", return_value=_Client()):
         bars = alpaca_client.get_historical_bars("X", date(2026, 6, 24), date(2026, 6, 25))
     assert _closes_from(bars) == [100.0, 45.0]
+
+
+def test_the_fetch_reports_which_adjustment_it_used():
+    client, _ = _two_feed_client(split_closes=[454.84, 462.48, 464.42, 227.80],
+                                 raw_closes=[227.42, 231.24, 232.21, 227.80])
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        _bars, used = alpaca_client.get_bars_and_mode("HON", date(2026, 6, 24), date(2026, 6, 27))
+    assert used == "raw"
+
+
+def test_a_remembered_raw_choice_skips_the_split_series():
+    """A window ending BEFORE HON's 29 Jun event has no cliff, so on its own it
+    would stay split-adjusted - double. Told "raw", it asks for raw only."""
+    client, calls = _two_feed_client(split_closes=[454.84, 462.48, 464.42],
+                                     raw_closes=[227.42, 231.24, 232.21])
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars, used = alpaca_client.get_bars_and_mode("HON", date(2026, 6, 24), date(2026, 6, 26),
+                                                     mode="raw")
+    assert _closes_from(bars) == [227.42, 231.24, 232.21] and used == "raw"
+    assert calls == ["raw"]
+
+
+def test_a_remembered_raw_choice_gives_way_to_a_real_split_since():
+    """Raw with a cliff of its own means a genuine split happened: decide afresh."""
+    client, _ = _two_feed_client(split_closes=[78.87, 79.28, 81.59, 80.04],
+                                 raw_closes=[157.74, 158.55, 163.18, 80.04])
+    with patch.object(alpaca_client, "_data_client", return_value=client):
+        bars, used = alpaca_client.get_bars_and_mode("APH", date(2026, 6, 24), date(2026, 6, 27),
+                                                     mode="raw")
+    assert _closes_from(bars) == [78.87, 79.28, 81.59, 80.04] and used == "split"
 
 
 # --------------------------------------------------------------------------

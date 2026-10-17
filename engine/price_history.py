@@ -32,14 +32,28 @@ def _yf_bars(ticker: str, start: date, end: date) -> list[dict]:
         return []
 
 
+def _price_mode_key(ticker: str) -> str:
+    return f"price_mode:{ticker.upper()}"
+
+
 def _alpaca_bars(ticker: str, start: date, end: date) -> list[dict]:
+    """Alpaca bars, in the SAME adjustment every time for a given ticker.
+
+    The client picks split-adjusted or raw per fetch, and a window can pick
+    differently from the next (alpaca_client.get_bars_and_mode) — HON came back
+    doubled for four days in Aug 2025 that way. A "raw" decision is remembered
+    here and handed back, so every later window agrees with it."""
     try:
         from engine.data_sources import alpaca_client
-        if alpaca_client.is_configured():
-            return alpaca_client.get_historical_bars(ticker, start, end)
+        if not alpaca_client.is_configured():
+            return []
+        remembered = cache.get_value(_price_mode_key(ticker))
+        bars, used = alpaca_client.get_bars_and_mode(ticker, start, end, mode=remembered)
+        if used != (remembered or "split"):
+            cache.set_value(_price_mode_key(ticker), used)
+        return bars
     except Exception:
-        pass
-    return []
+        return []
 
 
 _VALID_SOURCES = frozenset({"yfinance", "alpaca"})

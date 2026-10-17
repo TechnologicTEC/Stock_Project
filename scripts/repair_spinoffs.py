@@ -13,6 +13,10 @@ first ones by hand and for looking at what it would do.
     python scripts/repair_spinoffs.py --prod                     # preview, production
     python scripts/repair_spinoffs.py --prod --tickers CTVA DD   # preview two names
     python scripts/repair_spinoffs.py --prod --tickers CTVA DD --apply
+    python scripts/repair_spinoffs.py --prod --tickers SPGI --force SPGI@2026-07-01
+
+--force applies one a person has checked that the safety check held back
+("cache doesn't show the drop") — a real move the same day can hide the drop.
 
 --prod uses ADMIN_DATABASE_URL from .env (the Supabase owner connection);
 without it the script uses DATABASE_URL, which on a dev machine is the local
@@ -67,7 +71,8 @@ def report(items: list[dict]) -> None:
             detail = (f"factor {i['factor']:.4f} ({i['ticker']} {i['parent_close']:.2f} + "
                       f"{i['rate']:g} x {i['new_symbol']} {i['new_close']:.2f}); cached move "
                       f"{i['cached_move']:+.1%}; {i['rows']} rows before the ex-date")
-        print(f"  {i['ticker']:6} {i['ex_date']}  -> {i['new_symbol']:6} {i['status']:28} {detail}")
+        status = i["status"] + (" (forced)" if i.get("forced") else "")
+        print(f"  {i['ticker']:6} {i['ex_date']}  -> {i['new_symbol']:6} {status:28} {detail}")
 
 
 def main() -> int:
@@ -75,6 +80,9 @@ def main() -> int:
     ap.add_argument("--prod", action="store_true", help="use ADMIN_DATABASE_URL (Supabase)")
     ap.add_argument("--tickers", nargs="*", help="only these (default: every cached ticker)")
     ap.add_argument("--apply", action="store_true", help="write the changes (default: preview)")
+    ap.add_argument("--force", nargs="*", default=[], metavar="TICKER@DATE",
+                    help="apply a spin-off held back as \"cache doesn't show the drop\" "
+                         "that a person has checked, e.g. SPGI@2026-07-01")
     args = ap.parse_args()
 
     from engine import spinoffs
@@ -91,6 +99,9 @@ def main() -> int:
     today = date.today()
     found = alpaca_client.get_spin_offs(tickers, today - timedelta(days=LOOKBACK_DAYS), today)
     items = spinoffs.plan(found)
+    unmatched = spinoffs.force(items, args.force)
+    if unmatched:
+        sys.exit(f"--force matched no held-back spin-off: {', '.join(unmatched)}")
     print(f"\n{len(found)} spin-off(s) on record for {len(tickers)} ticker(s) since "
           f"{today - timedelta(days=LOOKBACK_DAYS)}:")
     report(items)

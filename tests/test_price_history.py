@@ -79,3 +79,42 @@ def test_fetch_bars_uses_exactly_the_named_provider(monkeypatch):
          patch("engine.price_history._yf_bars", return_value=_bars(2)) as yf:
         assert price_history._fetch_bars("AAPL", date(2026, 6, 1), date(2026, 6, 1), "alpaca") == _bars(1)
         assert alp.called and not yf.called
+
+
+# --------------------------------------------------------------------------
+# The raw/split choice is remembered per ticker (HON's Aug 2025 rows came back
+# doubled from a window that decided differently from its neighbours).
+# --------------------------------------------------------------------------
+
+def test_a_raw_choice_is_remembered_and_handed_back():
+    from datetime import date as _d
+    from unittest.mock import patch as _patch
+
+    from engine import cache as _cache
+    from engine import price_history as ph
+
+    seen = []
+
+    def fake(ticker, start, end, *, mode=None):
+        seen.append(mode)
+        return [], "raw"
+
+    with _patch("engine.data_sources.alpaca_client.is_configured", return_value=True), \
+         _patch("engine.data_sources.alpaca_client.get_bars_and_mode", side_effect=fake):
+        ph._alpaca_bars("HON", _d(2026, 6, 1), _d(2026, 6, 30))
+        ph._alpaca_bars("HON", _d(2025, 8, 1), _d(2025, 8, 20))
+    assert seen == [None, "raw"]
+    assert _cache.get_value("price_mode:HON") == "raw"
+
+
+def test_a_name_that_needs_no_raw_choice_leaves_nothing_behind():
+    from datetime import date as _d
+    from unittest.mock import patch as _patch
+
+    from engine import cache as _cache
+    from engine import price_history as ph
+
+    with _patch("engine.data_sources.alpaca_client.is_configured", return_value=True), \
+         _patch("engine.data_sources.alpaca_client.get_bars_and_mode", return_value=([], "split")):
+        ph._alpaca_bars("APH", _d(2026, 6, 1), _d(2026, 6, 30))
+    assert _cache.get_value("price_mode:APH") is None
