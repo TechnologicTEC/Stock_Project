@@ -135,9 +135,45 @@ def main() -> None:
         except Exception as exc:
             print(f"  {t:6} prices (bot) FAILED: {type(exc).__name__}: {exc}", flush=True)
 
+    spun = adjust_spin_offs(start, end)
+
     news_line = f", news {newsed}/{len(tickers)}" if WARM_NEWS else ""
     print(f"\ndone: prices {priced}/{len(tickers)}, fundamentals {funded}/{len(tickers)}"
-          f"{news_line}, bot prices {bot_priced}/{len(bot_only)}", flush=True)
+          f"{news_line}, bot prices {bot_priced}/{len(bot_only)}, spin-offs adjusted {spun}",
+          flush=True)
+
+
+def adjust_spin_offs(start: date, end: date) -> int:
+    """Adjust the cached prices for any new spin-off (engine/spinoffs).
+
+    Every ticker in the cache, not just this job's: the screener's S&P names
+    live there too, and their momentum is what a missed spin-off distorts.
+    Runs after the refreshes above, which is the right order — a refresh before
+    a spin-off is recorded writes unadjusted rows, and recording it then scales
+    them with the rest. Never fails the job: a missed night is caught the next."""
+    from engine import spinoffs
+    from engine.data_sources import alpaca_client
+    from db.models import PriceCache
+
+    try:
+        with get_session() as s:
+            cached = sorted(t for (t,) in s.query(PriceCache.ticker)
+                            .filter(PriceCache.source == spinoffs.SOURCE).distinct())
+        items = spinoffs.plan(alpaca_client.get_spin_offs(cached, start, end))
+        applied = spinoffs.apply(items)
+    except Exception as exc:
+        print(f"  spin-offs FAILED: {type(exc).__name__}: {exc}", flush=True)
+        return 0
+    for item in items:
+        if item["status"] in ("apply", "already applied", "too small"):
+            continue
+        # Worth a look: Alpaca records a spin-off the cache doesn't reflect.
+        print(f"  spin-off {item['ticker']} {item['ex_date']} -> {item['new_symbol']}: "
+              f"{item['status']}", flush=True)
+    for item in applied:
+        print(f"  spin-off {item['ticker']} {item['ex_date']} -> {item['new_symbol']}: "
+              f"scaled {item['rows']} earlier rows by {item['factor']:.4f}", flush=True)
+    return len(applied)
 
 
 if __name__ == "__main__":

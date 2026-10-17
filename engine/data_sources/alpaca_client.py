@@ -247,6 +247,59 @@ def get_historical_bars(ticker: str, start: date, end: date) -> list[dict]:
     ]
 
 
+# Alpaca validates `types` server-side and 400s the whole request on an unknown
+# one ("spin_offs" and "spinoff" both fail); "spin_off" is the accepted name.
+_CORPORATE_ACTIONS_URL = "https://data.alpaca.markets/v1beta1/corporate-actions"
+_CA_SYMBOLS_PER_CALL = 100
+
+
+def get_spin_offs(tickers, start: date, end: date) -> list[dict]:
+    """Every spin-off Alpaca has on record for `tickers` with an ex-date in
+    [start, end], as Alpaca returns them (`source_symbol`, `new_symbol`,
+    `source_rate`, `new_rate`, `ex_date`, ...), symbols in OUR form.
+
+    Raises on an HTTP error: an outage must not read as "no spin-offs"."""
+    import requests
+
+    key, secret = _require_keys()
+    symbols = sorted({to_alpaca(t) for t in tickers if t})
+    out: list[dict] = []
+    for i in range(0, len(symbols), _CA_SYMBOLS_PER_CALL):
+        params = {"symbols": ",".join(symbols[i:i + _CA_SYMBOLS_PER_CALL]),
+                  "start": start.isoformat(), "end": end.isoformat(),
+                  "types": "spin_off", "limit": 1000}
+        while True:
+            resp = requests.get(_CORPORATE_ACTIONS_URL, params=params, timeout=20,
+                                headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
+            resp.raise_for_status()
+            body = resp.json()
+            for action in (body.get("corporate_actions") or {}).get("spin_offs") or []:
+                out.append({**action,
+                            "source_symbol": from_alpaca(action.get("source_symbol", "")),
+                            "new_symbol": from_alpaca(action.get("new_symbol", ""))})
+            token = body.get("next_page_token")
+            if not token:
+                break
+            params = {**params, "page_token": token}
+    return out
+
+
+def get_raw_close(ticker: str, day: date) -> float | None:
+    """The UNADJUSTED close on `day`, or on the first session after it within a
+    week. None when there is no such bar (a symbol that never traded, say)."""
+    symbol = to_alpaca(ticker)
+    req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
+                           start=datetime.combine(day, datetime.min.time()),
+                           end=datetime.combine(day + timedelta(days=7), datetime.min.time()),
+                           adjustment="raw")
+    try:
+        bars = _data_client().get_stock_bars(req)[symbol]
+    except KeyError:
+        return None
+    first = next((b for b in bars if b.timestamp.date() >= day), None)
+    return float(first.close) if first is not None else None
+
+
 # --------------------------------------------------------------------------
 # Paper trading (Section 6.8). All against paper=True — no real money.
 # --------------------------------------------------------------------------

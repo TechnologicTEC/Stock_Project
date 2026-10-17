@@ -81,7 +81,11 @@ def _fetch_bars(ticker: str, start: date, end: date, source: str) -> list[dict]:
     original cause of local vs online disagreeing. Dispatch resolves the fetcher by
     name at call time (not a table captured at import) so it stays test-patchable."""
     if source == "alpaca":
-        return _alpaca_bars(ticker, start, end)
+        # Alpaca doesn't adjust for spin-offs. The ones already applied to the
+        # cached rows are applied here too, or a refetch would write the
+        # unadjusted prices straight back over them (engine/spinoffs).
+        from engine import spinoffs
+        return spinoffs.adjust_bars(ticker, _alpaca_bars(ticker, start, end))
     return _yf_bars(ticker, start, end)
 
 
