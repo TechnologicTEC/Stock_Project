@@ -11,8 +11,12 @@ only via cache.py, never a page directly).
 """
 from __future__ import annotations
 
+import logging
+
 from engine import cache
 from engine.data_sources import fred_client, frankfurter_client
+
+logger = logging.getLogger(__name__)
 
 BASE_CURRENCY = "USD"
 SUPPORTED_CURRENCIES = ("USD", "NZD")
@@ -46,7 +50,10 @@ def _fetch_usd_per_nzd() -> dict:
 
 
 def _fx_info() -> dict:
-    return cache.get_or_fetch(_FX_CACHE_KEY, _FX_TTL_SECONDS, _fetch_usd_per_nzd)
+    # A day-old rate beats none: with both sources down, the page would
+    # otherwise fall back to showing everything in USD.
+    return cache.get_or_fetch(_FX_CACHE_KEY, _FX_TTL_SECONDS, _fetch_usd_per_nzd,
+                              fallback_to_stale=True)
 
 
 # Historical FX rates only ever get MORE final (ECB never revises a past fixing),
@@ -64,9 +71,17 @@ def historical_usd_rate(currency: str, on_date) -> float | None:
     if code in ("", "USD"):
         return 1.0
     key = f"fx_hist:{code}:{on_date.isoformat()}"
-    return cache.get_or_fetch(
-        key, _HIST_FX_TTL_SECONDS, lambda: frankfurter_client.usd_per(code, on_date)
-    )
+    try:
+        return cache.get_or_fetch(
+            key, _HIST_FX_TTL_SECONDS, lambda: frankfurter_client.usd_per(code, on_date)
+        )
+    except Exception as exc:
+        # A failed fetch is NOT cached (get_or_fetch stores only what it got),
+        # so the next read asks again. None here means "no rate this time":
+        # the caller drops the fact rather than mixing currencies.
+        logger.warning("FX %s on %s unavailable (%s: %s); not cached, will retry",
+                       code, on_date, type(exc).__name__, exc)
+        return None
 
 
 def get_rate(currency: str) -> float:
