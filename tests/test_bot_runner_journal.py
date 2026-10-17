@@ -420,6 +420,17 @@ def snapshots(recorded, monkeypatch):
     return calls
 
 
+def test_a_dry_run_records_no_snapshot(recorded, snapshots):
+    """The snapshot is an upsert on the session's date: a dry run would
+    overwrite a session already settled to the official close, or set a new
+    strategy's first date. Both kinds of dry run, after the close and pre-market."""
+    _run(recorded, dry_run=True, now=_utc(MON, 21, 45))
+    _run(recorded, dry_run=True, pre_market=True, now=_utc(TUE, 8, 30))
+    assert snapshots == []
+    _run(recorded, dry_run=False, now=_utc(MON, 21, 45))
+    assert [s["day"] for s in snapshots] == [MON]
+
+
 def test_a_run_that_crosses_midnight_records_the_session_it_measured(recorded, snapshots):
     _run(recorded, dry_run=False, now=_utc(TUE, 0, 0))
     assert [s["day"] for s in snapshots] == [MON]

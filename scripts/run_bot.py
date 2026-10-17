@@ -519,7 +519,16 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     final_positions = executor.current_positions(trading_client) if placed else positions
 
     verb = "would be placed" if dry_run else "submitted"
-    if pre_market:
+    if dry_run:
+        # A rehearsal records nothing that lasts. The snapshot is an upsert on
+        # the session's date, so a dry run in the NZ evening would overwrite a
+        # session the sync had already settled to the official close (and only
+        # the equity is repaired later, never cash or the position count), and
+        # on a strategy with no curve yet it would set the first date — the
+        # anchor for both the SPY line and the sync.
+        _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
+             f"(dry run: no snapshot)")
+    elif pre_market:
         _log(f"  done — {submitted} order(s) {verb}, equity ${final['equity']:,.2f} "
              f"(pre-market: no new snapshot)")
     else:
