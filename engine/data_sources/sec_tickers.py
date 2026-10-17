@@ -43,21 +43,24 @@ def _fetch_raw() -> dict:
 
 
 @lru_cache(maxsize=1)
-def _maps() -> tuple[frozenset, dict]:
-    """(ticker_set, name_to_ticker). company_tickers.json is a dict of
-    {"0": {"ticker": "AAPL", "title": "Apple Inc.", ...}, ...}."""
+def _maps() -> tuple[frozenset, dict, dict]:
+    """(ticker_set, name_to_ticker, ticker_to_title). company_tickers.json is a
+    dict of {"0": {"ticker": "AAPL", "title": "Apple Inc.", ...}, ...}."""
     raw = cache.get_or_fetch("sec:company_tickers", _TTL, _fetch_raw)
     rows = raw.values() if isinstance(raw, dict) else raw
     tickers: set[str] = set()
     name_to_ticker: dict[str, str] = {}
+    ticker_to_title: dict[str, str] = {}
     for row in rows:
         ticker = str(row.get("ticker", "")).upper().strip()
         if not ticker:
             continue
         tickers.add(ticker)
-        norm = normalize_name(row.get("title", ""))
+        title = row.get("title", "")
+        ticker_to_title.setdefault(ticker, title)
+        norm = normalize_name(title)
         name_to_ticker.setdefault(norm, ticker)  # first-wins (the file is ordered by size)
-    return frozenset(tickers), name_to_ticker
+    return frozenset(tickers), name_to_ticker, ticker_to_title
 
 
 def ticker_set() -> frozenset:
@@ -66,6 +69,11 @@ def ticker_set() -> frozenset:
 
 def name_to_ticker() -> dict:
     return _maps()[1]
+
+
+def ticker_to_title() -> dict:
+    """{TICKER: the company's registered name}, e.g. {"KOS": "Kosmos Energy Ltd."}."""
+    return _maps()[2]
 
 
 def is_real_ticker(ticker: str) -> bool:

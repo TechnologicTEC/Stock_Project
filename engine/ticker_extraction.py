@@ -14,10 +14,14 @@ US-listed symbols survive — the main false-positive killer.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from engine.data_sources import sec_tickers
+
+logger = logging.getLogger(__name__)
 
 _STANCES = {"bullish", "bearish", "neutral", "unknown"}
 
@@ -161,6 +165,173 @@ def _extract_dictionary(text: str) -> list[Mention]:
 
 
 # --------------------------------------------------------------------------
+# Does the ticker belong to the company the speaker named?
+#
+# SEC validation only proves a ticker is real, not that it is the RIGHT one.
+# Gemini reads the company name correctly from context but sometimes gives a
+# real ticker of a different company: an audit of all 440 stored mentions on
+# 17 Oct 2026 found 7 (Kratos Defense as KOS = Kosmos Energy, Eos Energy as
+# EOS = an Eaton Vance fund, Quantinuum as HQI = HireQuest, ...), 3 of them
+# counted as bullish votes; captions add more ("Gold Resource ... G O" -> GO =
+# Grocery Outlet). So the name is checked against the SEC's own name for the
+# ticker, in two layers:
+#
+# 1. **Free:** if the spoken name doesn't fit the ticker but is EXACTLY another
+#    listed company's name, use that company's ticker. Exact only — closest-
+#    match lookup "corrected" Navitas to NXTT and Arteris to Carter's.
+# 2. **Gemini:** whatever still doesn't fit is put to the model once per video
+#    — renames (Raytheon/RTX, Instacart/Maplebear) look like mismatches to a
+#    string comparison and are settled here, not dropped.
+# --------------------------------------------------------------------------
+
+# A squashed-name similarity this high is the same company spelt differently
+# (Vivacore/Vivakor 0.80, Neutra Band/NutriBand 0.84); the wrong tickers in the
+# audit topped out at 0.52.
+NAME_MATCH_RATIO = 0.75
+
+# Words too common to prove two names are the same company: "Iris Energy" and
+# "Eos Energy" share one and nothing else.
+_GENERIC = {"energy", "technologies", "technology", "tech", "gold", "mining", "resources",
+            "resource", "pharmaceuticals", "pharma", "therapeutics", "systems", "international",
+            "financial", "capital", "global", "solutions", "semiconductor", "industries",
+            "enterprises", "medical", "health", "healthcare", "bio", "biosciences", "acquisition",
+            "fund", "trust", "income", "bank", "motors", "networks", "software", "partners",
+            "american", "first", "new", "power", "and", "of"}
+
+_CHECK_PROMPT = (
+    "A stock-market video transcript was read for the stocks discussed. For each item "
+    "below, the speaker named a company ('spoken'), and the ticker given for it is "
+    "registered to the company in 'listed_as'. 'said' holds what the speaker said "
+    "around it; trust it over what you remember. Decide whether they are the same "
+    "company - counting renames, former names, parent companies, share classes, and a "
+    "SPAC the company is merging into, as the same. If they are not, give the correct "
+    "US-listed ticker for the company the speaker named, or null if it has none. "
+    "Respond with ONLY a JSON array like "
+    '[{"ticker":"KOS","same":false,"correct":"KTOS"}] with one entry per item.'
+)
+
+# How much of the transcript goes with each doubtful name. Agility Robotics
+# (CCXI) is the reason: from memory the model said it had no listing, but the
+# creator said "going public through a SPAC, ticker symbol CCXI" two lines on.
+_SAID_CHARS = 300
+_SAID_HITS = 2
+
+
+def _said(text: str, m: Mention) -> str:
+    """The transcript around the spoken name (or, failing that, the ticker)."""
+    if not text:
+        return ""
+    name = sec_tickers.normalize_name(m.company_name or "").split()
+    patterns = ([re.escape(name[0])] if name else []) + [rf"\b{re.escape(m.ticker)}\b"]
+    for pattern in patterns:
+        hits = list(re.finditer(pattern, text, flags=re.I))[:_SAID_HITS]
+        if hits:
+            return " ... ".join(text[max(0, h.start() - _SAID_CHARS): h.end() + _SAID_CHARS]
+                                for h in hits)
+    return ""
+
+
+def names_agree(spoken: str | None, official: str | None) -> bool:
+    """Could `spoken` be the company registered as `official`? Generous on
+    purpose: a False here only sends the pair on for a closer look.
+
+    The ticker itself is no evidence: "EOS Energy Enterprises" contains EOS,
+    and EOS is an Eaton Vance fund."""
+    a, b = sec_tickers.normalize_name(spoken or ""), sec_tickers.normalize_name(official or "")
+    if not a or not b:
+        return True                      # nothing to compare
+    if (set(a.split()) - _GENERIC) & (set(b.split()) - _GENERIC):
+        return True
+    sa, sb = a.replace(" ", ""), b.replace(" ", "")
+    if sa == "".join(w[0] for w in b.split()):
+        return True                      # IBM, AMD
+    return sa in sb or sb in sa or SequenceMatcher(None, sa, sb).ratio() >= NAME_MATCH_RATIO
+
+
+def _ask_model_to_check(pairs: list[dict]) -> dict[str, dict]:
+    from engine import chat_llm
+
+    # Held in a name for the length of the call — see engine/sponsorship.
+    client = chat_llm._client()
+    resp = client.models.generate_content(
+        model=chat_llm._model(),
+        contents=[{"role": "user", "parts": [{"text": (
+            f"{_CHECK_PROMPT}\n\nITEMS:\n{json.dumps(pairs)}")}]}],
+        config={"response_mime_type": "application/json", "temperature": 0},
+    )
+    data = json.loads((getattr(resp, "text", None) or "[]").strip())
+    if isinstance(data, dict):
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    return {str(d.get("ticker", "")).upper().strip(): d
+            for d in (data if isinstance(data, list) else []) if isinstance(d, dict)}
+
+
+def check_names(mentions: list[Mention], text: str = "") -> list[Mention]:
+    """Correct mentions whose ticker belongs to a different company. Never
+    drops one. `text` is the transcript, quoted to the model around each
+    doubtful name.
+
+    Raises TransientExtractionError if the model check fails for a retryable
+    reason, so the video is deferred rather than stored with a known-doubtful
+    ticker. Any other model failure keeps the mentions as they are, loudly —
+    which is what happened before this check existed.
+    """
+    real, titles, names = (sec_tickers.ticker_set(), sec_tickers.ticker_to_title(),
+                           sec_tickers.name_to_ticker())
+    doubtful: list[Mention] = []
+    for m in mentions:
+        if names_agree(m.company_name, titles.get(m.ticker)):
+            continue
+        exact = names.get(sec_tickers.normalize_name(m.company_name or ""))
+        if exact and exact != m.ticker and exact in real:
+            logger.info("Ticker check: %r is %s, not %s (%s)",
+                        m.company_name, exact, m.ticker, titles.get(m.ticker))
+            m.ticker = exact
+        else:
+            doubtful.append(m)
+
+    if doubtful and _llm_available():
+        try:
+            verdicts = _ask_model_to_check([
+                {"ticker": m.ticker, "spoken": m.company_name,
+                 "listed_as": titles.get(m.ticker), "said": _said(text, m)}
+                for m in doubtful])
+        except Exception as exc:
+            if _is_transient(exc):
+                raise TransientExtractionError(str(exc)) from exc
+            logger.warning("Ticker check: model failed (%s: %s); keeping %s unchecked",
+                           type(exc).__name__, exc, [m.ticker for m in doubtful])
+            verdicts = {}
+        for m in doubtful:
+            v = verdicts.get(m.ticker)
+            if v is None or v.get("same") is True:
+                continue                 # confirmed, or no answer to act on
+            correct = str(v.get("correct") or "").upper().strip()
+            # A correction is taken only when the SEC agrees the new ticker is
+            # the company the speaker named. The model's memory is older than
+            # the listings: replayed over the stored mentions it said SpaceX
+            # (SPCX) and Agility Robotics (CCXI, a SPAC) had no listing, and
+            # both do. So "not the same" alone never drops or moves a mention —
+            # it stays as it was, which is how every mention was kept before.
+            if correct and correct != m.ticker and correct in real and names_agree(
+                    m.company_name, titles.get(correct)):
+                logger.info("Ticker check: %r is %s, not %s (model, SEC name %r)",
+                            m.company_name, correct, m.ticker, titles.get(correct))
+                m.ticker = correct
+            else:
+                logger.warning("Ticker check: %r kept as %s (%s); the model doubted it "
+                               "but offered no ticker the SEC confirms (%r)",
+                               m.company_name, m.ticker, titles.get(m.ticker), correct or None)
+
+    out, seen = [], set()
+    for m in mentions:
+        if m.ticker not in seen:
+            seen.add(m.ticker)
+            out.append(m)
+    return out
+
+
+# --------------------------------------------------------------------------
 # Public
 # --------------------------------------------------------------------------
 def _validate(mentions: list[Mention]) -> list[Mention]:
@@ -187,7 +358,7 @@ def extract_mentions(text: str, *, use_llm: bool = True) -> list[Mention]:
         try:
             mentions = _extract_llm(text)
             if mentions:
-                return _validate(mentions)
+                return check_names(_validate(mentions), text)
             # LLM ran and found nothing — accept it, but still let the dictionary
             # catch an obvious $cashtag it might have skipped.
         except Exception as exc:

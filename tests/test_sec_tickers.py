@@ -30,6 +30,11 @@ def test_builds_ticker_set_and_name_map():
     assert names["nvidia"] == "NVDA" and names["palantir technologies"] == "PLTR"
 
 
+def test_maps_each_ticker_to_its_registered_name():
+    with patch("engine.data_sources.sec_tickers._fetch_raw", return_value=_RAW):
+        assert sec_tickers.ticker_to_title()["NVDA"] == "NVIDIA CORP"
+
+
 def test_normalize_name_strips_suffixes_and_punctuation():
     assert sec_tickers.normalize_name("Apple Inc.") == "apple"
     assert sec_tickers.normalize_name("NVIDIA CORP") == "nvidia"
