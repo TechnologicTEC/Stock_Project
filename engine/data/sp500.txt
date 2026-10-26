@@ -1,6 +1,6 @@
 # S&P 500 constituents — the neutral universe for screener validation.
 #
-# Snapshot fetched from Wikipedia's List_of_S&P_500_companies on 2026-10-02 and
+# Snapshot fetched from Wikipedia's List_of_S&P_500_companies on 2026-10-26 and
 # COMMITTED deliberately: a static list makes a validation run reproducible and
 # removes a network dependency from the batch job.
 #
@@ -25,6 +25,18 @@
 #   in   BE, FERG, ILMN, RDDT
 #   in   P               Everpure, SEC CIK 1474432
 # No bot held any name that left.
+#
+# Refreshed again 2026-10-26: PSKY and WBD had no price after 5 Oct and were
+# being withheld from the leaderboard. Confirmed against S&P's own 1 Oct 2026
+# announcement, SEC's ticker list and Alpaca's corporate actions:
+#   out  WBD -> TWLO     cash merger into Paramount Skydance ($31.02/sh, 6 Oct);
+#                        Twilio took its seat 6 Oct (SEC CIK 1447669)
+#   out  PSKY -> SKYD    renamed Skydance 6 Oct, same CUSIP and SEC CIK (2041610);
+#                        Alpaca's SKYD bars run back unbroken past the rename
+#   out  CTVA -> VYLR    Vylor, spun off 1 Oct, took Corteva's seat as its
+#                        accounting successor (SEC CIK 2128626); Corteva still
+#                        trades, now in the S&P MidCap 400
+# No bot held any of the six.
 #
 # This file is the index verbatim, which lists three companies TWICE, once per
 # share class (GOOG/GOOGL, FOX/FOXA, NWS/NWSA). What we screen and trade is 500:
@@ -152,7 +164,6 @@ CSGP
 CSX
 CTAS
 CTSH
-CTVA
 CVNA
 CVS
 CVX
@@ -410,7 +421,6 @@ PPG
 PPL
 PRU
 PSA
-PSKY
 PSX
 PTC
 PWR
@@ -437,6 +447,7 @@ SBUX
 SCHW
 SHW
 SJM
+SKYD
 SLB
 SMCI
 SNA
@@ -481,6 +492,7 @@ TSLA
 TSN
 TT
 TTWO
+TWLO
 TXN
 TXT
 TYL
@@ -508,10 +520,10 @@ VRTX
 VST
 VTR
 VTRS
+VYLR
 VZ
 WAB
 WAT
-WBD
 WDAY
 WDC
 WEC
