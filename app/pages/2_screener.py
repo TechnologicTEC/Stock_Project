@@ -178,12 +178,35 @@ def _render_leaderboard() -> None:
                 icon="📉",
             )
         if any(n == "sp400" for n, _lb in parts):
-            st.warning(
-                "**The S&P 400 rows have not been validated.** Every measurement of this score so far "
-                "was made on S&P 500 companies. Whether it says anything about mid-sized companies "
-                "hasn't been tested yet, so treat those rows as unproven — and no bot buys from them.",
-                icon="🧪",
-            )
+            mid = screener_validation.load_universe_result("sp400")
+            mid_o = (mid or {}).get("overall") or {}
+            if mid_o.get("mean_ic") is None:
+                st.warning(
+                    "**The S&P 400 rows have not been validated.** Every measurement of this score so "
+                    "far was made on S&P 500 companies. Whether it says anything about mid-sized "
+                    "companies hasn't been tested yet, so treat those rows as unproven — and no bot "
+                    "buys from them.",
+                    icon="🧪",
+                )
+            elif not mid_o.get("significant"):
+                st.warning(
+                    f"**On S&P 400 companies this score has shown no measurable edge.** Tested over five "
+                    f"years on {mid.get('n_tickers', '—')} mid-sized companies, its information coefficient "
+                    f"was **{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
+                    f"{mid_o.get('hit_rate')}) — indistinguishable from chance, where the S&P 500 shows a "
+                    "faint but real tilt. Treat these rows as a list to browse, not a signal; no bot buys "
+                    "from them.",
+                    icon="🧪",
+                )
+            else:
+                st.warning(
+                    f"**What this ranking is worth on the S&P 400.** Across {mid.get('n_tickers', '—')} "
+                    f"mid-sized companies this score has an information coefficient of "
+                    f"**{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
+                    f"{mid_o.get('hit_rate')}) — a faint tilt, not a prediction. No bot buys from these "
+                    "rows.",
+                    icon="🧪",
+                )
 
         top_n = st.radio("Show", [10, 20, 50], horizontal=True, index=1, key="lb_top_n")
         show = rows[:top_n]

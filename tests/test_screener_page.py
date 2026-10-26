@@ -411,3 +411,20 @@ def test_both_merges_by_score_and_labels_each_row_with_its_index():
     md = " ".join(m.value for m in at.markdown)
     assert "S&amp;P 400" in md or "S&P 400" in md
     assert "not been validated" in " ".join(getattr(w, "value", "") for w in at.warning)
+
+
+def test_the_sp400_view_shows_its_measured_result_once_one_exists():
+    """After the S&P 400 validation runs, its number replaces "not tested yet" —
+    and a result that is not significant is said plainly."""
+    _save_both_universes()
+    screener_validation.save_universe_result({
+        "universe": "sp400", "n_tickers": 399, "horizon_days": 91, "factor_ic": {},
+        "overall": {"mean_ic": 0.015, "t_stat": 0.72, "hit_rate": 0.57, "significant": False},
+    })
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.radio(key="lb_universe").set_value("S&P 400").run(timeout=30)
+    assert not at.exception
+    warnings = " ".join(getattr(w, "value", "") for w in at.warning)
+    assert "+0.015" in warnings and "no measurable edge" in warnings
+    assert "not been validated" not in warnings
