@@ -492,3 +492,32 @@ def test_the_registry_never_raises_for_the_page():
     ctx = _ctx([], held=["AAA"])                # no rows: rows_from raises
     assert strategies.why_held("composite_rebalance", ctx) == {}
     assert strategies.why_held("spy_harness", ctx) == {}
+
+
+# --------------------------------------------------------------------------
+# The S&P 400 leaderboard is for the Screener page only. Nothing validated the
+# score on mid caps, so no strategy may ever see those rows.
+# --------------------------------------------------------------------------
+
+def test_the_bots_read_only_the_sp500_leaderboard():
+    """Real save and load, both universes stored: the strategies' loader returns
+    the S&P 500 rows and nothing else."""
+    from engine import screener
+    from engine.screener import FactorResult, ScreenerResult
+
+    def result(ticker, score):
+        return ScreenerResult(ticker=ticker, overall_score=score, recommendation="Buy", data_errors=[],
+                              factors={n: FactorResult(score=score, reasons=[])
+                                       for n in screener.FACTOR_WEIGHTS})
+
+    screener.save_leaderboard(screener.build_leaderboard([result("BIG", 70.0)]))
+    screener.save_leaderboard(screener.build_leaderboard([result("MID", 90.0)], universe="sp400"))
+    got = common.load_leaderboard(date.today())
+    assert [r["ticker"] for r in got["rows"]] == ["BIG"]
+
+
+def test_a_payload_labelled_as_another_universe_is_refused():
+    payload = {"universe": "sp400", "generated_at": TODAY.isoformat(), "rows": _rows(5)}
+    with patch("engine.screener.load_leaderboard", return_value=payload):
+        with pytest.raises(strategies.StrategyDataError, match="sp400"):
+            common.load_leaderboard(TODAY)

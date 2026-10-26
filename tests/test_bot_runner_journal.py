@@ -722,7 +722,7 @@ def _first_of_the_month(recorded, monkeypatch, *, history):
         return this_run + history
     monkeypatch.setattr(journal, "recent_decisions", recent)
     monkeypatch.setattr("engine.screener.load_leaderboard",
-                        lambda: {"rows": rows, "generated_at": "2026-09-27"})
+                        lambda universe="sp500": {"rows": rows, "generated_at": "2026-09-27"})
 
     client = _HeldClient(held)
     with patch.object(run_bot.accounts, "clients_for", return_value=(client, None)), \

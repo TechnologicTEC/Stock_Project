@@ -84,3 +84,46 @@ def test_the_sample_inherits_the_dedupe():
     twice inflates the sample an IC is measured on."""
     assert "GOOG" not in universe.sample()
     assert "GOOG" not in universe.sample(every=1)
+
+
+# --------------------------------------------------------------------------
+# A second universe: the S&P MidCap 400, screened into its own leaderboard.
+# --------------------------------------------------------------------------
+
+def test_sp400_loads_its_own_snapshot():
+    tickers = universe.tickers("sp400")
+    assert 380 <= len(tickers) <= 420
+    assert "AA" in tickers and "ZION" in tickers
+    assert universe.sp400() is tickers
+
+
+def test_sp400_is_clean_dash_form_and_comment_free():
+    tickers = universe.tickers("sp400")
+    assert all(t == t.strip().upper() and t and not t.startswith("#") for t in tickers)
+    assert len(set(tickers)) == len(tickers)
+    assert not any("." in t for t in tickers)
+    assert "MOG-A" in tickers                     # Moog class A, dash form
+
+
+def test_the_two_universes_do_not_overlap():
+    """The S&P 1500 indices are disjoint. A name in both would be screened twice
+    and appear twice in the merged Screener view."""
+    assert not set(universe.tickers("sp400")) & set(universe.tickers("sp500"))
+
+
+def test_the_default_universe_is_still_the_sp500():
+    """Every existing caller — the bots' leaderboard, validation — passes no name."""
+    assert universe.tickers() is universe.sp500()
+    assert universe.constituents() == universe.constituents("sp500")
+    assert universe.sample() == universe.sp500()
+
+
+def test_sample_takes_a_universe():
+    assert universe.sample(10, every=4, universe="sp400") == universe.sp400()[::4][:10]
+
+
+def test_an_unknown_universe_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="sp400"):
+        universe.tickers("ftse100")

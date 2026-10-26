@@ -39,11 +39,18 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     from engine import screener
     from engine.bot.strategies import StrategyDataError
 
-    payload = screener.load_leaderboard()
+    # Named, not defaulted: the S&P 500 is the only universe the score was
+    # validated on. The S&P 400 ranking exists for the Screener page alone.
+    payload = screener.load_leaderboard("sp500")
     if not payload or not payload.get("rows"):
         raise StrategyDataError(
             "No S&P 500 leaderboard in the shared cache. The weekly screen job "
             "(scripts/screen_universe.py) writes it; refusing to trade without it."
+        )
+    if (payload.get("universe") or "sp500") != "sp500":
+        raise StrategyDataError(
+            f"The leaderboard in the S&P 500 slot is labelled {payload.get('universe')!r}. "
+            "The bots trade the S&P 500 ranking only; refusing."
         )
 
     generated = _as_date(payload.get("generated_at"))

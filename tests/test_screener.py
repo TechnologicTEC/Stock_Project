@@ -731,6 +731,26 @@ def test_leaderboard_round_trips_through_the_shared_cache():
     json.dumps(back)                                            # must stay JSON-serialisable
 
 
+def test_each_universe_has_its_own_leaderboard():
+    """The S&P 400 screen must never overwrite the S&P 500 ranking the bots trade
+    from: where a payload is stored comes from its own `universe` label."""
+    sp500 = screener.build_leaderboard([_sr("AAA", 75.0)])
+    sp400 = screener.build_leaderboard([_sr("MID", 80.0)], universe="sp400")
+    screener.save_leaderboard(sp400)
+    assert screener.load_leaderboard() is None                  # the S&P 500 key is untouched
+    screener.save_leaderboard(sp500)
+    assert [r["ticker"] for r in screener.load_leaderboard()["rows"]] == ["AAA"]
+    assert [r["ticker"] for r in screener.load_leaderboard("sp400")["rows"]] == ["MID"]
+    assert screener.leaderboard_key("sp500") == "leaderboard:sp500"   # the key the bots read
+
+
+def test_a_leaderboard_for_an_unknown_universe_is_refused():
+    with pytest.raises(ValueError):
+        screener.save_leaderboard(screener.build_leaderboard([_sr("X", 50.0)], universe="ftse"))
+    with pytest.raises(ValueError):
+        screener.load_leaderboard("ftse")
+
+
 def test_save_results_skips_tickers_with_no_score():
     results = [
         screener.ScreenerResult(ticker="NODATA", overall_score=None, recommendation="Insufficient data", factors={}, data_errors=["no data"]),

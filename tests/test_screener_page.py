@@ -346,3 +346,68 @@ def test_screener_page_warns_on_large_candidate_lists():
 
     assert not at.exception
     assert any("lot of Finnhub calls" in el.value for el in at.warning)
+
+
+# --------------------------------------------------------------------------
+# The S&P 400 leaderboard (mid caps): its own ranking, on this page only. The
+# score was validated on the S&P 500 alone, so its view must say so.
+# --------------------------------------------------------------------------
+
+def _save_both_universes():
+    screener.save_leaderboard(screener.build_leaderboard([
+        screener.ScreenerResult("AAA", 88.0, "Strong Buy", _full_factors(88.0), []),
+        screener.ScreenerResult("BBB", 55.0, "Hold", _full_factors(55.0), []),
+    ]))
+    screener.save_leaderboard(screener.build_leaderboard([
+        screener.ScreenerResult("MID", 90.0, "Strong Buy", _full_factors(90.0), [],
+                                company_name="Midco"),
+    ], universe="sp400"))
+
+
+def _lb_tickers(at):
+    return [b.key.removeprefix("lb_add_") for b in at.button if b.key and b.key.startswith("lb_add_")]
+
+
+def test_the_index_switch_defaults_to_the_sp500():
+    _save_both_universes()
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    assert at.radio(key="lb_universe").value == "S&P 500"
+    assert _lb_tickers(at) == ["AAA", "BBB"]
+
+
+def test_the_sp400_view_shows_its_own_ranking_and_says_it_is_unvalidated():
+    _save_both_universes()
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.radio(key="lb_universe").set_value("S&P 400").run(timeout=30)
+    assert not at.exception
+    assert _lb_tickers(at) == ["MID"]
+    warnings = " ".join(getattr(w, "value", "") for w in at.warning)
+    assert "not been validated" in warnings
+    assert any("S&P 400 names" in c.value for c in at.caption)
+
+
+def test_the_sp400_view_before_its_first_run_explains_rather_than_errors():
+    _two_name_leaderboard()                       # S&P 500 only
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.radio(key="lb_universe").set_value("S&P 400").run(timeout=30)
+    assert not at.exception
+    assert any("No S&P 400 leaderboard yet" in el.value for el in at.info)
+    assert _lb_tickers(at) == []
+
+
+def test_both_merges_by_score_and_labels_each_row_with_its_index():
+    """Valid because scoring is absolute: a mid cap's 90 means what a large cap's
+    90 means, so one list sorted by score is honest."""
+    _save_both_universes()
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.radio(key="lb_universe").set_value("Both").run(timeout=30)
+    assert not at.exception
+    assert _lb_tickers(at) == ["MID", "AAA", "BBB"]
+    md = " ".join(m.value for m in at.markdown)
+    assert "S&amp;P 400" in md or "S&P 400" in md
+    assert "not been validated" in " ".join(getattr(w, "value", "") for w in at.warning)

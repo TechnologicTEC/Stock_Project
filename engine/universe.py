@@ -11,6 +11,11 @@ The list is a **committed snapshot** (engine/data/sp500.txt), not a live fetch:
 a validation run should be reproducible, and the batch job shouldn't depend on
 scraping Wikipedia at 3am.
 
+There is a second universe, the S&P MidCap 400 (engine/data/sp400.txt), screened
+into its own leaderboard for the Screener page. Nothing trades it: the bots read
+the S&P 500 leaderboard only, and the score has been validated on the S&P 500
+only. Every function here defaults to "sp500", so existing callers are unchanged.
+
 Honest caveat, repeated from the data file because it matters: this is TODAY's
 index, so it carries **survivorship bias** — the companies that failed out of it
 aren't here. That's tolerable for ranking factors against each other (the bias
@@ -22,7 +27,24 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-_SP500_FILE = Path(__file__).resolve().parent / "data" / "sp500.txt"
+_DATA = Path(__file__).resolve().parent / "data"
+
+# name -> committed snapshot. The S&P 1500 indices are disjoint, so no ticker is
+# in two of these (tests/test_universe.py checks).
+UNIVERSES = {
+    "sp500": _DATA / "sp500.txt",
+    "sp400": _DATA / "sp400.txt",
+}
+LABELS = {"sp500": "S&P 500", "sp400": "S&P 400"}
+DEFAULT = "sp500"
+
+
+def _file(universe: str) -> Path:
+    try:
+        return UNIVERSES[universe]
+    except KeyError:
+        raise ValueError(f"Unknown universe {universe!r}; expected one of "
+                         f"{', '.join(UNIVERSES)}") from None
 
 # Companies the index lists TWICE, once per share class. The two tickers are the
 # same business: identical fundamentals, near-identical prices, and therefore
@@ -53,15 +75,21 @@ SECONDARY_SHARE_CLASSES = {
 }
 
 
-@lru_cache(maxsize=1)
-def constituents() -> tuple[str, ...]:
+def constituents(universe: str = DEFAULT) -> tuple[str, ...]:
     """Every ticker in the committed snapshot, uppercase, sorted, dash-form class
     shares (BRK-B) — INCLUDING both classes of a dual-class company.
 
-    This is the index as the file records it. Use `sp500()` for the list to
+    This is the index as the file records it. Use `tickers()` for the list to
     screen or trade. Cached: a static file can't change at runtime.
     """
-    lines = _SP500_FILE.read_text(encoding="utf-8").splitlines()
+    return _constituents(universe)
+
+
+# Cached on the universe NAME, through these: an lru_cache on the public functions
+# would key `tickers()` and `tickers("sp500")` apart and hand back two copies.
+@lru_cache(maxsize=None)
+def _constituents(universe: str) -> tuple[str, ...]:
+    lines = _file(universe).read_text(encoding="utf-8").splitlines()
     return tuple(
         line.strip().upper()
         for line in lines
@@ -69,9 +97,8 @@ def constituents() -> tuple[str, ...]:
     )
 
 
-@lru_cache(maxsize=1)
-def sp500() -> tuple[str, ...]:
-    """The universe to screen and trade: one ticker per COMPANY.
+def tickers(universe: str = DEFAULT) -> tuple[str, ...]:
+    """The universe to screen (and, for the S&P 500, trade): one ticker per COMPANY.
 
     Deliberately not the index verbatim — see `SECONDARY_SHARE_CLASSES` for why
     a second share class is dropped rather than scored. It matters for validation
@@ -79,10 +106,24 @@ def sp500() -> tuple[str, ...]:
     the same series, which inflates the sample an IC is measured on and
     correlates its residuals.
     """
-    return tuple(t for t in constituents() if t not in SECONDARY_SHARE_CLASSES)
+    return _tickers(universe)
 
 
-def sample(n: int | None = None, *, every: int | None = None) -> tuple[str, ...]:
+@lru_cache(maxsize=None)
+def _tickers(universe: str) -> tuple[str, ...]:
+    return tuple(t for t in _constituents(universe) if t not in SECONDARY_SHARE_CLASSES)
+
+
+def sp500() -> tuple[str, ...]:
+    return tickers("sp500")
+
+
+def sp400() -> tuple[str, ...]:
+    return tickers("sp400")
+
+
+def sample(n: int | None = None, *, every: int | None = None,
+           universe: str = DEFAULT) -> tuple[str, ...]:
     """A deterministic subset of the universe, for a cheaper run.
 
     Deterministic on purpose — a *random* sample would make two validation runs
@@ -90,9 +131,9 @@ def sample(n: int | None = None, *, every: int | None = None) -> tuple[str, ...]
     didn't reproduce. `every=5` takes every 5th name (spreading the sample across
     the alphabet rather than stopping at 'C'); `n` caps the count.
     """
-    tickers = sp500()
+    names = tickers(universe)
     if every and every > 1:
-        tickers = tickers[::every]
+        names = names[::every]
     if n is not None and n >= 0:
-        tickers = tickers[:n]
-    return tuple(tickers)
+        names = names[:n]
+    return tuple(names)

@@ -1,5 +1,5 @@
 """
-Screen the whole S&P 500 at TODAY's live score and cache the ranked leaderboard —
+Screen the whole S&P 500 (or, with SCREEN_UNIVERSE=sp400, the S&P 400) at TODAY's live score and cache the ranked leaderboard —
 the "what looks best right now" companion to the historical validation.
 
 Unlike scripts/validate_universe.py (which reconstructs PAST scores to measure the
@@ -22,7 +22,10 @@ Run:
     FINNHUB_API_KEY=... ALPACA_API_KEY=... ALPACA_SECRET_KEY=... \
     EDGAR_USER_AGENT='Your Name you@example.com' python scripts/screen_universe.py
 
-Env knobs (optional): UNIVERSE_EVERY (every Nth name), UNIVERSE_SIZE (cap).
+Env knobs (optional): UNIVERSE_EVERY (every Nth name), UNIVERSE_SIZE (cap),
+SCREEN_UNIVERSE (`sp500`, the default, or `sp400`). The S&P 400 run is saved to
+its own leaderboard (`leaderboard:sp400`) for the Screener page; the bots read
+the S&P 500 one only, so this run can't change what they trade.
 
 REPAIR MODE. `SCREEN_TICKERS=AAA,BBB` rescreens just those names and splices
 them into the EXISTING leaderboard instead of rebuilding it. Use it when a run
@@ -60,11 +63,18 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-def _repair_targets() -> list[str]:
+def _universe() -> str:
+    """Which list this run screens. Unknown names stop the run before any work."""
+    name = (os.environ.get("SCREEN_UNIVERSE") or "").strip().lower() or universe.DEFAULT
+    universe.tickers(name)                     # raises ValueError on an unknown name
+    return name
+
+
+def _repair_targets(uni: str) -> list[str]:
     """Names the current leaderboard has lost: absent from it, or scored under
     the minimum weighting. Read from the saved payload rather than recomputed,
     so this repairs exactly what is actually published."""
-    payload = screener.load_leaderboard() or {}
+    payload = screener.load_leaderboard(uni) or {}
     ranked = {(r.get("ticker") or "").upper() for r in (payload.get("rows") or [])}
     W = screener.FACTOR_WEIGHTS
     thin = set()
@@ -73,12 +83,12 @@ def _repair_targets() -> list[str]:
         covered = sum(w for name, w in W.items() if scores.get(name) is not None)
         if covered < screener.MIN_FACTOR_WEIGHT - 1e-9:
             thin.add((row.get("ticker") or "").upper())
-    missing = {t.upper() for t in universe.sp500()} - ranked
+    missing = {t.upper() for t in universe.tickers(uni)} - ranked
     return sorted(missing | thin)
 
 
-def _repair(tickers: list[str], chunk: int) -> None:
-    payload = screener.load_leaderboard()
+def _repair(tickers: list[str], chunk: int, uni: str) -> None:
+    payload = screener.load_leaderboard(uni)
     if not payload:
         print("no leaderboard to repair — run a full screen first", flush=True)
         return
@@ -96,7 +106,7 @@ def _repair(tickers: list[str], chunk: int) -> None:
         print(f"  {done}/{len(tickers)} rescored  (~{(len(tickers)-done)*rate/60:.0f} min left)",
               flush=True)
 
-    out = screener.load_leaderboard()
+    out = screener.load_leaderboard(uni)
     print(f"\nrepaired {out.get('n_repaired')} · still withheld {out.get('n_withheld')} · "
           f"leaderboard now {out.get('n_scored')} names, in "
           f"{(time.time() - started) / 60:.1f} min", flush=True)
@@ -108,24 +118,26 @@ def _repair(tickers: list[str], chunk: int) -> None:
 
 def main() -> None:
     configure()  # DATABASE_URL from env
+    uni = _universe()
+    label = universe.LABELS[uni]
 
     requested = (os.environ.get("SCREEN_TICKERS") or "").strip()
     if requested:
         chunk = max(1, _int_env("SCREEN_CHUNK", 40))
-        targets = (_repair_targets() if requested.lower() == "auto"
+        targets = (_repair_targets(uni) if requested.lower() == "auto"
                    else sorted({t.strip().upper() for t in requested.split(",") if t.strip()}))
         if not targets:
             print("nothing to repair — every name is ranked with enough coverage", flush=True)
             return
-        _repair(targets, chunk)
+        _repair(targets, chunk, uni)
         return
 
     every = _int_env("UNIVERSE_EVERY", 1)
     size = _int_env("UNIVERSE_SIZE", 0) or None
     chunk = max(1, _int_env("SCREEN_CHUNK", 40))
-    tickers = list(universe.sample(size, every=every))
+    tickers = list(universe.sample(size, every=every, universe=uni))
 
-    print(f"screening {len(tickers)} of {len(universe.sp500())} S&P 500 names "
+    print(f"screening {len(tickers)} of {len(universe.tickers(uni))} {label} names "
           f"(every={every}, size={size or 'all'}), chunks of {chunk}", flush=True)
     started = time.time()
 
@@ -139,11 +151,11 @@ def main() -> None:
         batch = tickers[start:start + chunk]
         results.extend(screener.screen_tickers(batch))
         done = min(start + chunk, len(tickers))
-        screener.save_leaderboard(screener.build_leaderboard(results, universe="sp500"))
+        screener.save_leaderboard(screener.build_leaderboard(results, universe=uni))
         rate = (time.time() - started) / done
         print(f"  {done}/{len(tickers)} screened  (~{(len(tickers)-done)*rate/60:.0f} min left)", flush=True)
 
-    payload = screener.load_leaderboard()
+    payload = screener.load_leaderboard(uni)
 
     elapsed = (time.time() - started) / 60
     print(f"\nscored {payload['n_scored']}/{payload['n_requested']} in {elapsed:.1f} min", flush=True)

@@ -1158,7 +1158,18 @@ def get_score_history(ticker: str) -> list[dict]:
 # and were never validated historically, so they ride on top of a 4-factor core.
 # --------------------------------------------------------------------------
 
-LEADERBOARD_CACHE_KEY = "leaderboard:sp500"
+LEADERBOARD_CACHE_KEY = "leaderboard:sp500"   # the S&P 500 ranking — the only one the bots read
+
+
+def leaderboard_key(universe: str = "sp500") -> str:
+    """Where one universe's ranking lives. The S&P 400 has its own (Screener page
+    only), so its weekly run can never overwrite the ranking the bots trade from."""
+    from engine import universe as universes
+
+    if universe not in universes.UNIVERSES:
+        raise ValueError(f"Unknown universe {universe!r}; expected one of "
+                         f"{', '.join(universes.UNIVERSES)}")
+    return f"leaderboard:{universe}"
 # 21 days, not 7. The job runs WEEKLY, so a 7-day TTL would leave zero slack: one
 # skipped or failed run and the leaderboard silently disappears from the page. Three
 # weeks means a couple of misses degrade to "this is getting old" (the page shows
@@ -1318,8 +1329,10 @@ def _count_without_sector(results: list[ScreenerResult]) -> int:
 
 
 def save_leaderboard(payload: dict) -> None:
-    cache.set_value(LEADERBOARD_CACHE_KEY, payload)
+    """Stored under the payload's OWN `universe` label, never a key the caller
+    picks — a mislabelled call can't land an S&P 400 ranking where the bots read."""
+    cache.set_value(leaderboard_key(payload.get("universe") or "sp500"), payload)
 
 
-def load_leaderboard() -> dict | None:
-    return cache.get_value(LEADERBOARD_CACHE_KEY, ttl_seconds=LEADERBOARD_TTL_SECONDS) or None
+def load_leaderboard(universe: str = "sp500") -> dict | None:
+    return cache.get_value(leaderboard_key(universe), ttl_seconds=LEADERBOARD_TTL_SECONDS) or None

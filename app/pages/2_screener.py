@@ -17,7 +17,7 @@ import streamlit as st
 from app import _cache, _theme
 from app._auth import gate
 from db.session import current_user_id, init_db
-from engine import portfolio, screener, screener_validation, watchlist
+from engine import portfolio, screener, screener_validation, universe, watchlist
 
 st.set_page_config(page_title="Screener — Investment Co-Pilot", page_icon="📊", layout="wide")
 _theme.apply()
@@ -31,7 +31,7 @@ st.caption(
 )
 
 # --------------------------------------------------------------------------
-# S&P 500 leaderboard — a live screen of the whole index, ranked. Produced by the
+# Leaderboards — a live screen of the S&P 500 (and, separately, the S&P 400), ranked. Produced by the
 # weekly batch job (scripts/screen_universe.py); this only reads it. The
 # honest framing is the whole point: this ranking is exactly what the
 # cross-sectional validation measured, so its measured IC sits right beside it.
@@ -48,51 +48,84 @@ def _add_to_watchlist_button(column, ticker: str, watched: set[str], key: str) -
         st.rerun()
 
 
+# Which leaderboards each view shows. The S&P 500 is the one the bots trade and
+# the one the score was validated on; the S&P 400 (mid caps) is shown here only.
+_LB_VIEWS = {"S&P 500": ("sp500",), "S&P 400": ("sp400",), "Both": ("sp500", "sp400")}
+
+
+def _leaderboard_view(names: tuple[str, ...]) -> tuple[list[dict], list[tuple[str, dict]]]:
+    """(rows, parts): the rows to show, and each stored leaderboard behind them.
+
+    "Both" is one list sorted by score and renumbered. That is honest because
+    scoring is ABSOLUTE — a mid cap's 90 is judged on the same fixed curves as a
+    large cap's 90 — and the S&P 1500 indices share no names. Rows are copied, so
+    the cached payloads are never mutated.
+    """
+    parts = [(n, lb) for n in names if (lb := screener.load_leaderboard(n))]
+    if len(names) == 1:
+        return (list(parts[0][1].get("rows") or []) if parts else []), parts
+    merged = [dict(r, index=universe.LABELS[n]) for n, lb in parts for r in (lb.get("rows") or [])]
+    merged.sort(key=lambda r: -(r.get("score") or 0))
+    for i, r in enumerate(merged, start=1):
+        r["rank"] = i
+    return merged, parts
+
+
+def _age_days(generated) -> int | None:
+    try:
+        return (date.today() - date.fromisoformat(generated)).days if generated else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _render_leaderboard() -> None:
-    lb = screener.load_leaderboard()
-    with st.expander("🏆 S&P 500 leaderboard — highest-scoring names right now", expanded=False):
-        if not lb:
-            st.info(
-                "No leaderboard yet. Run the **S&P 500 leaderboard** GitHub Action (or "
-                "`python scripts/screen_universe.py`) and the ranking appears here. It live-screens all "
-                "~500 names — including news sentiment and analyst consensus, which the historical "
-                "validation can't reconstruct — so it takes ~an hour and runs as a scheduled job."
-            )
+    with st.expander("🏆 Leaderboard — highest-scoring names right now", expanded=False):
+        choice = st.radio("Index", list(_LB_VIEWS), horizontal=True, key="lb_universe",
+                          help="The S&P 400 is US mid-sized companies. Only the S&P 500 "
+                               "ranking is used by the bots.")
+        names = _LB_VIEWS[choice]
+        rows, parts = _leaderboard_view(names)
+        if not parts:
+            if names == ("sp400",):
+                st.info(
+                    "No S&P 400 leaderboard yet. It is screened weekly on Saturdays (ready Sunday "
+                    "morning NZ) by the same GitHub Action — run it by hand with `universe` set to "
+                    "`sp400`, or `SCREEN_UNIVERSE=sp400 python scripts/screen_universe.py`."
+                )
+            else:
+                st.info(
+                    "No leaderboard yet. Run the **S&P 500 leaderboard** GitHub Action (or "
+                    "`python scripts/screen_universe.py`) and the ranking appears here. It live-screens all "
+                    "~500 names — including news sentiment and analyst consensus, which the historical "
+                    "validation can't reconstruct — so it takes ~an hour and runs as a scheduled job."
+                )
             return
 
-        rows = lb.get("rows", [])
         # Show the AGE, not just the date. The job is weekly and the cache holds
         # for three weeks, so a missed run can leave stale scores on screen looking
         # exactly like fresh ones — the same trap that hid an 11-day-old FX rate.
-        generated = lb.get("generated_at")
-        age_days = None
-        if generated:
-            try:
-                age_days = (date.today() - date.fromisoformat(generated)).days
-            except (TypeError, ValueError):
-                age_days = None
-        age_txt = "" if age_days is None else (
-            " · today" if age_days == 0 else f" · {age_days} day{'s' if age_days != 1 else ''} ago")
-        st.caption(f"Live screen of {lb.get('n_scored', len(rows))} S&P 500 names · "
-                   f"run {generated or '—'}{age_txt} (refreshes weekly)")
-        if age_days is not None and age_days > 10:
-            st.warning(
-                f"**These scores are {age_days} days old** — the weekly refresh looks like it hasn't run. "
-                "Prices and news have moved since; re-run the **S&P 500 leaderboard** Action for a current "
-                "ranking.",
-                icon="🕒",
-            )
+        runs = []
+        for n, lb in parts:
+            generated, age_days = lb.get("generated_at"), _age_days(lb.get("generated_at"))
+            age_txt = "" if age_days is None else (
+                " · today" if age_days == 0 else f" · {age_days} day{'s' if age_days != 1 else ''} ago")
+            runs.append(f"{lb.get('n_scored', len(lb.get('rows') or []))} {universe.LABELS[n]} names · "
+                        f"run {generated or '—'}{age_txt}")
+            if age_days is not None and age_days > 10:
+                st.warning(
+                    f"**These {universe.LABELS[n]} scores are {age_days} days old** — the weekly refresh "
+                    "looks like it hasn't run. Prices and news have moved since; re-run the leaderboard "
+                    "Action for a current ranking.",
+                    icon="🕒",
+                )
+        st.caption(f"Live screen of {'; '.join(runs)} (refreshes weekly)")
+        if len(names) > len(parts):
+            st.caption("No S&P 400 leaderboard yet — showing the S&P 500 only.")
 
-        # A quiet degradation, surfaced. Valuation and margin are scored against
-        # SECTOR curves, so a name whose industry lookup failed is judged on
-        # generic ones instead — an oil company on a P/E of 25 scores 15 in its
-        # own sector and 55 generically. It used to show up only as a blank
-        # company name in the table, which reads as a cosmetic glitch. One run
-        # had 45 of 503 like this, and the bot traded on that ranking.
         # Names the run could not score on enough real data to rank fairly.
         # They are absent from the table rather than sitting in it on a partial
         # score, so the count is the only place their absence is visible.
-        withheld = lb.get("n_withheld")
+        withheld = sum(lb.get("n_withheld") or 0 for _n, lb in parts)
         if withheld:
             st.info(
                 f"**{withheld} name{'s' if withheld != 1 else ''} withheld from this ranking** — "
@@ -103,8 +136,14 @@ def _render_leaderboard() -> None:
                 icon="ℹ️",
             )
 
-        no_sector = lb.get("n_no_sector")
-        scored = lb.get("n_scored") or len(rows)
+        # A quiet degradation, surfaced. Valuation and margin are scored against
+        # SECTOR curves, so a name whose industry lookup failed is judged on
+        # generic ones instead — an oil company on a P/E of 25 scores 15 in its
+        # own sector and 55 generically. It used to show up only as a blank
+        # company name in the table, which reads as a cosmetic glitch. One run
+        # had 45 of 503 like this, and the bot traded on that ranking.
+        no_sector = sum(lb.get("n_no_sector") or 0 for _n, lb in parts)
+        scored = sum(lb.get("n_scored") or len(lb.get("rows") or []) for _n, lb in parts)
         if no_sector and scored:
             st.warning(
                 f"**{no_sector} of {scored} names were scored without an industry** "
@@ -138,11 +177,19 @@ def _render_leaderboard() -> None:
                 "actually been. Not financial advice.",
                 icon="📉",
             )
+        if any(n == "sp400" for n, _lb in parts):
+            st.warning(
+                "**The S&P 400 rows have not been validated.** Every measurement of this score so far "
+                "was made on S&P 500 companies. Whether it says anything about mid-sized companies "
+                "hasn't been tested yet, so treat those rows as unproven — and no bot buys from them.",
+                icon="🧪",
+            )
 
         top_n = st.radio("Show", [10, 20, 50], horizontal=True, index=1, key="lb_top_n")
         show = rows[:top_n]
         factor_labels = screener.FACTOR_LABELS
         watched = {w["ticker"] for w in watchlist.list_watchlist()}
+        merged = len(names) > 1
 
         # Short column heads — six full factor names would force a horizontal
         # scroll on every screen width.
@@ -156,14 +203,17 @@ def _render_leaderboard() -> None:
         # Tuned against the narrowest real case (1280px window, sidebar open):
         # the button column has to hold "➕ Add" on ONE line — at 1.0 it wrapped
         # and every row grew to 55px — and the factor columns only ever hold two
-        # digits, so the width goes to Name and the button instead.
-        widths = [0.4, 1.0, 1.9, 0.75, 1.2] + [0.55] * len(factor_labels) + [1.45]
+        # digits, so the width goes to Name and the button instead. The merged
+        # view takes its index column ("500"/"400", the full name on hover — "S&P
+        # 500" wrapped onto two lines and doubled every row's height) out of Name's.
+        lead = [0.4, 1.0, 1.4, 0.5] if merged else [0.4, 1.0, 1.9]
+        widths = lead + [0.75, 1.2] + [0.55] * len(factor_labels) + [1.45]
         with _theme.section("Highest-scoring right now",
-                            tag=f"top {len(show)} of {lb.get('n_scored', len(rows))}"), \
+                            tag=f"top {len(show)} of {len(rows)}"), \
                 st.container(key="lb_grid"):
             head = st.columns(widths, vertical_alignment="bottom")
-            labels = ["#", "Ticker", "Name", "Score", "Rating"] + \
-                     [short.get(f, f[:3].upper()) for f in factor_labels] + [""]
+            labels = (["#", "Ticker", "Name"] + (["S&P"] if merged else []) + ["Score", "Rating"] +
+                      [short.get(f, f[:3].upper()) for f in factor_labels] + [""])
             for col, label in zip(head, labels):
                 col.markdown(f'<div class="cp-eyebrow">{label}</div>', unsafe_allow_html=True)
 
@@ -172,11 +222,17 @@ def _render_leaderboard() -> None:
                 c[0].markdown(f'<span class="cp-dim">{r["rank"]}</span>', unsafe_allow_html=True)
                 c[1].markdown(f'<span class="cp-tick">{r["ticker"]}</span>', unsafe_allow_html=True)
                 c[2].markdown(f'<span class="cp-co">{r.get("name") or "—"}</span>', unsafe_allow_html=True)
-                c[3].markdown(f'<span class="cp-num">{r["score"]:.1f}</span>', unsafe_allow_html=True)
-                c[4].markdown(_theme.badge_html(r["recommendation"]), unsafe_allow_html=True)
+                k = 3
+                if merged:
+                    label = r.get("index", "")
+                    c[k].markdown(f'<span class="cp-dim" title="{label}">{label.removeprefix("S&P ")}</span>',
+                                  unsafe_allow_html=True)
+                    k += 1
+                c[k].markdown(f'<span class="cp-num">{r["score"]:.1f}</span>', unsafe_allow_html=True)
+                c[k + 1].markdown(_theme.badge_html(r["recommendation"]), unsafe_allow_html=True)
                 for i, f in enumerate(factor_labels):
                     v = (r.get("factor_scores") or {}).get(f)
-                    c[5 + i].markdown(
+                    c[k + 2 + i].markdown(
                         f'<span class="cp-num">{v:.0f}</span>' if v is not None
                         else '<span class="cp-dim">—</span>', unsafe_allow_html=True)
                 _add_to_watchlist_button(c[-1], r["ticker"], watched, key=f"lb_add_{r['ticker']}")
@@ -185,7 +241,6 @@ def _render_leaderboard() -> None:
                 "Sentiment (SEN) and Analyst (ANA) are **live-only** factors — not part of the "
                 "historical IC above, which covers the fundamentals-plus-momentum core."
             )
-
 
 _render_leaderboard()
 
@@ -258,7 +313,7 @@ with st.expander("⭐ Watchlist", expanded=False):
                 watchlist.remove_from_watchlist(t)
             st.rerun()
     else:
-        st.caption("Nothing on your watchlist yet — add tickers above, or from the S&P 500 leaderboard.")
+        st.caption("Nothing on your watchlist yet — add tickers above, or from the leaderboard.")
 
 st.subheader("Choose what to screen")
 
