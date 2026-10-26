@@ -18,3 +18,7 @@ __pycache__/
 db/*.db
 db/*.db-journal
 *.sqlite3
+
+# Local preview configs can carry database URLs (one leaked the prod password,
+# committed 2 Sep 2026). Never track them.
+.claude/launch.json
