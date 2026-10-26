@@ -511,7 +511,12 @@ def test_a_dry_run_is_passed_through_so_the_sync_can_skip_it(recorded, snapshots
 
 
 class _SyncClient:
-    """The two broker reads the sync makes."""
+    """The two broker reads the sync makes, honouring the dates asked for.
+
+    The history behaves as Alpaca's was measured to on 26 Oct 2026: with no
+    end it returns one month from the start (its default period), and with an
+    end it returns everything up to the day before it. A fake that returned
+    every point regardless hid exactly that for a month."""
 
     def __init__(self, official, sessions, *, fail=False):
         self.official, self.sessions, self.fail = official, sessions, fail
@@ -519,13 +524,17 @@ class _SyncClient:
     def get_portfolio_history(self, req):
         if self.fail:
             raise RuntimeError("portfolio history down")
+        start = req.start.date()
+        stop = req.end.date() if req.end else date(start.year, start.month + 1, start.day)
+        days = [d for d in sorted(self.official) if start <= d < stop]
         # 20:00 New York is 00:00 UTC the next day — the broker's own stamping.
         stamps = [int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()) + 86_400
-                  for d in self.official]
-        return type("H", (), {"timestamp": stamps, "equity": list(self.official.values())})()
+                  for d in days]
+        return type("H", (), {"timestamp": stamps, "equity": [self.official[d] for d in days]})()
 
     def get_calendar(self, req):
-        return [type("C", (), {"date": d})() for d in sorted(self.sessions)]
+        return [type("C", (), {"date": d})() for d in sorted(self.sessions)
+                if req.start <= d <= req.end]
 
 
 @pytest.fixture
@@ -593,6 +602,44 @@ def test_the_sync_is_skipped_on_a_dry_run(curve):
     run_bot._sync_official_equity("golden_cross", dict(CONFIG), client,
                                   _utc(TUE, 10, 30), dry_run=True)
     assert curve[MON]["equity"] == 1.0
+
+
+def test_the_sync_reaches_sessions_more_than_a_month_after_the_start(curve):
+    """Every October 2026 session kept its after-hours reading — golden_cross
+    $34 high on 21 Oct — because the sync only ever saw September."""
+    sep1, oct21, oct22 = date(2026, 9, 1), date(2026, 10, 21), date(2026, 10, 22)
+    _seed(curve, {sep1: 10_000.00, oct21: 10_113.27})
+    official = {sep1: 10_000.00, oct21: 10_147.13, oct22: 10_027.29}
+    client = _SyncClient(official, set(official))
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client,
+                                  _utc(date(2026, 10, 23), 13, 41))
+    assert curve[oct21]["equity"] == 10_147.13
+    assert curve[oct22]["equity"] == 10_027.29                # and the gap filled
+
+
+def test_the_sync_repairs_a_stale_spy_line(monkeypatch):
+    """The real journal and price cache, not stand-ins. 22 Oct 2026 was stored
+    with 21 Oct's SPY close (the run read the cache a minute before warm-cache
+    wrote the new bar); by the next run the bar is there, so the line is fixed."""
+    from engine import cache, price_history
+
+    monkeypatch.setattr(run_bot, "_log", lambda _m: None)
+    sep1, oct21, oct22 = date(2026, 9, 1), date(2026, 10, 21), date(2026, 10, 22)
+    for day, equity, bench in [(sep1, 10_000.00, 10_000.00), (oct21, 10_147.13, 10_148.47),
+                               (oct22, 10_027.29, 10_148.47)]:
+        journal.snapshot_equity("golden_cross", equity=equity, cash=0.0, positions_count=1,
+                                benchmark_equity=bench, day=day)
+    cache.save_price_bars("SPY", price_history.canonical_source(), [
+        {"date": d, "open": c, "high": c, "low": c, "close": c, "volume": 1}
+        for d, c in [(sep1, 761.78), (oct21, 773.09), (oct22, 763.96)]])
+
+    official = {sep1: 10_000.00, oct21: 10_147.13, oct22: 10_027.29}
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), _SyncClient(official, set(official)),
+                                  _utc(date(2026, 10, 23), 13, 41))
+
+    line = {r["date"]: r["benchmark_equity"] for r in journal.equity_curve("golden_cross")}
+    assert line[oct22] == pytest.approx(10_000 * 763.96 / 761.78)       # $10,028.62
+    assert line[oct21] == 10_148.47 and line[sep1] == 10_000.00         # already right
 
 
 def test_a_failing_broker_never_breaks_the_run(curve):

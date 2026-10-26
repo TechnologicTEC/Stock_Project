@@ -84,13 +84,49 @@ def plan(existing: dict, official: dict, sessions: set, *, settled_before: date_
     return {"update": update, "insert": insert, "delete": delete}
 
 
-def fetch_official(client, start: date_) -> dict:
-    """`{session: official close equity}` from the broker's daily history."""
+def plan_benchmark(existing: dict, closes: dict, *, anchor: date_, starting_equity: float,
+                   settled_before: date_) -> list[tuple[date_, float]]:
+    """`[(session, value)]` to put the SPY line right. Pure.
+
+    `existing` is `{date: benchmark_equity or None}` from our table, `closes`
+    `{date: SPY close}` from the price cache. A run that reads the cache before
+    warm-cache has written the day's bar stores the PREVIOUS close for that
+    day, and nothing used to revisit it: 1–7 Oct 2026 sat flat for five
+    sessions, and 22 Oct carried 21 Oct's close ($120 high).
+
+    A day is only recomputed from its OWN close. Falling back to the latest
+    close before it would repeat the very mistake being repaired, so a day whose
+    bar is still missing waits for a later run. Same for the anchor.
+    """
+    if anchor not in closes:
+        return []
+    base = closes[anchor]
+    fixes = []
+    for day, stored in sorted(existing.items()):
+        if day >= settled_before or day not in closes:
+            continue
+        want = starting_equity * closes[day] / base
+        if stored is None or abs(stored - want) > TOLERANCE:
+            fixes.append((day, want))
+    return fixes
+
+
+def fetch_official(client, start: date_, end: date_) -> dict:
+    """`{session: official close equity}` from the broker's daily history,
+    for the sessions from `start` up to the day before `end`.
+
+    The end is not optional. Given only a start, Alpaca returns ONE MONTH from
+    it (its default period is 1M): asked for "since 1 Sep" on 26 Oct 2026 it
+    stopped at 30 Sep, so from October every session kept its after-hours
+    reading and nothing said so. A future end is accepted and simply returns
+    everything to date.
+    """
     from alpaca.trading.requests import GetPortfolioHistoryRequest
 
     history = client.get_portfolio_history(GetPortfolioHistoryRequest(
         timeframe="1D",
         start=datetime(start.year, start.month, start.day),
+        end=datetime(end.year, end.month, end.day),
         # Measured: for daily points this makes no difference today. Stated
         # anyway, because "the 4pm close" is the whole point and a changed
         # default would otherwise change it silently.

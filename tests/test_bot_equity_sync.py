@@ -116,4 +116,73 @@ def test_fetch_official_keys_by_the_new_york_session():
             assert req.extended_hours is False
             return _History()
 
-    assert es.fetch_official(_Client(), WED16) == {WED16: 9_897.22}
+    assert es.fetch_official(_Client(), WED16, THU17) == {WED16: 9_897.22}
+
+
+class _MonthCappedClient:
+    """Alpaca's daily history as measured on 26 Oct 2026: given a start and no
+    end, it returns ONE MONTH from the start (its default period is 1M), so
+    "since 1 Sep" stopped at 30 Sep. An end makes it return the whole span, up
+    to the day before the end."""
+
+    def __init__(self, official):
+        self.official = official
+
+    def get_portfolio_history(self, req):
+        start = req.start.date()
+        stop = req.end.date() if req.end else date(start.year, start.month + 1, start.day)
+        days = [d for d in sorted(self.official) if start <= d < stop]
+        stamps = [int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()) + 86_400
+                  for d in days]
+        return type("H", (), {"timestamp": stamps,
+                              "equity": [self.official[d] for d in days]})()
+
+
+def test_fetch_official_reaches_past_the_first_month():
+    """From 1 Oct 2026 every session was left at its after-hours reading,
+    because the sync asked for "everything since 1 Sep" and got September."""
+    official = {date(2026, 9, 1): 10_000.0, date(2026, 10, 22): 10_027.29}
+    got = es.fetch_official(_MonthCappedClient(official), date(2026, 9, 1), date(2026, 10, 23))
+    assert got == official
+
+
+# --------------------------------------------------------------------------
+# The SPY line. Numbers are the real ones: 1 Sep's SPY close is the anchor, and
+# 22 Oct had been stored with 21 Oct's close because that run read the cache
+# before warm-cache had written the new bar.
+# --------------------------------------------------------------------------
+
+SEP1, OCT21, OCT22, OCT23 = (date(2026, 9, 1), date(2026, 10, 21),
+                             date(2026, 10, 22), date(2026, 10, 23))
+SPY = {SEP1: 761.78, OCT21: 773.09, OCT22: 763.96, OCT23: 759.97}
+
+
+def _bench(existing, *, closes=SPY, settled_before=date(2026, 10, 24)):
+    return es.plan_benchmark(existing, closes, anchor=SEP1, starting_equity=10_000.0,
+                             settled_before=settled_before)
+
+
+def test_a_stale_spy_value_is_recomputed_from_that_days_close():
+    fixes = _bench({SEP1: 10_000.0, OCT21: 10_148.47, OCT22: 10_148.47})
+    assert [d for d, _ in fixes] == [OCT22]
+    assert fixes[0][1] == pytest.approx(10_000 * 763.96 / 761.78)       # $10,028.62
+
+
+def test_a_missing_spy_value_is_filled_in():
+    assert [d for d, _ in _bench({SEP1: 10_000.0, OCT23: None})] == [OCT23]
+
+
+def test_a_day_without_its_own_close_is_left_alone():
+    """Repairing from the latest close BEFORE the day is the very mistake being
+    repaired — wait for the bar instead."""
+    closes = {k: v for k, v in SPY.items() if k != OCT22}
+    assert _bench({SEP1: 10_000.0, OCT22: 10_148.47}, closes=closes) == []
+
+
+def test_an_unsettled_day_is_left_alone():
+    assert _bench({SEP1: 10_000.0, OCT23: 1.0}, settled_before=OCT23) == []
+
+
+def test_no_anchor_close_means_no_repairs():
+    closes = {k: v for k, v in SPY.items() if k != SEP1}
+    assert _bench({SEP1: 10_000.0, OCT22: 10_148.47}, closes=closes) == []

@@ -384,6 +384,21 @@ def set_official_equity(strategy: str, day: date_, equity: float) -> bool:
         return True
 
 
+def set_benchmark_equity(strategy: str, day: date_, value: float) -> bool:
+    """Replace ONLY the SPY line's value on an existing snapshot. Returns
+    whether a row was found. See engine/bot/equity_sync.plan_benchmark."""
+    with get_session() as session:
+        row = session.execute(
+            select(BotEquitySnapshot)
+            .where(BotEquitySnapshot.strategy == strategy)
+            .where(BotEquitySnapshot.date == day)
+        ).scalars().first()
+        if row is None:
+            return False
+        row.benchmark_equity = value
+        return True
+
+
 def delete_snapshot(strategy: str, day: date_) -> bool:
     """Remove one day's snapshot. Only for a date the broker's calendar says was
     not a session — see engine/bot/equity_sync.plan for the fences around it."""
