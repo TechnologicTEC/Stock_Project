@@ -27,7 +27,7 @@ list of things that didn't work.**
 > Personal, educational tool. **Not financial advice**, and nothing here places
 > trades with real money.
 
-`Python 3.11` · `Streamlit` · `SQLAlchemy 2.0 + Alembic` · `Postgres/Supabase`
+`Python 3.11` · `Streamlit` · `SQLAlchemy 2.1 + Alembic` · `Postgres/Supabase`
 · `Hugging Face Spaces (Docker + Google OIDC)` · 10 pages · ~9,700 LOC of engine
 code · **649 tests** · 4 scheduled GitHub Actions
 
@@ -186,13 +186,21 @@ investment-platform/
 │   ├── cache.py            # THE cache layer (Section 5's rule lives here)
 │   ├── price_history.py    # Shared "ensure cached, give me a DataFrame"
 │   │                       #   helper - used by portfolio.py, screener.py,
-│   │                       #   and health.py (SPY benchmark history)
+│   │                       #   and health.py (SPY benchmark history).
+│   │                       #   Remembers a stock's raw/split-adjusted pick
+│   │                       #   (api_cache price_mode:<TICKER>) and applies
+│   │                       #   recorded spin-off adjustments on every fetch
+│   ├── spinoffs.py         # Spin-off price adjustment Alpaca doesn't make:
+│   │                       #   scales cached prices before the ex-date,
+│   │                       #   records it (api_cache spinoff_adjustments)
 │   ├── portfolio.py        # Holdings CRUD, valuation, allocation (ticker,
 │   │                       #   asset type, sector, country, market cap),
 │   │                       #   historical value reconstruction, sell flow
 │   │                       #   + wallet + transaction backfill (Phase 3.5),
 │   │                       #   activity history + undo/delete/reset
-│   ├── currency.py         # USD/NZD display conversion (FRED DEXUSNZ rate)
+│   ├── currency.py         # USD/NZD display conversion (ECB via frankfurter,
+│   │                       #   FRED DEXUSNZ fallback) + historical FX for
+│   │                       #   foreign filers (failed lookups never cached)
 │   ├── watchlist.py         # Watchlist CRUD - the screener's candidate list
 │   ├── screener.py          # The Investment Screener's scoring engine
 │   ├── screener_history.py  # point-in-time historical screener scoring
@@ -225,6 +233,9 @@ investment-platform/
 ├── tests/                  # 419 tests, all mocked - no API keys needed to run these
 ├── scripts/
 │   ├── setup_app_role.py    # Provision the least-privilege Postgres runtime role
+│   ├── repair_spinoffs.py   # Preview/apply spin-off price adjustments
+│   │                        #   (--prod, --apply with backup, --force for a
+│   │                        #   held-back one a person has checked)
 │   ├── verify_setup.py      # Real network calls against YOUR keys
 │   └── inspect_metrics.py   # Prints Finnhub's raw fundamentals fields for
 │                             #   a ticker, to check against screener.py's
@@ -575,8 +586,10 @@ transactions, cash flows, and the wallet back to an empty slate.
 switches every displayed value between USD (default) and NZD. Everything is
 *stored and priced in USD* — the free data sources all quote USD — so this is
 purely a render-time conversion (`engine/currency.py`): USD is the identity
-rate, and NZD uses FRED's `DEXUSNZ` (USD per NZD) pulled through the cache
-layer, cached ~12h. The toggle converts the summary metrics, the value-over-
+rate, and NZD uses the ECB's daily fixing via frankfurter
+(`api.frankfurter.dev/v1`), falling back to FRED's lagged `DEXUSNZ`, pulled
+through the cache layer and cached ~12h. If both sources are down it keeps
+showing the last cached rate. The toggle converts the summary metrics, the value-over-
 time chart (and its axis label), the holdings table, the allocation hovers,
 and the transaction-history amounts; percentages (gain/loss %, today %) are
 unit-invariant and left alone, and amounts you *enter* (cost basis, sale

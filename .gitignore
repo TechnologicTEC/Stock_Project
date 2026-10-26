@@ -8,6 +8,9 @@ __pycache__/
 # Secrets - never commit your real keys
 .env
 .env.bak
+
+# Backups written by the guarded repair scripts - keep them outside the repo
+*_backup_*.json
 .streamlit/secrets.toml
 
 # Local database and cache files - each collaborator runs their own

@@ -84,7 +84,13 @@ video_mentions    id, video_id FK, ticker, company_name,
 2. Skip any `video_id` already stored. For each new one:
 3. `get_transcript(video_id)` → text, or record `no_captions`/`blocked` and continue.
 4. `extract_mentions(text)` → candidates `{ticker, company, stance, confidence}`.
-5. Validate each ticker resolves to a live quote (drops "IT/CEO/DD/A" etc.).
+5. Validate each ticker against the SEC list (drops "IT/CEO/DD/A" etc.), then check it
+   belongs to the company the speaker named (`ticker_extraction.check_names`, Oct 2026):
+   an exact SEC-name match corrects it for free (Kratos Defense: KOS -> KTOS); what still
+   doesn't fit goes to Gemini once per video with a transcript excerpt, and a correction is
+   taken only if the SEC's name for the new ticker fits. Doubt alone never drops a mention.
+   Transcripts must be English (`lang=en` + `looks_english`), and sponsored segments are
+   kept but never counted (`engine/sponsorship`).
 6. `screener.screen_tickers([validated])` → score + recommendation.
 7. Persist `creator_videos` + `video_mentions` in one transaction.
 
