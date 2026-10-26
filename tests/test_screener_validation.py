@@ -812,3 +812,20 @@ def test_reading_once_scores_exactly_as_reading_per_date(monkeypatch):
     monkeypatch.setattr(screener_history, "ticker_inputs", lambda _t: {})
     per_date = sv.walk_forward(*args, **kw)
     assert once == per_date and once
+
+
+def test_each_universe_has_its_own_validation_result():
+    """An S&P 400 validation must never stand in for the S&P 500 one the pages
+    quote beside the bots' ranking."""
+    sv.save_universe_result({"universe": "sp400", "overall": {"mean_ic": 0.01}})
+    assert sv.load_universe_result() is None
+    sv.save_universe_result({"universe": "sp500", "overall": {"mean_ic": 0.05}})
+    assert sv.load_universe_result()["overall"]["mean_ic"] == 0.05
+    assert sv.load_universe_result("sp400")["overall"]["mean_ic"] == 0.01
+
+
+def test_a_validation_result_for_an_unknown_universe_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError):
+        sv.save_universe_result({"universe": "ftse"})

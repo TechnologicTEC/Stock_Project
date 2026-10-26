@@ -30,7 +30,13 @@ Run (locally, full coverage):
 
 Env knobs (all optional): UNIVERSE_EVERY (take every Nth name), UNIVERSE_SIZE
 (cap the count), VALIDATION_LOOKBACK_DAYS, VALIDATION_HORIZON_DAYS,
-VALIDATION_STEP_DAYS.
+VALIDATION_STEP_DAYS, VALIDATION_UNIVERSE (`sp500`, the default, or `sp400` —
+stored as its own result, so it never replaces the S&P 500 one the pages quote).
+
+An S&P 400 run belongs on a local machine against a scratch SQLite database
+(DATABASE_URL=sqlite:///...): its 5-year price histories would take ~120 MB of the
+free-plan Supabase database, and the S&P 500 run alone is near the job's 350-min
+limit.
 """
 from __future__ import annotations
 
@@ -71,6 +77,9 @@ def _bool_env(name: str, default: bool) -> bool:
 def main() -> None:
     configure()  # DATABASE_URL from env
 
+    name = (os.environ.get("VALIDATION_UNIVERSE") or "").strip().lower() or universe.DEFAULT
+    universe.tickers(name)                     # an unknown name stops here, before any work
+    label = universe.LABELS[name]
     every = _int_env("UNIVERSE_EVERY", 1)
     size = _int_env("UNIVERSE_SIZE", 0) or None
     # 5 years, not 2. The t-stat is limited by *independent time periods*, not by
@@ -88,12 +97,12 @@ def main() -> None:
     # VALIDATION_INCLUDE_ANALYST=1 when running from a machine that can reach Yahoo.
     include_analyst = _bool_env("VALIDATION_INCLUDE_ANALYST", False)
 
-    tickers = universe.sample(size, every=every)
+    tickers = universe.sample(size, every=every, universe=name)
     # Pinned to the ISO week, NOT to today: that's what lets a killed run resume
     # from the per-ticker cache on a later day instead of redoing everything
     # against a window that shifted underneath it.
     start, end = validation.pinned_window(date.today(), lookback_days=lookback, horizon_days=horizon)
-    print(f"universe: {len(tickers)} of {len(universe.sp500())} S&P 500 names "
+    print(f"universe: {len(tickers)} of {len(universe.tickers(name))} {label} names "
           f"(every={every}, size={size or 'all'})", flush=True)
     print(f"window: {start} -> {end} (pinned to this ISO week) | horizon {horizon}d | step {step}d",
           flush=True)
@@ -125,7 +134,7 @@ def main() -> None:
         raise SystemExit(1)
 
     summary = validation.summarize_universe(points, horizon_days=horizon, step_days=step)
-    summary["universe"] = "sp500"
+    summary["universe"] = name
     summary["n_requested"] = len(tickers)
     summary["lookback_days"] = lookback
     summary["include_analyst"] = include_analyst

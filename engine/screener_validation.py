@@ -792,13 +792,23 @@ def load_pooled_result(key: str) -> dict | None:
 # say what it actually measured.
 # --------------------------------------------------------------------------
 
-UNIVERSE_RESULT_KEY = "universe_validation:sp500"
 UNIVERSE_RESULT_TTL_SECONDS = 90 * 24 * 60 * 60    # a quarterly-ish run stays readable
 
 
+def universe_result_key(name: str = "sp500") -> str:
+    """One stored result per universe. The pages quote the S&P 500 one beside
+    the bots' ranking; an S&P 400 run must never stand in for it."""
+    from engine import universe
+
+    if name not in universe.UNIVERSES:
+        raise ValueError(f"Unknown universe {name!r}; expected one of {', '.join(universe.UNIVERSES)}")
+    return f"universe_validation:{name}"
+
+
 def save_universe_result(summary: dict) -> None:
-    cache.set_value(UNIVERSE_RESULT_KEY, summary)
+    """Stored under the summary's OWN `universe` label, like the leaderboards."""
+    cache.set_value(universe_result_key(summary.get("universe") or "sp500"), summary)
 
 
-def load_universe_result() -> dict | None:
-    return cache.get_value(UNIVERSE_RESULT_KEY, ttl_seconds=UNIVERSE_RESULT_TTL_SECONDS) or None
+def load_universe_result(name: str = "sp500") -> dict | None:
+    return cache.get_value(universe_result_key(name), ttl_seconds=UNIVERSE_RESULT_TTL_SECONDS) or None
