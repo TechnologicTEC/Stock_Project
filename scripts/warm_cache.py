@@ -40,6 +40,10 @@ PRICE_LOOKBACK_DAYS = 400      # ~13 months — covers the chart's 1Y/Max ranges
 BOT_LOOKBACK_DAYS = 30         # matches check_fills' own window
 FINNHUB_PAUSE_SECONDS = 1.1    # free tier is 60 req/min; stay just under it
 WARM_NEWS = os.environ.get("WARM_NEWS", "1").lower() not in ("0", "false", "no")
+# Headlines older than this go, unless they are among a ticker's newest
+# NEWS_DISPLAY_LIMIT (what the sentiment score reads). Comfortably past the
+# 7-day fetch window, so URL de-duplication still sees anything a fetch returns.
+NEWS_KEEP_DAYS = 10
 
 
 def all_tickers() -> list[str]:
@@ -136,11 +140,25 @@ def main() -> None:
             print(f"  {t:6} prices (bot) FAILED: {type(exc).__name__}: {exc}", flush=True)
 
     spun = adjust_spin_offs(start, end)
+    prune_news()
 
     news_line = f", news {newsed}/{len(tickers)}" if WARM_NEWS else ""
     print(f"\ndone: prices {priced}/{len(tickers)}, fundamentals {funded}/{len(tickers)}"
           f"{news_line}, bot prices {bot_priced}/{len(bot_only)}, spin-offs adjusted {spun}",
           flush=True)
+
+
+def prune_news() -> None:
+    """Keep news_cache bounded (engine/cache.prune_news). On the free-plan
+    database a table that only grows is a countdown to read-only. Never fails
+    the job: a missed night is caught the next."""
+    try:
+        removed = cache.prune_news(keep_newest=news.NEWS_DISPLAY_LIMIT,
+                                   keep_days=NEWS_KEEP_DAYS)
+    except Exception as exc:
+        print(f"  news prune FAILED: {type(exc).__name__}: {exc}", flush=True)
+        return
+    print(f"  news prune: {removed} old headline(s) removed", flush=True)
 
 
 def adjust_spin_offs(start: date, end: date) -> int:

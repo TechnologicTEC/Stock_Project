@@ -27,7 +27,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from db.models import ApiCache, FundamentalsCache, NewsCache, PriceCache
 from db.session import get_session
@@ -382,6 +382,34 @@ def mark_news_fetched(ticker: str) -> None:
             session.add(ApiCache(cache_key=key, value_json="null", fetched_at=_utcnow()))
         else:
             row.fetched_at = _utcnow()
+
+
+def prune_news(*, keep_newest: int, keep_days: int, dry_run: bool = False) -> int:
+    """Delete headlines no reader can see. Returns how many were removed (or,
+    with `dry_run`, how many would be — nothing is deleted).
+
+    A row goes only when it is BOTH outside its ticker's `keep_newest` newest
+    AND older than `keep_days`. The first keeps exactly what the sentiment
+    score reads (news.analyze_ticker takes each ticker's newest
+    NEWS_DISPLAY_LIMIT, however old). The second keeps everything a fetch could
+    still return, so de-duplication by URL never re-adds a deleted story.
+
+    Why it exists: news_cache was 222 MB of a free-plan 500 MB database in
+    Oct 2026, growing ~3,100 rows a day, and ~220k of its rows fell under both
+    rules. A database over its cap goes read-only.
+    """
+    rank = func.row_number().over(
+        partition_by=NewsCache.ticker, order_by=NewsCache.published_at.desc()
+    ).label("rank")
+    ranked = select(NewsCache.id, NewsCache.published_at, rank).subquery()
+    doomed = (select(ranked.c.id)
+              .where(ranked.c.rank > keep_newest)
+              .where(ranked.c.published_at < _utcnow() - timedelta(days=keep_days)))
+    with get_session() as session:
+        if dry_run:
+            return session.execute(select(func.count()).select_from(doomed.subquery())).scalar_one()
+        result = session.execute(delete(NewsCache).where(NewsCache.id.in_(doomed)))
+        return result.rowcount or 0
 
 
 # --------------------------------------------------------------------------

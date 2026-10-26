@@ -143,3 +143,28 @@ def test_a_name_still_held_is_warmed_however_long_ago_it_was_bought():
     assert "NVTS" in got            # the bug: dropped 30 days after its only buy
     assert "MU" in got              # recent orders still covered
     assert "CF" not in got          # sold and outside the window: nothing to price
+
+
+# --------------------------------------------------------------------------
+# The nightly news prune keeps news_cache bounded on a free-plan database.
+# --------------------------------------------------------------------------
+
+def test_main_prunes_old_headlines_after_warming(capsys):
+    with ExitStack() as stack:
+        _common(stack, news_warm=True)
+        stack.enter_context(patch.object(warm_cache.news, "ensure_fresh", return_value=0))
+        prune = stack.enter_context(patch.object(warm_cache.cache, "prune_news", return_value=7))
+        warm_cache.main()
+    prune.assert_called_once_with(keep_newest=warm_cache.news.NEWS_DISPLAY_LIMIT,
+                                  keep_days=warm_cache.NEWS_KEEP_DAYS)
+    assert "news prune: 7 old headline(s) removed" in capsys.readouterr().out
+
+
+def test_a_failing_prune_never_fails_the_job(capsys):
+    with ExitStack() as stack:
+        _common(stack, news_warm=True)
+        stack.enter_context(patch.object(warm_cache.news, "ensure_fresh", return_value=0))
+        stack.enter_context(patch.object(warm_cache.cache, "prune_news",
+                                         side_effect=RuntimeError("locked")))
+        warm_cache.main()                                   # must not raise
+    assert "news prune FAILED: RuntimeError: locked" in capsys.readouterr().out

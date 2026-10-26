@@ -239,3 +239,77 @@ def test_fundamentals_without_the_flag_still_raise():
 
     with pytest.raises(RuntimeError):
         cache.get_or_fetch_fundamentals("STALEF2", 60, boom)
+
+
+# --------------------------------------------------------------------------
+# Pruning old headlines. news_cache grew ~3,100 rows a day (222 MB of a
+# free-plan 500 MB database, Oct 2026) while the sentiment score only ever
+# reads each ticker's newest 40. A prune keeps those 40 and anything recent
+# enough for a fetch to return again (the URL de-duplication needs it).
+# --------------------------------------------------------------------------
+
+def _headlines(ticker, days_ago, *, start=0, score=0.5):
+    now = utcnow()
+    return [{"headline": f"{ticker} story {start + i}", "source": "test",
+             "url": f"https://example.com/{ticker}/{start + i}",
+             "published_at": now - timedelta(days=d, minutes=i),
+             "sentiment_score": score}
+            for i, d in enumerate(days_ago)]
+
+
+def _count(ticker):
+    return len(cache.get_cached_news(ticker, limit=10_000))
+
+
+def test_prune_keeps_each_tickers_newest_40_however_old():
+    """A quiet stock's 40 newest headlines are what its score reads, even if
+    they are months old."""
+    cache.save_news_articles("QUIET", _headlines("QUIET", [100] * 50))
+    removed = cache.prune_news(keep_newest=40, keep_days=10)
+    assert removed == 10
+    kept = cache.get_cached_news("QUIET", limit=10_000)
+    assert len(kept) == 40
+    assert {r["headline"] for r in kept} == {f"QUIET story {i}" for i in range(40)}
+
+
+def test_prune_keeps_everything_recent():
+    cache.save_news_articles("BUSY", _headlines("BUSY", [3] * 60))
+    assert cache.prune_news(keep_newest=40, keep_days=10) == 0
+    assert _count("BUSY") == 60
+
+
+def test_prune_removes_only_old_rows_beyond_the_newest_40():
+    cache.save_news_articles("MIXED", _headlines("MIXED", [2] * 45))
+    cache.save_news_articles("MIXED", _headlines("MIXED", [60] * 20, start=45))
+    assert cache.prune_news(keep_newest=40, keep_days=10) == 20
+    assert _count("MIXED") == 45
+
+
+def test_prune_counts_each_ticker_separately():
+    cache.save_news_articles("AAA", _headlines("AAA", [90] * 41))
+    cache.save_news_articles("BBB", _headlines("BBB", [90] * 39))
+    assert cache.prune_news(keep_newest=40, keep_days=10) == 1
+    assert (_count("AAA"), _count("BBB")) == (40, 39)
+
+
+def test_prune_leaves_the_sentiment_score_unchanged():
+    """Drive the real reader: what the Screener's sentiment factor computes for a
+    ticker must be identical before and after a prune."""
+    from engine import news
+
+    cache.save_news_articles("SENT", _headlines("SENT", [1] * 25, score=0.6))
+    cache.save_news_articles("SENT", _headlines("SENT", [40] * 30, start=25, score=-0.4))
+    cache.save_news_articles("SENT", _headlines("SENT", [200] * 30, start=55, score=0.9))
+    cache.mark_news_fetched("SENT")                        # no network: the cache is fresh
+    before = news.analyze_ticker("SENT")
+    assert cache.prune_news(keep_newest=40, keep_days=10) > 0
+    after = news.analyze_ticker("SENT")
+    assert (after.overall_score, after.total_count, [h["url"] for h in after.headlines]) == \
+           (before.overall_score, before.total_count, [h["url"] for h in before.headlines])
+
+
+def test_a_dry_run_prune_counts_without_deleting():
+    cache.save_news_articles("DRY", _headlines("DRY", [90] * 45))
+    assert cache.prune_news(keep_newest=40, keep_days=10, dry_run=True) == 5
+    assert _count("DRY") == 45
+    assert cache.prune_news(keep_newest=40, keep_days=10) == 5
