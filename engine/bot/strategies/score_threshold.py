@@ -1,29 +1,35 @@
 """
-Strong Buy threshold: buy anything scoring >= 75, sell once it decays below 65.
+Strong Buy threshold: buy anything scoring >= 75, sell once it decays below 70.
 
 Same leaderboard as composite_rebalance, read a different way — the raw **score**
 rather than the rank. That single difference is the experiment: an absolute
 cutoff lets the book size move with the market, where a rank cutoff cannot.
 
-**The 10-point band is the whole design.** Entry at 75 and exit at 65 is what
-makes this a ~20-name book rather than an 8-name one. On the current leaderboard
-only 8 names clear 75, but 92 clear 65 — so roughly one name a month crosses the
-entry while the median position survives about seven months before decaying out.
-One-in, seven-months-out is what fills twenty slots. A tighter band would sell
-winners automatically, because a rallying stock sheds valuation points faster
-than it gains momentum points.
+**The band between entry and exit sets the book size.** A name enters at 75 and
+stays until it decays below 70, so the book holds everything that once crossed
+75 and hasn't yet faded out of the band. It went live at 75/65 with 20 slots;
+**since 27 Oct 2026 it is 75/70 with 30 slots** (Tane's call, made with the
+S&P 400 about to join the ranking).
 
-**Exit at 70 was considered and rejected, 30 Sep 2026** (Tane's call, on this
-evidence). Across the cached walk-forward rebuilds (503 stocks, ~monthly,
-Apr 2021–Mar 2026), a HELD name slipping into 65–70 — the only case where the
-two rules differ — went on to beat the average stock by +0.2% over the next
-three months (n=532; first slip only, -0.1%, n=179): no worse than average, so
-selling it avoids nothing. Selling does cost something: the slot waits in cash
-until a new name crosses 75 (~one a month), and the held name still returned
-+1% to +2.6% over those months. Exiting at 70 also meant 16% more buys and a
-typical hold of 6 months instead of 10. The rebuilds null valuation, which is
-the part of the live score that makes a tight band sell winners, so if
-anything they flatter 70.
+The evidence for the move, replayed over the cached walk-forward rebuilds
+(S&P 500 + S&P 400 merged, monthly, Jul 2021–Jun 2026):
+
+  - It is a wash on returns. With unlimited slots, a HELD name slipping into
+    65–70 — the only case where the two rules differ — went on to beat the
+    average stock by +0.2 points over the next three months (n=413; the median
+    one lagged by 1.0). The held book beat the average stock by +2.2 points per
+    three months at 70/30 slots against +1.8 at 65/40, each ±1.2–1.5: no
+    measurable difference either way. The same test on the S&P 500 alone is why
+    70 was turned down on 30 Sep 2026.
+  - It trades more. ~16% more buys, and a typical hold of 6 months instead of 11.
+  - It needs fewer slots. A shorter hold means ~21% fewer names wanted at once,
+    which is where 30 comes from: the S&P 500 alone wanted a median of ~20 at
+    75/65 (see scripts/seed_bot_config.py), the merged ranking ~1.9x that, and
+    the 70 exit ~0.79x of it.
+
+One known cost: a rallying stock sheds valuation points faster than it gains
+momentum points, so a tighter band sells some winners automatically. The
+replay includes valuation and still finds no net difference.
 
 Three exit rules, in priority order:
 
@@ -31,14 +37,14 @@ Three exit rules, in priority order:
                "a good company having a wobble" — it's an average one. This
                overrides the minimum hold, because the point of a hard floor is
                that nothing defers it.
-  score < 65   sell, but only after MIN_HOLD_RUNS runs. Stops a name that
+  score < 70   sell, but only after MIN_HOLD_RUNS runs. Stops a name that
                oscillates around the exit from being round-tripped every time
                the weekly screen jitters by a tenth of a point.
   not rated    hold. A name missing from the leaderboard is missing data, not a
                sell signal — the same rule golden_cross follows.
 
 Unfilled slots stay in cash. It never reaches further down the leaderboard to
-fill them, because a 70-scoring name bought to occupy a slot is not the strategy.
+fill them, because a 72-scoring name bought to occupy a slot is not the strategy.
 
 **A held position is never resized.** It is bought once at its slot size and
 sold whole when the score says so; nothing trims it in between. This strategy
@@ -55,7 +61,7 @@ from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
 ENTRY_SCORE = 75.0      # "Strong Buy" — the top ~1.6% of the index
-EXIT_SCORE = 65.0       # decayed enough to release the slot
+EXIT_SCORE = 70.0       # decayed enough to release the slot (65 until 27 Oct 2026)
 HARD_EXIT_SCORE = 55.0  # the index median: leave immediately, minimum hold or not
 MIN_HOLD_RUNS = 2       # runs a position must survive before a soft exit applies
 
@@ -69,7 +75,7 @@ def build(ctx) -> list[Target]:
     lookup = common.by_ticker(rows)
     held = ctx.held_tickers()
     notional = common.notional_for(ctx)
-    slots = int(ctx.config.get("target_slots") or 20)
+    slots = int(ctx.config.get("target_slots") or 30)
 
     targets: list[Target] = []
 

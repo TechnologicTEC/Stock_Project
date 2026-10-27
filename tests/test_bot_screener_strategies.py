@@ -262,10 +262,25 @@ def test_free_slots_stay_in_cash_rather_than_reaching_down_the_leaderboard():
 
 
 def test_a_name_in_the_hold_band_is_kept_not_sold():
-    rows = [{"rank": 1, "ticker": "AAA", "score": 68.0, "name": "", "factor_scores": {}}]
+    rows = [{"rank": 1, "ticker": "AAA", "score": 72.0, "name": "", "factor_scores": {}}]
     targets = thr.build(_thr_ctx(rows, held=["AAA"]))
     assert [t.ticker for t in targets] == ["AAA"]
     assert "hold band" in targets[0].reason
+
+
+def test_the_exit_line_is_70():
+    """Moved from 65 to 70 on 27 Oct 2026 (Tane's call). A held name at 68 used
+    to sit in the hold band; now, once the minimum hold has passed, it is sold."""
+    assert thr.EXIT_SCORE == 70.0
+    rows = [{"rank": 1, "ticker": "AAA", "score": 68.0, "name": "", "factor_scores": {}}]
+    decisions = [
+        _decision(TODAY), _decision(TODAY - timedelta(days=1)),
+        _decision(TODAY - timedelta(days=2)),
+        _decision(TODAY - timedelta(days=3), action=journal.BUY,
+                  status=journal.SUBMITTED, ticker="AAA"),
+    ]
+    assert thr.build(_thr_ctx(rows, held=["AAA"], decisions=decisions)) == []
+    assert "below the 70 exit" in thr.why_held(_thr_ctx(rows, held=["AAA"], decisions=decisions))["AAA"]
 
 
 def test_a_decayed_name_is_sold_once_the_minimum_hold_has_passed():
@@ -280,7 +295,7 @@ def test_a_decayed_name_is_sold_once_the_minimum_hold_has_passed():
 
 
 def test_the_minimum_hold_defers_a_soft_exit():
-    """Stops a name oscillating around 65 from being round-tripped every time
+    """Stops a name oscillating around 70 from being round-tripped every time
     the weekly screen jitters."""
     rows = [{"rank": 1, "ticker": "AAA", "score": 63.0, "name": "", "factor_scores": {}}]
     decisions = [
@@ -468,7 +483,7 @@ def test_composite_why_held_says_an_unranked_name_goes_at_the_rebalance():
 
 @pytest.mark.parametrize("score, decisions, sold", [
     (80.0, (), False),                       # above the entry
-    (70.0, (), False),                       # hold band
+    (72.0, (), False),                       # hold band
     (60.0, (), True),                        # below the exit, no buy on record
     (50.0, (), True),                        # below the hard floor
 ])
@@ -482,9 +497,9 @@ def test_threshold_why_held_agrees_with_build(score, decisions, sold):
 
 
 def test_threshold_why_held_states_the_exit_line_for_a_name_in_the_band():
-    rows = [{"rank": 1, "ticker": "AAA", "score": 70.0}]
-    ctx = _ctx(rows, held=["AAA"], strategy="score_threshold", slots=20)
-    assert thr.why_held(ctx)["AAA"] == "Score 70.0: in the 65–75 hold band. Sold if it drops below 65."
+    rows = [{"rank": 1, "ticker": "AAA", "score": 72.0}]
+    ctx = _ctx(rows, held=["AAA"], strategy="score_threshold", slots=30)
+    assert thr.why_held(ctx)["AAA"] == "Score 72.0: in the 70–75 hold band. Sold if it drops below 70."
 
 
 def test_the_registry_never_raises_for_the_page():

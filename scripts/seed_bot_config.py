@@ -68,11 +68,16 @@ SEED: list[dict] = [
     {
         "strategy": "score_threshold",
         "key_env_prefix": "ALPACA_SCORE_THRESHOLD",
-        # 20, simulated rather than guessed: demand ran 8-26 over five years of
-        # reconstructed history, median 20. Deliberately borderline — usually
-        # some cash spare, occasionally a name that can't be bought.
-        "target_slots": 20,
-        "max_position_pct": 0.20,    # 1/20 = 5% binds; the cap is a backstop
+        # 30 since 27 Oct 2026 (Tane's call), with the exit moved from 65 to 70
+        # and the S&P 400 merged in from Nov 2026. It went live at 20, simulated
+        # rather than guessed: on the S&P 500 at 75/65, demand ran 8-26 over
+        # five years of reconstructed history, median 20. Replaying the same
+        # history, the merged ranking wants ~1.9x as many names and the 70 exit
+        # ~0.79x of that: 20 x 1.9 x 0.79 = ~30. Deliberately borderline, as
+        # before — usually some cash spare, occasionally a name that can't be
+        # bought. See engine/bot/strategies/score_threshold.py.
+        "target_slots": 30,
+        "max_position_pct": 0.20,    # 1/30 = 3.3% binds; the cap is a backstop
         "max_orders_per_run": 40,
         "starting_equity": 10_000.0,
         "enabled": True,

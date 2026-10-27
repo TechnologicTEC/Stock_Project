@@ -214,7 +214,7 @@ def _score_threshold(cfg: dict, view: dict) -> None:
         return
 
     held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
-    slots = int(cfg.get("target_slots") or 20)
+    slots = int(cfg.get("target_slots") or 30)
     scored = [r for r in rows if r.get("score") is not None]
     above = sorted((r for r in scored if float(r["score"]) >= thr.ENTRY_SCORE),
                    key=lambda r: -float(r["score"]))
@@ -236,7 +236,7 @@ def _score_threshold(cfg: dict, view: dict) -> None:
          '<p class="cp-note">Nothing above the entry score that isn\'t already held.</p>')
         + f'<p class="cp-note"><b>{len(above)}</b> names clear {thr.ENTRY_SCORE:.0f} · '
           f'<b>{free}</b> of {slots} slots free. Unfilled slots stay in cash — it never reaches '
-          "further down the ranking to fill one, because a 70-scoring name bought to occupy a "
+          "further down the ranking to fill one, because a 72-scoring name bought to occupy a "
           "slot is not the strategy.</p>",
         tag=f"{len(waiting)} queued",
     )
