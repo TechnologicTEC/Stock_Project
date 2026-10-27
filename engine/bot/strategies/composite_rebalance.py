@@ -69,11 +69,16 @@ def build(ctx) -> list[Target]:
     # Rebalance. Keep what's still inside the buffer, then fill the rest from the
     # top of the ranking. Keeps come first so an existing position is never sold
     # merely to buy a name one rank above it.
+    # Mid caps the ranking can't see this run (S&P 400 ranking unusable) come
+    # first and are held as they are: not ranked, so neither sold nor resized.
+    protected = sorted(common.protected_unranked(ctx))[:slots]
     keeps = [t for t in sorted(held, key=lambda t: _rank_of(lookup.get(t)))
              if kept_at_rebalance(lookup.get(t))]
-    keeps = keeps[:slots]
+    keeps = keeps[:slots - len(protected)]
 
-    targets = [
+    targets = [Target(ticker=t, notional=notional, sizing=executor.HOLD,
+                      reason=common.FALLBACK_HOLD_REASON) for t in protected]
+    targets += [
         Target(ticker=t, notional=notional,
                reason=f"Rank {_rank_of(lookup.get(t))} of {len(rows)} — still inside the "
                       f"top {EXIT_RANK} buffer, so held rather than churned.")
@@ -84,7 +89,7 @@ def build(ctx) -> list[Target]:
         if len(targets) >= slots:
             break
         ticker = (row.get("ticker") or "").upper()
-        if not ticker or ticker in keeps:
+        if not ticker or ticker in keeps or ticker in protected:
             continue
         targets.append(Target(
             ticker=ticker, notional=notional,
@@ -124,10 +129,13 @@ def why_held(ctx) -> dict[str, str]:
     rows = common.rows_from(ctx)
     lookup = common.by_ticker(rows)
     when = common.next_rebalance(is_rebalance_run(ctx, rows), ctx.today)
+    protected = common.protected_unranked(ctx)
     out = {}
     for ticker in sorted(ctx.held_tickers()):
         row = lookup.get(ticker)
-        if not (row or {}).get("rank"):
+        if ticker in protected:
+            out[ticker] = common.FALLBACK_HOLD_REASON
+        elif not (row or {}).get("rank"):
             out[ticker] = f"Not in the current ranking, so it is sold {when}."
         elif kept_at_rebalance(row):
             out[ticker] = (f"Rank {row['rank']} of {len(rows)}: inside the top "

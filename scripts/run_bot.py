@@ -238,9 +238,21 @@ def _sync_official_equity(strategy: str, config: dict, client, now: datetime,
             )
         for day in changes["delete"]:
             journal.delete_snapshot(strategy, day)
+    except Exception as exc:                 # noqa: BLE001 — see docstring
+        _log(f"  equity sync: unavailable ({type(exc).__name__}: {exc})")
+        return
 
-        # The SPY line, from the cache's closes (a pure read, never a fetch).
-        # After the inserts above, so a filled-in session is checked too.
+    n = {k: len(v) for k, v in changes.items()}
+    if any(n.values()):
+        _log(f"  equity sync: {n['update']} corrected to the official close, "
+             f"{n['insert']} missing session(s) filled, {n['delete']} non-session day(s) removed")
+    else:
+        _log("  equity sync: curve already matches the broker's official record")
+
+    # The SPY line, from the cache's closes (a pure read, never a fetch). After
+    # the inserts above, so a filled-in session is checked too. Its own failure
+    # is its own log line: the equity corrections above are already written.
+    try:
         from engine import cache, price_history
 
         closes = dict(cache.get_closes_for(
@@ -253,15 +265,8 @@ def _sync_official_equity(strategy: str, config: dict, client, now: datetime,
         for day, value in fixes:
             journal.set_benchmark_equity(strategy, day, value)
     except Exception as exc:                 # noqa: BLE001 — see docstring
-        _log(f"  equity sync: unavailable ({type(exc).__name__}: {exc})")
+        _log(f"  equity sync: SPY line: unavailable ({type(exc).__name__}: {exc})")
         return
-
-    n = {k: len(v) for k, v in changes.items()}
-    if any(n.values()):
-        _log(f"  equity sync: {n['update']} corrected to the official close, "
-             f"{n['insert']} missing session(s) filled, {n['delete']} non-session day(s) removed")
-    else:
-        _log("  equity sync: curve already matches the broker's official record")
     if fixes:
         _log(f"  equity sync: SPY line recomputed from the day's own close on {len(fixes)} "
              f"session(s): {', '.join(f'{d:%d %b}' for d, _ in fixes)}")

@@ -447,3 +447,19 @@ def test_from_the_switch_date_the_sp400_note_says_the_bots_trade_it(monkeypatch)
         assert not at.exception
         warnings = " ".join(getattr(w, "value", "") for w in at.warning)
         assert expected in warnings and absent not in warnings
+
+
+
+def test_the_both_view_uses_the_shared_merge_and_shows_a_ticker_once():
+    screener.save_leaderboard(screener.build_leaderboard([
+        screener.ScreenerResult("TWLO", 70.0, "Buy", _full_factors(70.0), []),
+    ]))
+    screener.save_leaderboard(screener.build_leaderboard([
+        screener.ScreenerResult("TWLO", 72.0, "Buy", _full_factors(72.0), []),
+        screener.ScreenerResult("MID", 60.0, "Buy", _full_factors(60.0), []),
+    ], universe="sp400"))
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    at.radio(key="lb_universe").set_value("Both").run(timeout=30)
+    assert not at.exception
+    assert _lb_tickers(at) == ["TWLO", "MID"]

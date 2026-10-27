@@ -1158,9 +1158,6 @@ def get_score_history(ticker: str) -> list[dict]:
 # and were never validated historically, so they ride on top of a 4-factor core.
 # --------------------------------------------------------------------------
 
-LEADERBOARD_CACHE_KEY = "leaderboard:sp500"   # the S&P 500 ranking — the only one the bots read
-
-
 def leaderboard_key(universe: str = "sp500") -> str:
     """Where one universe's ranking lives. The S&P 400 has its own (Screener page
     only), so its weekly run can never overwrite the ranking the bots trade from."""
@@ -1336,3 +1333,30 @@ def save_leaderboard(payload: dict) -> None:
 
 def load_leaderboard(universe: str = "sp500") -> dict | None:
     return cache.get_value(leaderboard_key(universe), ttl_seconds=LEADERBOARD_TTL_SECONDS) or None
+
+
+def merge_leaderboards(parts: list[tuple[str, dict]]) -> list[dict]:
+    """Several universes' rows as ONE ranking: sorted by score, renumbered, each
+    row tagged with its `universe`. The only merge — the bots, the Screener page
+    and the dashboard all call it, so they can't disagree about the order.
+
+    Valid because scoring is ABSOLUTE (a mid cap's 70 is judged on the same fixed
+    curves as a large cap's 70). A ticker in two leaderboards appears once, from
+    the FIRST part: the two lists are screened on different days and index moves
+    (TWLO went S&P 400 -> 500 in Oct 2026) can leave a name in both for a week,
+    and twice in the ranking would mean twice the position. Rows are copied; the
+    stored payloads are never mutated. Ties keep the earlier part first.
+    """
+    seen: set[str] = set()
+    merged = []
+    for name, payload in parts:
+        for row in (payload or {}).get("rows") or []:
+            ticker = (row.get("ticker") or "").upper()
+            if not ticker or ticker in seen:
+                continue
+            seen.add(ticker)
+            merged.append(dict(row, universe=name))
+    merged.sort(key=lambda r: -(r.get("score") or 0))
+    for i, row in enumerate(merged, start=1):
+        row["rank"] = i
+    return merged

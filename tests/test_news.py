@@ -134,3 +134,42 @@ def test_ensure_fresh_only_fetches_when_stale():
         news.ensure_fresh("AAPL")  # cache is warm now
 
     assert calls["n"] == 1
+
+
+# --------------------------------------------------------------------------
+# Google News returns stories of any age (some from 2015), so a story the
+# nightly prune removed came straight back, was FinBERT-scored again, and was
+# pruned again. A story that the prune would remove tonight is not stored.
+# --------------------------------------------------------------------------
+
+def _seed(ticker, n, days_ago):
+    from datetime import timedelta
+    from engine import cache
+    from engine.time_utils import utcnow
+    cache.save_news_articles(ticker, [
+        {"headline": f"{ticker} seed {i}", "source": "t", "url": f"http://seed/{ticker}/{i}",
+         "published_at": utcnow() - timedelta(days=days_ago, minutes=i), "sentiment_score": 0.1}
+        for i in range(n)])
+
+
+def test_an_old_story_the_prune_would_remove_is_not_stored_again():
+    _seed("BUSY", news.NEWS_DISPLAY_LIMIT, days_ago=1)
+    # Google News' real format: timezone-aware ISO (rss_client._published_iso).
+    old = _article("BUSY 2015 story", "http://old/1", when="2015-07-22T04:02:38+00:00")
+    fresh = _article("BUSY today", "http://new/1", when=news.utcnow().isoformat() + "+00:00")
+    with patch("engine.news.finnhub_client.get_company_news", return_value=[]), \
+         patch("engine.news.rss_client.get_google_news", return_value=[old, fresh]), _no_model():
+        added = news.ensure_fresh("BUSY", force=True)
+    assert added == 1
+    urls = {r["url"] for r in news.cache.get_cached_news("BUSY", limit=1000)}
+    assert "http://new/1" in urls and "http://old/1" not in urls
+
+
+def test_an_old_story_is_still_stored_for_a_ticker_with_little_news():
+    """With fewer than 40 headlines the old story IS among the newest 40 — the
+    sentiment score reads it, so it must be kept."""
+    _seed("QUIET", 3, days_ago=30)
+    old = _article("QUIET 2015 story", "http://old/q", when="2015-07-22T04:02:38+00:00")
+    with patch("engine.news.finnhub_client.get_company_news", return_value=[]), \
+         patch("engine.news.rss_client.get_google_news", return_value=[old]), _no_model():
+        assert news.ensure_fresh("QUIET", force=True) == 1

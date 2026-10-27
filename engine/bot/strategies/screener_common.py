@@ -38,6 +38,16 @@ MAX_LEADERBOARD_AGE_DAYS = 14
 MERGE_FROM = date_(2026, 11, 1)
 MERGED_UNIVERSE = "sp400"
 
+# Below this share of the list requested, an S&P 400 ranking is a sample (a
+# `universe_every` dispatch) or an unfinished chunked run, not the index. The
+# 26 Oct 2026 trial (40 of 400) sat in the live slot when the merge shipped.
+MIN_MERGE_COVERAGE = 0.90
+
+# Why a held mid cap is kept when the S&P 400 ranking could not be read. Shared
+# by build and why_held in composite_rebalance and top_decile_long.
+FALLBACK_HOLD_REASON = ("Held: the S&P 400 ranking is unusable this run, so this mid cap "
+                        "can't be ranked — kept rather than sold on missing data.")
+
 # How much decision history a strategy needs to answer "have I already
 # rebalanced this month" and "how long have I held this". 400 rows covers months
 # of runs across a 20-name book.
@@ -85,22 +95,20 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     payload = dict(payload)
     payload["generated_date"] = generated
     payload["age_days"] = age
-    payload["rows"] = [dict(r, universe="sp500") for r in payload["rows"]]
     payload["universes"] = ["sp500"]
     if today < MERGE_FROM:
+        payload["rows"] = [dict(r, universe="sp500") for r in payload["rows"]]
         return payload
 
     extra, problem = _mergeable(MERGED_UNIVERSE, today, max_age_days)
     if problem:
+        # Held mid caps are then unseen, not unranked: composite_rebalance and
+        # top_decile_long keep them (protected_unranked) rather than sell them.
+        payload["rows"] = [dict(r, universe="sp500") for r in payload["rows"]]
         payload["merge_note"] = f"{problem} Traded on the S&P 500 alone this run."
         return payload
-    # Concatenate (S&P 500 first) and stable-sort by score, so a tie keeps the
-    # S&P 500 name ahead; then renumber. Rank is a position, never stored data.
-    merged = payload["rows"] + [dict(r, universe=MERGED_UNIVERSE) for r in extra["rows"]]
-    merged.sort(key=lambda r: -(r.get("score") or 0))
-    for i, row in enumerate(merged, start=1):
-        row["rank"] = i
-    payload["rows"] = merged
+    # The S&P 500 part first, so it wins a ticker in both and keeps a tie ahead.
+    payload["rows"] = screener.merge_leaderboards([("sp500", payload), (MERGED_UNIVERSE, extra)])
     payload["universes"] = ["sp500", MERGED_UNIVERSE]
     payload["merged_generated"] = {MERGED_UNIVERSE: extra.get("generated_at")}
     return payload
@@ -109,15 +117,22 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
 def _mergeable(universe: str, today: date_, max_age_days: int) -> tuple[dict | None, str | None]:
     """(payload, None) when the ranking can be merged, else (None, why not).
 
-    Held to the same bar the S&P 500 ranking is: present, labelled for its own
-    universe, dated, and no older than `max_age_days`.
+    Held to the same bar the S&P 500 ranking is — present, labelled for its own
+    universe, dated, no older than `max_age_days` — and one more: COMPLETE. A
+    sample or an interrupted run would otherwise be traded as the whole index.
     """
     from engine import screener
+    from engine import universe as universes
 
-    name = {"sp400": "S&P 400"}.get(universe, universe)
+    name = universes.LABELS.get(universe, universe)
     lb = screener.load_leaderboard(universe)
     if not lb or not lb.get("rows"):
         return None, f"No {name} leaderboard in the shared cache."
+    expected = len(universes.tickers(universe))
+    covered = lb.get("n_requested") or len(lb["rows"])
+    if covered < MIN_MERGE_COVERAGE * expected:
+        return None, (f"The {name} leaderboard covers only {covered} of {expected} names "
+                      "(a sample or an unfinished run).")
     if lb.get("universe") != universe:
         return None, f"The {name} slot holds a leaderboard labelled {lb.get('universe')!r}."
     generated = _as_date(lb.get("generated_at"))
@@ -128,6 +143,22 @@ def _mergeable(universe: str, today: date_, max_age_days: int) -> tuple[dict | N
         return None, (f"The {name} leaderboard is {age} days old (generated {generated}), over "
                       f"the {max_age_days}-day limit.")
     return lb, None
+
+
+def protected_unranked(ctx) -> set[str]:
+    """Held S&P 400 names this run's ranking cannot see because the S&P 400
+    ranking was unusable (`merge_note`). They are unseen, not unranked, so a
+    rebalance keeps them — missing data is never a sell. Empty on any normal run,
+    so a mid cap that genuinely falls out of a usable ranking is sold as before.
+    """
+    from engine import universe as universes
+
+    lb = (ctx.extras or {}).get("leaderboard") or {}
+    if not lb.get("merge_note"):
+        return set()
+    ranked = set(by_ticker(lb.get("rows") or []))
+    mids = set(universes.tickers(MERGED_UNIVERSE))
+    return {t for t in ctx.held_tickers() if t not in ranked and t in mids}
 
 
 def leaderboard_notes(ctx) -> list[dict]:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean
 
 from engine import cache, sentiment
@@ -27,6 +27,10 @@ from engine.time_utils import utcnow
 NEWS_TTL_SECONDS = 6 * 60 * 60      # news moves slower than quotes; refresh a few times a day
 NEWS_DEFAULT_DAYS = 7               # Finnhub company-news lookback window
 NEWS_DISPLAY_LIMIT = 40
+# Headlines older than this, outside a ticker's newest NEWS_DISPLAY_LIMIT, are
+# pruned nightly (cache.prune_news via scripts/warm_cache.py) — and not stored in
+# the first place (ensure_fresh), since Google News returns stories of any age.
+NEWS_KEEP_DAYS = 10
 
 # A headline counts as positive/negative only past a small band around zero, so
 # faintly-signed neutral scores don't inflate the positive/negative tallies.
@@ -143,6 +147,7 @@ def ensure_fresh(ticker: str, days: int = NEWS_DEFAULT_DAYS, force: bool = False
         seen_titles.add(title)
         fresh[url] = article
 
+    fresh = _drop_prunable(fresh, cached)
     scored = _score_articles(list(fresh.values()))
     for article in scored:
         article["published_at"] = _to_datetime(article.get("published_at"))
@@ -150,6 +155,32 @@ def ensure_fresh(ticker: str, days: int = NEWS_DEFAULT_DAYS, force: bool = False
     added = cache.save_news_articles(ticker, scored)
     cache.mark_news_fetched(ticker)  # marks *when we last asked*, even if nothing new came back
     return added
+
+
+def _drop_prunable(fresh: dict[str, dict], cached: list[dict]) -> dict[str, dict]:
+    """Leave out what tonight's prune would delete: older than NEWS_KEEP_DAYS AND
+    older than the ticker's NEWS_DISPLAY_LIMIT-th newest stored headline.
+
+    Google News RSS has no date window (stories from 2015 arrive), so without
+    this a pruned story came straight back, was FinBERT-scored again, and was
+    pruned again. Same rule as cache.prune_news, so nothing the sentiment score
+    could read is ever skipped: with fewer than NEWS_DISPLAY_LIMIT stored, or a
+    story newer than the limit-th, it is kept.
+    """
+    if len(cached) < NEWS_DISPLAY_LIMIT:
+        return fresh
+    floor = sorted((_naive_utc(r.get("published_at")) for r in cached),
+                   reverse=True)[NEWS_DISPLAY_LIMIT - 1]
+    cutoff = min(floor, utcnow() - timedelta(days=NEWS_KEEP_DAYS))
+    return {url: a for url, a in fresh.items()
+            if _naive_utc(a.get("published_at")) >= cutoff}
+
+
+def _naive_utc(value) -> datetime:
+    """A comparable instant. Google News dates arrive timezone-aware
+    ('...+00:00') and stored ones come back naive UTC; comparing the two raises."""
+    dt = _to_datetime(value)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
 def _build_summary(ticker: str, total: int, scored: int, overall: int | None,

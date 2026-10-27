@@ -193,10 +193,21 @@ with right:
                      '<p class="cp-note">No validation run stored yet — run the S&P 500 validation '
                      "to see how predictive this screener's ranking has actually been.</p>")
 
-    # S&P 500 leaderboard — cheap cache read.
+    # The leaderboard the screener bots trade — cheap cache reads. From the November
+    # 2026 switch that is the S&P 500 and S&P 400 merged (screener_common.MERGE_FROM),
+    # through the same merge the bots use.
+    from datetime import date as _date
+
     from engine import screener as _screener  # lazy: keeps the screener stack off page import
+    from engine.bot.strategies import screener_common as _common
 
     lb = _screener.load_leaderboard()
+    lb_title = "S&P 500 leaderboard"
+    if lb and _date.today() >= _common.MERGE_FROM:
+        mid = _screener.load_leaderboard(_common.MERGED_UNIVERSE)
+        if mid:
+            lb = dict(lb, rows=_screener.merge_leaderboards([("sp500", lb), (_common.MERGED_UNIVERSE, mid)]))
+            lb_title = "S&P 500 + S&P 400 leaderboard"
     if lb and lb.get("rows"):
         lb_rows = "".join(
             f'<tr><td class="co">{r["rank"]}</td>'
@@ -206,7 +217,7 @@ with right:
             for r in lb["rows"][:5]
         )
         _theme.panel(
-            "S&P 500 leaderboard",
+            lb_title,
             '<table class="cp-table"><thead><tr><th>#</th><th>Name</th>'
             '<th>Score</th><th>Rating</th></tr></thead>'
             f"<tbody>{lb_rows}</tbody></table>"

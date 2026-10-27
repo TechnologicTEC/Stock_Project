@@ -41,9 +41,9 @@ BOT_LOOKBACK_DAYS = 30         # matches check_fills' own window
 FINNHUB_PAUSE_SECONDS = 1.1    # free tier is 60 req/min; stay just under it
 WARM_NEWS = os.environ.get("WARM_NEWS", "1").lower() not in ("0", "false", "no")
 # Headlines older than this go, unless they are among a ticker's newest
-# NEWS_DISPLAY_LIMIT (what the sentiment score reads). Comfortably past the
-# 7-day fetch window, so URL de-duplication still sees anything a fetch returns.
-NEWS_KEEP_DAYS = 10
+# NEWS_DISPLAY_LIMIT (what the sentiment score reads). Defined in engine/news,
+# which also refuses to store a story this would remove.
+NEWS_KEEP_DAYS = news.NEWS_KEEP_DAYS
 
 
 def all_tickers() -> list[str]:

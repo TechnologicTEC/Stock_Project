@@ -68,19 +68,13 @@ _LB_VIEWS = {"S&P 500": ("sp500",), "S&P 400": ("sp400",), "Both": ("sp500", "sp
 def _leaderboard_view(names: tuple[str, ...]) -> tuple[list[dict], list[tuple[str, dict]]]:
     """(rows, parts): the rows to show, and each stored leaderboard behind them.
 
-    "Both" is one list sorted by score and renumbered. That is honest because
-    scoring is ABSOLUTE — a mid cap's 90 is judged on the same fixed curves as a
-    large cap's 90 — and the S&P 1500 indices share no names. Rows are copied, so
-    the cached payloads are never mutated.
+    "Both" is screener.merge_leaderboards — the same merge the bots trade — so the
+    two views can't disagree about the order, and a name in both lists shows once.
     """
     parts = [(n, lb) for n in names if (lb := screener.load_leaderboard(n))]
     if len(names) == 1:
         return (list(parts[0][1].get("rows") or []) if parts else []), parts
-    merged = [dict(r, index=universe.LABELS[n]) for n, lb in parts for r in (lb.get("rows") or [])]
-    merged.sort(key=lambda r: -(r.get("score") or 0))
-    for i, r in enumerate(merged, start=1):
-        r["rank"] = i
-    return merged, parts
+    return screener.merge_leaderboards(parts), parts
 
 
 def _age_days(generated) -> int | None:
@@ -263,7 +257,7 @@ def _render_leaderboard() -> None:
                 c[2].markdown(f'<span class="cp-co">{r.get("name") or "—"}</span>', unsafe_allow_html=True)
                 k = 3
                 if merged:
-                    label = r.get("index", "")
+                    label = universe.LABELS.get(r.get("universe"), "")
                     c[k].markdown(f'<span class="cp-dim" title="{label}">{label.removeprefix("S&P ")}</span>',
                                   unsafe_allow_html=True)
                     k += 1

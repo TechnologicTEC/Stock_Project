@@ -532,14 +532,16 @@ def test_a_payload_labelled_as_another_universe_is_refused():
 # --------------------------------------------------------------------------
 
 def _store(universe, scored, generated):
-    """A leaderboard saved through the real cache path."""
-    from engine import screener
+    """A leaderboard saved through the real cache path, from a COMPLETE run (every
+    name in the list requested — what build_leaderboard records as n_requested)."""
+    from engine import screener, universe as universes
 
     rows = [{"ticker": t, "name": t, "score": s, "recommendation": "Buy", "factor_scores": {}}
             for t, s in scored]
     for i, r in enumerate(sorted(rows, key=lambda r: -r["score"]), start=1):
         r["rank"] = i
     screener.save_leaderboard({"universe": universe, "generated_at": generated.isoformat(),
+                               "n_requested": len(universes.tickers(universe)),
                                "rows": sorted(rows, key=lambda r: r["rank"])})
 
 
@@ -621,3 +623,88 @@ def test_score_threshold_buys_a_mid_cap_through_the_real_prepare():
         ctx = strategies.Context(strategy="score_threshold", equity=10_000.0, cash=10_000.0,
                                  config=config, today=day, positions=(), extras=extras)
         assert {t.ticker for t in strategies.build("score_threshold", ctx)} == expected
+
+
+# --------------------------------------------------------------------------
+# Review fixes (27 Oct 2026): an incomplete S&P 400 ranking is not merged, a
+# ticker in both lists is merged once, and when the S&P 400 ranking is unusable
+# the bots HOLD the mid caps they own rather than sell them on missing data.
+# --------------------------------------------------------------------------
+
+def test_a_sample_or_unfinished_sp400_ranking_is_not_merged():
+    """The live S&P 400 slot held the 26 Oct 40-name trial: merging it would
+    have picked mid caps from a tenth of the index."""
+    _store("sp500", [("BIG", 80.0)], SWITCH)
+    _store("sp400", [("MID", 90.0)], SWITCH)
+    from engine import screener
+    lb = screener.load_leaderboard("sp400"); lb["n_requested"] = 40
+    screener.save_leaderboard(lb)
+    got = common.load_leaderboard(SWITCH)
+    assert [r["ticker"] for r in got["rows"]] == ["BIG"]
+    assert "covers only 40 of 400" in got["merge_note"]
+
+
+def _store_full_sp400(scored, generated):
+    """A complete S&P 400 ranking: every name in the list requested."""
+    from engine import screener, universe
+    _store("sp400", scored, generated)
+    lb = screener.load_leaderboard("sp400"); lb["n_requested"] = len(universe.sp400())
+    screener.save_leaderboard(lb)
+
+
+def test_a_ticker_in_both_rankings_is_merged_once():
+    _store("sp500", [("TWLO", 70.0), ("BIG", 80.0)], SWITCH)
+    _store_full_sp400([("TWLO", 72.0), ("AA", 60.0)], SWITCH)
+    got = common.load_leaderboard(SWITCH)
+    assert [(r["ticker"], r["universe"]) for r in got["rows"]] == [("BIG", "sp500"), ("TWLO", "sp500"), ("AA", "sp400")]
+
+
+def _fallback_ctx(name, held, slots, rows):
+    payload = {"rows": [dict(r, universe="sp500") for r in rows], "universes": ["sp500"],
+               "merge_note": "No S&P 400 leaderboard in the shared cache. Traded on the S&P 500 alone this run."}
+    return strategies.Context(
+        strategy=name, equity=10_000.0, cash=0.0, today=SWITCH + timedelta(days=1),
+        config={"target_slots": slots, "max_position_pct": 0.20},
+        positions=tuple(Position(ticker=t, qty=1.0, market_value=600.0) for t in held),
+        extras={"rows": payload["rows"], "decisions": [], "leaderboard": payload},
+    )
+
+
+def test_composite_holds_its_mid_caps_when_the_sp400_ranking_is_unusable():
+    """AA and AMKR are S&P 400 names; the fallback ranking cannot see them, and a
+    rebalance must not read that as 'unranked, so sell'."""
+    rows = _rows(40)
+    ctx = _fallback_ctx("composite_rebalance", held=("AA", "AMKR", "T01"), slots=15, rows=rows)
+    targets = {t.ticker: t for t in comp.build(ctx)}
+    assert {"AA", "AMKR", "T01"} <= set(targets)
+    assert targets["AA"].sizing == executor.HOLD and targets["AMKR"].sizing == executor.HOLD
+    assert len(targets) == 15                              # the mid caps count toward the slots
+    assert "S&P 400" in comp.why_held(ctx)["AA"] and "held" in comp.why_held(ctx)["AA"].lower()
+
+
+def test_composite_still_sells_an_unranked_sp500_name_at_a_fallback_rebalance():
+    """The hold covers what the fallback hides — S&P 400 names — and nothing else."""
+    ctx = _fallback_ctx("composite_rebalance", held=("GONE",), slots=15, rows=_rows(40))
+    assert "GONE" not in {t.ticker for t in comp.build(ctx)}
+
+
+def test_top_decile_holds_its_mid_caps_when_the_sp400_ranking_is_unusable():
+    from engine.bot.strategies import top_decile_long as tdl
+    rows = _rows(600)
+    ctx = _fallback_ctx("top_decile_long", held=("AA", "T01"), slots=50, rows=rows)
+    targets = {t.ticker: t for t in tdl.build(ctx)}
+    assert "AA" in targets and targets["AA"].sizing == executor.HOLD
+    assert len(targets) == 50
+    assert "S&P 400" in tdl.why_held(ctx)["AA"]
+
+
+def test_a_merged_rebalance_sells_a_mid_cap_that_fell_out_as_before():
+    """With a usable S&P 400 ranking nothing is protected: the normal rules apply."""
+    rows = [dict(r, universe="sp500") for r in _rows(40)]
+    payload = {"rows": rows, "universes": ["sp500", "sp400"]}
+    ctx = strategies.Context(
+        strategy="composite_rebalance", equity=10_000.0, cash=0.0, today=SWITCH + timedelta(days=1),
+        config={"target_slots": 15, "max_position_pct": 0.20},
+        positions=(Position(ticker="AA", qty=1.0, market_value=600.0),),
+        extras={"rows": rows, "decisions": [], "leaderboard": payload})
+    assert "AA" not in {t.ticker for t in comp.build(ctx)}

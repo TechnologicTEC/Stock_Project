@@ -160,15 +160,21 @@ def build(ctx) -> list[Target]:
 
     # Rebalance: the top decile *is* the book. Anything held and absent from it
     # is closed by the planner, which is the entire exit rule — there is no
-    # separate sell branch to keep in step with the buy one.
-    return [
+    # separate sell branch to keep in step with the buy one. The one exception:
+    # mid caps this run's ranking can't see (S&P 400 ranking unusable) are held
+    # as they are and take their slots, rather than sold on missing data.
+    protected = sorted(common.protected_unranked(ctx))
+    targets = [Target(ticker=t, notional=notional, sizing=executor.HOLD,
+                      reason=common.FALLBACK_HOLD_REASON) for t in protected]
+    room = max(0, int(ctx.config.get("target_slots") or decile_size(rows)) - len(protected))
+    return targets + [
         Target(
             ticker=(row.get("ticker") or "").upper(),
             notional=notional,
             reason=f"Rank {row.get('rank')} of {len(rows)} · decile 1 "
                    f"(score {row.get('score')}).",
         )
-        for row in book_rows(ctx, rows)
+        for row in book_rows(ctx, rows)[:room]
     ]
 
 
@@ -190,10 +196,13 @@ def why_held(ctx) -> dict[str, str]:
     book = {(row.get("ticker") or "").upper() for row in book_rows(ctx, rows)}
     when = common.next_rebalance(is_rebalance_run(ctx), ctx.today)
     size = len(book)
+    protected = common.protected_unranked(ctx)
     out = {}
     for ticker in sorted(ctx.held_tickers()):
         rank = (lookup.get(ticker) or {}).get("rank")
-        if not rank:
+        if ticker in protected:
+            out[ticker] = common.FALLBACK_HOLD_REASON
+        elif not rank:
             out[ticker] = f"Not in the current ranking, so it is sold {when}."
         elif ticker in book:
             out[ticker] = (f"Rank {rank} of {len(rows)}: in the top {size}, "

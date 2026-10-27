@@ -964,3 +964,30 @@ def test_a_repair_keeps_a_stale_name_out_too():
     out = screener.repair_leaderboard(payload, [_dated("BBB", 65.0, 50)])
     assert [r["ticker"] for r in out["rows"]] == ["AAA"]
     assert out["stale_price"] == ["BBB", "EA"]
+
+
+# --------------------------------------------------------------------------
+# One merge, shared by the bots, the Screener page and the dashboard.
+# --------------------------------------------------------------------------
+
+def test_merge_leaderboards_sorts_by_score_renumbers_and_tags_each_row():
+    big = {"rows": [{"ticker": "BIG", "score": 80.0, "rank": 1}, {"ticker": "LOW", "score": 60.0, "rank": 2}]}
+    mid = {"rows": [{"ticker": "MID", "score": 70.0, "rank": 1}]}
+    rows = screener.merge_leaderboards([("sp500", big), ("sp400", mid)])
+    assert [(r["ticker"], r["rank"], r["universe"]) for r in rows] == \
+           [("BIG", 1, "sp500"), ("MID", 2, "sp400"), ("LOW", 3, "sp500")]
+    assert big["rows"][1]["rank"] == 2                      # the stored payloads are not mutated
+
+
+def test_a_ticker_in_both_leaderboards_appears_once_from_the_first():
+    """Index moves (TWLO went S&P 400 -> 500 in Oct 2026) and the two lists are
+    screened on different days, so a name can sit in both for a week."""
+    big = {"rows": [{"ticker": "TWLO", "score": 70.0, "rank": 1}]}
+    mid = {"rows": [{"ticker": "TWLO", "score": 72.0, "rank": 1}, {"ticker": "MID", "score": 60.0, "rank": 2}]}
+    rows = screener.merge_leaderboards([("sp500", big), ("sp400", mid)])
+    assert [(r["ticker"], r["universe"], r["score"]) for r in rows] == [("TWLO", "sp500", 70.0), ("MID", "sp400", 60.0)]
+
+
+def test_leaderboard_cache_key_constant_is_gone():
+    """Save and load go through leaderboard_key(); a bare constant bypassed its check."""
+    assert not hasattr(screener, "LEADERBOARD_CACHE_KEY")

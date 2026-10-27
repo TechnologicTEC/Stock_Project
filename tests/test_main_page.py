@@ -111,3 +111,29 @@ def test_dashboard_screener_read_is_opt_in():
     assert not rate.called                              # the expensive call was skipped
     assert {m.label for m in at.metric} >= {"Screener read"}
     assert any("Rate holdings" in b.label for b in at.button)
+
+
+
+def test_from_the_switch_the_dashboard_shows_the_ranking_the_bots_trade(monkeypatch):
+    from engine import screener
+    from engine.bot.strategies import screener_common
+
+    def lb(rows, universe="sp500"):
+        return {"universe": universe, "generated_at": "2026-11-01",
+                "rows": [{"ticker": t, "score": s, "rank": i, "recommendation": "Buy"}
+                         for i, (t, s) in enumerate(rows, 1)]}
+    screener.save_leaderboard(lb([("BIG", 70.0)]))
+    screener.save_leaderboard(lb([("MID", 80.0)], "sp400"))
+    for switch, title, first in ((datetime(2100, 1, 1).date(), "S&P 500 leaderboard", "BIG"),
+                                 (datetime(2000, 1, 1).date(), "S&P 500 + S&P 400 leaderboard", "MID")):
+        monkeypatch.setattr(screener_common, "MERGE_FROM", switch)
+        with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
+             patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
+             patch("engine.portfolio.get_live_valuation", return_value=[]), \
+             patch("engine.creator_signals.mention_leaderboard", return_value=[]):
+            at = AppTest.from_file(_MAIN)
+            at.run(timeout=30)
+        assert not at.exception
+        md = " ".join(m.value for m in at.markdown)
+        assert title in md
+        assert md.index(first) < md.index("BIG" if first == "MID" else "Ranking, not a buy list")

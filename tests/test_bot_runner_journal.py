@@ -819,3 +819,36 @@ def test_an_open_class_share_order_holds_back_another_one(recorded):
     _run(recorded, dry_run=False, targets=targets, client=client)
     assert client.submitted == []
     assert [r.get("blocked_by") for r in recorded] == [risk.PENDING_ORDER]
+
+
+
+def test_a_failing_spy_line_repair_is_logged_on_its_own(curve, monkeypatch):
+    """The official-close corrections are written before the SPY line is read; a
+    failure in the second step must not make the log claim the first never ran."""
+    logs = []
+    monkeypatch.setattr(run_bot, "_log", logs.append)
+
+    def boom(*a, **k):
+        raise RuntimeError("pooler timeout")
+    monkeypatch.setattr("engine.cache.get_closes_for", boom)
+    _seed(curve, {MON: 9_986.87, TUE: 9_952.09})
+    client = _SyncClient({MON: 9_986.87, TUE: 9_941.06}, {MON, TUE, date(2026, 9, 16)})
+    run_bot._sync_official_equity("golden_cross", dict(CONFIG), client, _utc(date(2026, 9, 16), 10, 30))
+    assert curve[TUE]["equity"] == 9_941.06
+    text = " ".join(logs)
+    assert "1 corrected to the official close" in text
+    assert "SPY line: unavailable (RuntimeError: pooler timeout)" in text
+    assert "equity sync: unavailable" not in text
+
+
+def test_the_saturday_cron_is_the_one_that_screens_the_sp400():
+    """SCREEN_UNIVERSE compares github.event.schedule with a literal; it has to be
+    the Saturday cron line exactly, or the S&P 400 ranking silently stops
+    refreshing and every bot run falls back to the S&P 500 alone."""
+    import re
+    text = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
+            / "screen-leaderboard.yml").read_text(encoding="utf-8")
+    crons = re.findall(r'cron:\s*"([^"]+)"', text)
+    picked = re.search(r"github\.event\.schedule == '([^']+)' && 'sp400'", text).group(1)
+    assert picked in crons and picked.split()[-1] == "6"
+    assert len(crons) == 2 and picked != crons[0]
