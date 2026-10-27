@@ -306,6 +306,39 @@ def has_run_this_month(ctx) -> bool:
                for d in run_dates(ctx))
 
 
+def due_for_trim(ctx, notional: float, *, start: date_, until: date_, mark: str) -> set[str]:
+    """Held names a one-off trim still has to cut down to `notional`.
+
+    For a strategy whose positions are never resized, after its slot count went
+    up: the names bought at the old, larger size block the new slots. Only
+    inside [start, until]; only names bought BEFORE `start` (no real buy on
+    record since); only names larger than the new size (a trim, never a
+    top-up); and only once — a sell carrying `mark` that reached Alpaca since
+    `start` marks a name done, while one that was refused is retried.
+
+    The window is short so it can be judged from the strategy's recent journal
+    rows alone (DECISION_LOOKBACK of them, via ctx.extras["decisions"]).
+    Used by score_threshold (20 -> 30 slots) and creator_conviction (4 -> 8).
+    """
+    from engine.bot import journal
+
+    if not (start <= ctx.today <= until):
+        return set()
+    done = set()
+    for d in (ctx.extras or {}).get("decisions") or []:
+        when = d.get("decided_at")
+        day = when.date() if hasattr(when, "date") else when
+        if day is None or day < start:
+            continue
+        if d.get("status") not in (journal.SUBMITTED, journal.FILLED):
+            continue
+        if d.get("action") == journal.BUY or (
+                d.get("action") == journal.SELL and mark in (d.get("reason") or "")):
+            done.add((d.get("ticker") or "").upper())
+    return {p.ticker.upper() for p in ctx.positions
+            if p.market_value > notional and p.ticker.upper() not in done}
+
+
 def runs_since_buy(ctx, ticker: str) -> int | None:
     """How many runs have happened since this name was last bought.
 

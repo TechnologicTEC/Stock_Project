@@ -71,7 +71,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from engine.bot import executor, journal
+from engine.bot import executor
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -102,7 +102,8 @@ def build(ctx) -> list[Target]:
 
     # 1. Decide what to keep. Anything dropped here simply isn't in the target
     #    book, and the planner closes it.
-    to_trim = _due_for_trim(ctx, notional)
+    to_trim = common.due_for_trim(ctx, notional, start=TRIM_FROM, until=TRIM_UNTIL,
+                                  mark=TRIM_MARK)
     for ticker in sorted(held):
         keep, reason = _verdict(ctx, ticker, lookup.get(ticker))
         if keep and ticker in to_trim:
@@ -131,30 +132,6 @@ def build(ctx) -> list[Target]:
         ))
 
     return targets
-
-
-def _due_for_trim(ctx, notional: float) -> set[str]:
-    """Held names the one-off trim still has to cut down to `notional`.
-
-    Inside the window only; bought before it (no real buy on record since
-    TRIM_FROM); larger than the new size (never a top-up); and not already
-    trimmed (no trim sell that reached Alpaca since TRIM_FROM).
-    """
-    if not (TRIM_FROM <= ctx.today <= TRIM_UNTIL):
-        return set()
-    done = set()
-    for d in (ctx.extras or {}).get("decisions") or []:
-        when = d.get("decided_at")
-        day = when.date() if hasattr(when, "date") else when
-        if day is None or day < TRIM_FROM:
-            continue
-        if d.get("status") not in (journal.SUBMITTED, journal.FILLED):
-            continue
-        if d.get("action") == journal.BUY or (
-                d.get("action") == journal.SELL and TRIM_MARK in (d.get("reason") or "")):
-            done.add((d.get("ticker") or "").upper())
-    return {p.ticker.upper() for p in ctx.positions
-            if p.market_value > notional and p.ticker.upper() not in done}
 
 
 def _verdict(ctx, ticker: str, row: dict | None) -> tuple[bool, str]:

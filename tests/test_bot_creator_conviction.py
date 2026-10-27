@@ -10,6 +10,7 @@ exists to prevent, and the clock itself. If
 green by returning targets instead of raising, the bot will one day sell its
 whole book because a cron died.
 """
+import dataclasses
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
@@ -598,3 +599,103 @@ def test_prepare_holdings_reads_the_clock_without_pricing_the_queue():
         extras = cc.prepare_holdings({}, TODAY)
     fetch.assert_not_called()
     assert set(extras) == {"board", "opened", "history"}
+
+
+
+# --------------------------------------------------------------------------
+# The one-off trim, from 27 Oct 2026 (Tane's call). Four names bought at 1/4 of
+# the account before slots went to eight sat at ~$2,000-2,800 each with cash at
+# -$314, so every qualifying name was refused for cash on every run. Each
+# position bought before the window is cut to the 1/8 size once.
+# --------------------------------------------------------------------------
+
+from engine.bot import executor, journal, risk  # noqa: E402
+
+
+def _trim_ctx(values, *, today=None, board=None, decisions=(), cash=-313.70, equity=9_054.64):
+    today = today or cc.TRIM_FROM
+    held = tuple(values)
+    board = board if board is not None else [_entry(t, bullish=3) for t in held]
+    opened = {t: datetime(today.year, today.month, today.day) - timedelta(days=5) for t in held}
+    candidates = [e for e in board if cc.qualifies(e)[0]]
+    return strategies.Context(
+        strategy="creator_conviction", equity=equity, cash=cash, today=today,
+        config={"target_slots": 8, "max_position_pct": 0.20, "starting_equity": 10_000.0},
+        positions=tuple(Position(ticker=t, qty=1.0, market_value=v) for t, v in values.items()),
+        extras={"board": board, "candidates": candidates,
+                "frames": {(e["ticker"] or "").upper(): _liquid() for e in candidates},
+                "opened": opened, "history": {}, "decisions": list(decisions)},
+    )
+
+
+def _orders(ctx):
+    return executor.plan(cc.build(ctx), list(ctx.positions), equity=ctx.equity)
+
+
+def _decision(day, **over):
+    base = {"decided_at": datetime(day.year, day.month, day.day, 22), "action": journal.HOLD,
+            "status": journal.SKIPPED, "ticker": None, "reason": ""}
+    base.update(over)
+    return base
+
+
+def test_the_trim_cuts_an_old_position_to_the_eight_slot_size():
+    ctx = _trim_ctx({"MSFT": 2_762.52})
+    size = risk.position_notional(9_054.64, 8, 0.20)
+    [order] = _orders(ctx)
+    assert (order.ticker, order.side) == ("MSFT", "sell")
+    assert order.notional == pytest.approx(2_762.52 - size, abs=0.01)
+    assert cc.TRIM_MARK in order.reason
+
+
+def test_no_creator_trim_outside_the_window():
+    for day in (cc.TRIM_FROM - timedelta(days=1), cc.TRIM_UNTIL + timedelta(days=1)):
+        assert _orders(_trim_ctx({"MSFT": 2_762.52}, today=day)) == []
+
+
+def test_the_creator_trim_happens_once():
+    done = _decision(cc.TRIM_FROM, action=journal.SELL, status=journal.FILLED, ticker="MSFT",
+                     reason=f"Trimming to target. {cc.TRIM_MARK} ...")
+    ctx = _trim_ctx({"MSFT": 1_200.0}, today=cc.TRIM_FROM + timedelta(days=1), decisions=[done])
+    assert _orders(ctx) == []
+
+
+def test_a_name_bought_inside_the_window_is_never_trimmed():
+    bought = _decision(cc.TRIM_FROM, action=journal.BUY, status=journal.FILLED, ticker="AMZN")
+    ctx = _trim_ctx({"AMZN": 1_300.0}, today=cc.TRIM_FROM + timedelta(days=2), decisions=[bought])
+    assert _orders(ctx) == []
+
+
+def test_a_name_whose_clock_ran_out_is_sold_whole_not_trimmed():
+    ctx = _trim_ctx({"MSFT": 2_762.52})
+    ctx = dataclasses.replace(ctx, extras={**ctx.extras, "opened": {
+        "MSFT": datetime(2026, 9, 1)}})                    # 30-day clock long gone
+    [order] = _orders(ctx)
+    assert order.side == "sell" and order.qty == 1.0 and order.notional is None
+
+
+def test_the_trim_pays_for_the_queued_names_and_clears_the_overdraft():
+    """The live book on 27 Oct: four 1/4-size names and cash at -$314. Without
+    the trim nothing queued can be bought; with it, every queued name is."""
+    held = {"AMD": 2_148.13, "MSFT": 2_762.52, "NVDA": 2_436.24, "NVTS": 2_021.45}
+    queue = ["AMZN", "GOOGL", "META", "APLD"]
+    board = [_entry(t, bullish=3) for t in held] + [_entry(t, bullish=3, days_ago=2) for t in queue]
+
+    def funded(today):
+        ctx = _trim_ctx(held, today=today, board=board)
+        keep = risk.cushion_to_keep(ctx.equity, ctx.cash)
+        ok, short = executor.fund(_orders(ctx), list(ctx.positions), cash=ctx.cash, keep=keep)
+        return sorted(o.ticker for o in ok if o.side == "buy"), ok
+
+    before, _ = funded(cc.TRIM_FROM - timedelta(days=1))
+    after, orders = funded(cc.TRIM_FROM)
+    assert before == []
+    assert after == sorted(queue)
+    spent = sum(o.notional for o in orders if o.side == "buy")
+    freed = sum(o.notional for o in orders if o.side == "sell")
+    assert -313.70 + freed - spent > 0                     # the account ends in credit
+
+
+def test_prepare_reads_the_strategys_own_decisions_for_the_trim():
+    prepared = _prepare([_entry("NVTS", bullish=3)])
+    assert "decisions" in prepared

@@ -14,7 +14,8 @@ Two ways to clear the bar, both inside a 30-day window:
 ## Eight equal slots, and never a partial buy
 
 Every position is bought at 1/8 of the account (`target_slots` in bot_config)
-and is never resized afterwards — no top-ups when the creator keeps talking
+and is never resized afterwards (one exception: the one-off trim of the
+names bought at 1/4, 27 Oct - 9 Nov 2026; see TRIM_FROM) — no top-ups when the creator keeps talking
 about it, no trims when it runs. Until 28 Sep 2026 the book was four slots, with
 positions topped up toward 30% as bullish mentions grew; that overcommitted the
 account, since four quarters is already all of it, and the fourth buy went
@@ -115,6 +116,17 @@ MAX_FEED_SILENCE_DAYS = 21
 
 DEFAULT_SLOTS = 8
 
+# The one-off trim, Tane's call on 27 Oct 2026. The four names held when slots
+# went from 4 to 8 (AMD, MSFT, NVDA, NVTS) were bought at a quarter of the
+# account and never resized, so they sat at ~$2,000-2,800 each with cash at
+# -$314 (an overdraft since 24 Sep), and every qualifying name was refused for
+# cash on every run from 13 Oct. Inside this window (UTC dates) each position
+# bought before it is cut to the 1/8 size once and the proceeds fund that run's
+# buys (screener_common.due_for_trim). Outside it, positions are never resized.
+TRIM_FROM = date_(2026, 10, 27)
+TRIM_UNTIL = date_(2026, 11, 9)
+TRIM_MARK = "One-off trim to the 8-slot size"
+
 
 def prepare(config: dict, today: date_) -> dict:
     """Read the mention window, the holding clocks, and price the candidates.
@@ -154,6 +166,8 @@ def prepare(config: dict, today: date_) -> dict:
     opened, history = load_clock_inputs()
     frames = liquidity.fetch_frames([e["ticker"] for e in candidates], today)
 
+    from engine.bot import journal
+
     return {
         "board": board,
         "candidates": candidates,
@@ -162,6 +176,8 @@ def prepare(config: dict, today: date_) -> dict:
         "frames": frames,
         "feed_silence_days": silence,
         "screen_notional": _notional_from_config(config),
+        # Only the one-off trim reads this: what it has already trimmed.
+        "decisions": journal.recent_decisions("creator_conviction", common.DECISION_LOOKBACK),
     }
 
 
@@ -442,6 +458,11 @@ def build(ctx) -> list[Target]:
     notional = common.notional_for(ctx)
     slots = _slots(ctx)
     targets = _keep(ctx, notional)
+    to_trim = common.due_for_trim(ctx, notional, start=TRIM_FROM, until=TRIM_UNTIL,
+                                  mark=TRIM_MARK)
+    targets = [Target(ticker=t.ticker, notional=notional, sizing=executor.LEVEL,
+                      reason=f"{TRIM_MARK} (${notional:,.2f}). {t.reason}")
+               if t.ticker in to_trim else t for t in targets]
 
     chosen, _declined = _queue(ctx, slots - len(targets), notional)
     for entry, assessment in chosen:
