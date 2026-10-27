@@ -32,6 +32,26 @@ NEWS_DISPLAY_LIMIT = 40
 # the first place (ensure_fresh), since Google News returns stories of any age.
 NEWS_KEEP_DAYS = 10
 
+# Relevance. A heavily covered name's feed is mostly general market stories (in
+# Oct 2026 only 6 of NVDA's newest 40 named Nvidia), so the score reads the
+# headlines that name the company — when at least MIN_RELEVANT do. Below that it
+# reads them all, as it always did: a name whose headlines rarely spell it out
+# keeps its sentiment factor rather than losing it.
+MIN_RELEVANT = 5
+_RELEVANCE_POOL = 400        # newest rows considered; NVDA had ~1,200 in ten days
+# First words too common to identify a company on their own; for these the
+# first two words must appear together ("Best Buy", not every "best").
+_COMMON_FIRST_WORDS = frozenset("""
+    advanced air american applied atlantic bank best capital central core digital
+    eastern energy federal first general global great healthcare home insight
+    international live match national new news northern old pacific public
+    realty royal southern standard state stock target texas trade union united
+    universal waste western world
+""".split())
+_NAME_SUFFIXES = re.compile(
+    r"\b(inc|incorporated|corp|corporation|co|company|companies|holdings?|group|plc|ltd|"
+    r"limited|llc|lp|n\.?v|s\.?a|se|ag|the|class [a-c]|common stock|& co)\b\.?", re.I)
+
 # A headline counts as positive/negative only past a small band around zero, so
 # faintly-signed neutral scores don't inflate the positive/negative tallies.
 _POSITIVE_THRESHOLD = 0.15
@@ -50,6 +70,7 @@ class NewsAnalysis:
     total_count: int = 0
     summary: str = ""
     has_sentiment: bool = False           # were any headlines actually scored?
+    unrelated_count: int = 0              # headlines left out for not naming the company
 
 
 def sentiment_label(score: float | None) -> str:
@@ -183,24 +204,83 @@ def _naive_utc(value) -> datetime:
     return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
+def _name_phrase(company_name: str | None) -> str | None:
+    """The part of a company name a headline would use: "Nvidia" from "NVIDIA
+    Corp", "Best Buy" from "Best Buy Co Inc" (its first word is too common)."""
+    words = _NAME_SUFFIXES.sub(" ", company_name or "").replace(",", " ").split()
+    if not words:
+        return None
+    if len(words[0]) >= 4 and words[0].lower() not in _COMMON_FIRST_WORDS:
+        return words[0]
+    return " ".join(words[:2]) if len(words) >= 2 else None
+
+
+def names_company(headline: str, ticker: str, company_name: str | None) -> bool:
+    """Does `headline` name this company — by its symbol or its name?
+
+    The symbol must appear as an upper-case word ("NVDA", "$NVDA") and be at
+    least two letters: "A" (Agilent) is a word in half of all headlines. A
+    class share also matches with a dot or without its class ("BRK.B", "BRK").
+    """
+    text = headline or ""
+    symbols = {ticker, ticker.replace("-", "."), ticker.split("-")[0]}
+    if any(len(sym) >= 2 and re.search(rf"(?<![A-Za-z]){re.escape(sym)}(?![A-Za-z])", text)
+           for sym in symbols):
+        return True
+    phrase = _name_phrase(company_name)
+    return bool(phrase and re.search(rf"\b{re.escape(phrase)}\b", text, re.I))
+
+
+def _company_name(ticker: str) -> str | None:
+    """The company name from the cached profile the screener already fetched —
+    a database read, never a network call, so every page agrees with the
+    screener about which headlines count."""
+    try:
+        return (cache.get_value(f"profile:{ticker}") or {}).get("name")
+    except Exception:                      # noqa: BLE001 — relevance is a refinement
+        return None
+
+
+def _scored_rows(ticker: str, limit: int) -> tuple[list[dict], int]:
+    """(the headlines the score reads, how many were left out as unrelated).
+
+    Drawn only from rows the nightly prune keeps (each ticker's newest
+    NEWS_DISPLAY_LIMIT, plus anything under NEWS_KEEP_DAYS old — see
+    cache.prune_news), so the prune can never change a score by deleting a row
+    it reads.
+    """
+    rows = cache.get_cached_news(ticker, limit=max(limit, _RELEVANCE_POOL))
+    cutoff = utcnow() - timedelta(days=NEWS_KEEP_DAYS)
+    pool = [r for i, r in enumerate(rows)
+            if i < NEWS_DISPLAY_LIMIT or (r.get("published_at") and r["published_at"] >= cutoff)]
+    name = _company_name(ticker)
+    relevant = [r for r in pool if names_company(r.get("headline"), ticker, name)]
+    if len(relevant) < MIN_RELEVANT:
+        return pool[:limit], 0
+    return relevant[:limit], len(pool) - len(relevant)
+
+
 def _build_summary(ticker: str, total: int, scored: int, overall: int | None,
-                   positive: int, neutral: int, negative: int) -> str:
+                   positive: int, neutral: int, negative: int, unrelated: int = 0) -> str:
     if total == 0:
         return f"No recent news found for {ticker}."
     if scored == 0:
         return (f"{total} recent headline(s) for {ticker}. Sentiment scoring is unavailable — "
                 "the FinBERT model isn't installed (`pip install transformers torch`).")
+    left_out = (f" {unrelated} other headline(s) in the feed didn't name the company and "
+                "were left out." if unrelated else "")
     return (f"{total} recent headline(s) for {ticker} — overall sentiment {overall}/100 "
-            f"({positive} positive, {neutral} neutral, {negative} negative).")
+            f"({positive} positive, {neutral} neutral, {negative} negative).{left_out}")
 
 
 def analyze_ticker(ticker: str, days: int = NEWS_DEFAULT_DAYS,
                    limit: int = NEWS_DISPLAY_LIMIT, force: bool = False) -> NewsAnalysis:
-    """Fetch-if-stale, then summarize the cached headlines for `ticker`."""
+    """Fetch-if-stale, then summarize the cached headlines for `ticker` — the
+    newest `limit` that name the company, where enough do (see _scored_rows)."""
     ticker = ticker.upper()
     ensure_fresh(ticker, days=days, force=force)
 
-    rows = cache.get_cached_news(ticker, limit=limit)
+    rows, unrelated = _scored_rows(ticker, limit)
     for row in rows:
         row["sentiment_label"] = sentiment_label(row.get("sentiment_score"))
 
@@ -219,6 +299,8 @@ def analyze_ticker(ticker: str, days: int = NEWS_DEFAULT_DAYS,
         negative=negative,
         scored_count=len(scores),
         total_count=len(rows),
-        summary=_build_summary(ticker, len(rows), len(scores), overall, positive, neutral, negative),
+        summary=_build_summary(ticker, len(rows), len(scores), overall, positive, neutral,
+                               negative, unrelated),
         has_sentiment=len(scores) > 0,
+        unrelated_count=unrelated,
     )

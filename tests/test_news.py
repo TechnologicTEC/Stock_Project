@@ -173,3 +173,82 @@ def test_an_old_story_is_still_stored_for_a_ticker_with_little_news():
     with patch("engine.news.finnhub_client.get_company_news", return_value=[]), \
          patch("engine.news.rss_client.get_google_news", return_value=[old]), _no_model():
         assert news.ensure_fresh("QUIET", force=True) == 1
+
+
+
+# --------------------------------------------------------------------------
+# Relevance. Finnhub's company-news feed for a heavily covered name is mostly
+# general market stories: NVDA's newest 40 in Oct 2026 included "SpaceX's
+# Adjusted Earnings Quadrupled" and "What to Look for From the Fed", and only 6
+# named Nvidia — so its sentiment factor scored the market, not the company.
+# The score now reads headlines that name the company, when there are enough.
+# --------------------------------------------------------------------------
+
+def _store(ticker, headlines, *, days_ago=1, score=0.0):
+    from datetime import timedelta
+    from engine import cache
+    from engine.time_utils import utcnow
+    cache.save_news_articles(ticker, [
+        {"headline": h, "source": "Yahoo", "url": f"http://rel/{ticker}/{days_ago}/{i}",
+         "published_at": utcnow() - timedelta(days=days_ago, minutes=i),
+         "sentiment_score": score}
+        for i, h in enumerate(headlines)])
+
+
+def _profile(ticker, name):
+    news.cache.set_value(f"profile:{ticker}", {"name": name, "sector": "Technology"})
+
+
+def _analyze(ticker):
+    with patch("engine.news.ensure_fresh", return_value=0):
+        return news.analyze_ticker(ticker)
+
+
+def test_the_score_reads_only_headlines_that_name_the_company():
+    _profile("NVXX", "Nvxxia Corp")
+    noise = [f"What to watch at the Fed meeting, part {i}" for i in range(40)]
+    about = [f"Nvxxia beats estimates again, take {i}" for i in range(8)]
+    _store("NVXX", noise, days_ago=1, score=-0.9)
+    _store("NVXX", about, days_ago=2, score=0.9)
+    a = _analyze("NVXX")
+    assert a.scored_count == 8 and a.overall_score == news.scale_to_100(0.9)
+    assert all("Nvxxia" in h["headline"] for h in a.headlines)
+    assert a.unrelated_count == 40
+
+
+def test_the_ticker_symbol_counts_as_naming_the_company():
+    _store("QQZ", [f"QQZ shares rise {i}" for i in range(6)] + ["Markets wrap"] * 3)
+    a = _analyze("QQZ")
+    assert a.total_count == 6
+
+
+def test_too_few_relevant_headlines_falls_back_to_all_of_them():
+    """Never worse than before: a name whose headlines rarely spell it out keeps
+    the old reading rather than losing its sentiment factor."""
+    _profile("FEWR", "Fewrco Inc")
+    _store("FEWR", ["Fewrco update"] * 2 + [f"Sector news {i}" for i in range(20)])
+    a = _analyze("FEWR")
+    assert a.total_count == 22 and a.unrelated_count == 0
+
+
+def test_a_one_letter_ticker_is_not_matched_as_a_word():
+    """"A" is Agilent; "A Stock To Buy Now" is not about it."""
+    assert not news.names_company("A Stock To Buy Now", "A", None)
+    assert news.names_company("Agilent raises guidance", "A", "Agilent Technologies Inc")
+
+
+def test_a_common_first_word_is_not_enough_on_its_own():
+    """Best Buy is not every headline containing "best"."""
+    assert not news.names_company("The best stocks to own", "BBY", "Best Buy Co Inc")
+    assert news.names_company("Best Buy cuts outlook", "BBY", "Best Buy Co Inc")
+
+
+def test_the_score_only_reads_headlines_the_nightly_prune_keeps():
+    """The prune keeps each ticker's newest 40 and anything under 10 days old.
+    A relevant headline outside both would be deleted tonight, so scoring it
+    today would make the score change when nothing new happened."""
+    _profile("PRNE", "Prunely Inc")
+    _store("PRNE", [f"Unrelated wire {i}" for i in range(45)], days_ago=1, score=0.0)
+    _store("PRNE", [f"Prunely news {i}" for i in range(6)], days_ago=20, score=0.9)
+    a = _analyze("PRNE")
+    assert all("Prunely" not in h["headline"] for h in a.headlines)
