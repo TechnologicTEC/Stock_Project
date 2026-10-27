@@ -133,6 +133,17 @@ def book_from_fills(fills: list[dict], *, fill_price=None) -> dict[str, dict]:
         if qty is None:
             continue                       # can't say how much smaller; still held
 
+        if held is not None and held["qty"] <= QTY_EPSILON:
+            # Held with a cost but no share count (a dollar buy that could not
+            # be priced or matched to a fill). Subtracting a trim's shares from
+            # zero deleted the name, and creator_conviction would then have
+            # found no buy to start its clock from and sold the whole position.
+            # A trim is never an exit, so it stays held. Its cost is left as it
+            # was: without a share count there is no saying what fraction was
+            # sold, and taking the trim's dollars off could zero the cost of a
+            # winner (a $500 buy trimmed by $700) and drop it after all.
+            continue
+
         if held is not None:
             # Average cost out with the shares, so what remains keeps the same
             # per-share basis it had before the sale.

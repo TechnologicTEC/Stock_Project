@@ -9,6 +9,8 @@ sell-then-rebuy cases below, which are where a naive "sum the buys" is wrong.
 """
 from datetime import date, datetime
 
+import pytest
+
 from engine.bot import positions
 
 
@@ -176,6 +178,36 @@ def test_a_trim_that_cannot_be_priced_leaves_the_name_held():
          _fill("CF", "sell", None, 60.0, date(2026, 9, 20))],
     )
     assert book["CF"]["qty"] == 5.0
+
+
+def test_a_trim_never_drops_a_holding_whose_buy_has_no_share_count():
+    """A dollar buy whose fill was never recorded, replayed without prices, has
+    a cost but no share count (qty 0). A trim the broker DID record carries
+    shares; subtracting them from 0 went negative and deleted the name — and
+    creator_conviction, finding no buy to start a clock from, would then have
+    sold the whole position the next run. The trim makes it smaller instead."""
+    trim = dict(_fill("MSFT", "sell", None, 1_689.0, date(2026, 10, 28)),
+                filled_qty=3.0, filled_avg_price=563.0)
+    book = positions.book_from_fills([_buy("MSFT", 2_517.44, date(2026, 9, 20)), trim])
+    assert "MSFT" in book
+    assert book["MSFT"]["since"] == date(2026, 9, 20)
+    assert positions.opened_at([_buy("MSFT", 2_517.44, date(2026, 9, 20)), trim])["MSFT"]
+
+
+def test_a_trim_larger_than_the_cost_of_a_winner_still_keeps_it():
+    """A $500 buy that doubled, trimmed by $700: taking the dollars off the cost
+    would zero it, and a holding with no shares and no cost is dropped."""
+    trim = dict(_fill("NVTS", "sell", None, 700.0, date(2026, 10, 28)),
+                filled_qty=60.0, filled_avg_price=11.66)
+    book = positions.book_from_fills([_buy("NVTS", 500.0, date(2026, 9, 3)), trim])
+    assert "NVTS" in book and book["NVTS"]["cost"] == 500.0
+
+
+def test_an_exit_still_closes_a_holding_whose_buy_has_no_share_count():
+    """The guard is for trims only: a share-count sell is a full exit."""
+    book = positions.book_from_fills([_buy("MSFT", 2_517.44, date(2026, 9, 20)),
+                                      _fill("MSFT", "sell", 5.2, None, date(2026, 10, 28))])
+    assert "MSFT" not in book
 
 
 def test_a_share_count_exit_closes_the_name_whatever_the_replay_estimated():
