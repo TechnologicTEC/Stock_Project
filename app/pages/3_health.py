@@ -58,7 +58,7 @@ if report.errors:
 
 MIN_DATA_NOTE = f"Needs at least {health.MIN_DATA_POINTS} trading days of overlapping history; not enough yet."
 
-with _theme.section("Risk metrics", tag="from daily value changes"):
+with _theme.section("Risk metrics", tag="time-weighted, your stocks only"):
     m1, m2, m3, m4 = st.columns(4)
 
     with m1:

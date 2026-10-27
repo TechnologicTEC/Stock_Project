@@ -158,6 +158,9 @@ def test_health_page_a_mid_window_purchase_no_longer_distorts_the_return():
     captions = " ".join(el.value for el in at.caption)
     assert "never count as a gain or a loss" in captions
     assert "don't account for when you bought or sold" not in captions
+    # The section's tag says the same thing, not the old "from daily value changes".
+    md = " ".join(el.value for el in at.markdown)
+    assert "time-weighted, your stocks only" in md and "from daily value changes" not in md
 
     metric_values = {m.label: m.value for m in at.metric}
     trailing = float(metric_values["Trailing annualized return"].rstrip("%"))
@@ -368,3 +371,6 @@ def test_health_page_explains_the_numbers_are_time_weighted():
     captions = " ".join(el.value for el in at.caption)
     assert "never count as a gain or a loss" in captions
     assert "don't account for when you bought or sold" not in captions
+    # The section's tag says the same thing, not the old "from daily value changes".
+    md = " ".join(el.value for el in at.markdown)
+    assert "time-weighted, your stocks only" in md and "from daily value changes" not in md
