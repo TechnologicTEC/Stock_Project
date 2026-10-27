@@ -142,20 +142,25 @@ def main() -> None:
           f"(every={every}, size={size or 'all'}), chunks of {chunk}", flush=True)
     started = time.time()
 
-    # Screen in chunks and SAVE AFTER EACH, so a timeout or a Finnhub hiccup leaves
-    # a partial leaderboard rather than nothing. Safe because ABSOLUTE scoring (the
-    # default) makes each ticker's score independent, so concatenated chunks rank
-    # exactly like one big screen (build_leaderboard sorts globally). screen_tickers
-    # is the same function the Screener page uses.
+    # Screen in chunks and save progress after each, so a timeout or a Finnhub
+    # hiccup leaves the work done so far rather than nothing. Safe because
+    # ABSOLUTE scoring makes each ticker's score independent, so concatenated
+    # chunks rank exactly like one big screen (build_leaderboard sorts globally).
+    #
+    # Progress goes to a SEPARATE slot. The live ranking is replaced only once
+    # every chunk is in: a run that dies partway leaves last week's complete
+    # ranking in place, rather than a partial one dated today that the page
+    # shows and the bots would trade. screen_tickers is the Screener page's own.
     results = []
     for start in range(0, len(tickers), chunk):
         batch = tickers[start:start + chunk]
         results.extend(screener.screen_tickers(batch))
         done = min(start + chunk, len(tickers))
-        screener.save_leaderboard(screener.build_leaderboard(results, universe=uni))
+        screener.save_partial_leaderboard(screener.build_leaderboard(results, universe=uni))
         rate = (time.time() - started) / done
         print(f"  {done}/{len(tickers)} screened  (~{(len(tickers)-done)*rate/60:.0f} min left)", flush=True)
 
+    screener.save_leaderboard(screener.build_leaderboard(results, universe=uni))
     payload = screener.load_leaderboard(uni)
 
     elapsed = (time.time() - started) / 60

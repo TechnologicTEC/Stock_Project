@@ -424,7 +424,11 @@ def _top_decile(cfg: dict, view: dict) -> None:
         f'<td class="num dim">—</td></tr>'
         "</tbody></table></div>"
         f'<p class="cp-note">Since the rebalance on <b>{spread["as_of"]:%d %b %Y}</b> '
-        f'({days} day{"" if days == 1 else "s"}), equal-weighted. The bottom decile is <b>measured, never '
+        f'({days} day{"" if days == 1 else "s"}), equal-weighted'
+        + (f', both baskets priced to the close of <b>{spread["priced_to"]:%d %b}</b> — the '
+           "newest day both have prices for (the untraded bottom decile is only re-priced weekly)"
+           if spread.get("priced_to") else "")
+        + '. The bottom decile is <b>measured, never '
         "traded</b> — shorting it would need whole shares this account cannot borrow, but the "
         f"comparison survives without the trade. On this reading, {verdict}. A name that "
         "cannot be priced is dropped from its own side and counted, never scored as flat.</p>"

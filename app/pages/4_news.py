@@ -171,7 +171,8 @@ else:
 
     st.caption(report.summary)
 
-    if report.latest and report.latest.get("beat") is not None:
+    _RESULT = {"beat": "Beat ✅", "met": "Met ➖", "missed": "Miss ❌"}
+    if earnings.outcome(report.latest):
         latest = report.latest
         e1, e2, e3 = st.columns(3)
         e1.metric("Latest EPS (actual)", f"${latest['eps_actual']:.2f}")
@@ -180,7 +181,7 @@ else:
             f"${latest['eps_estimate']:.2f}" if latest["eps_estimate"] is not None else "—",
             f"{latest['eps_surprise_pct']:+.1f}%" if latest["eps_surprise_pct"] is not None else None,
         )
-        e3.metric("Result", "Beat ✅" if latest["beat"] else "Miss ❌")
+        e3.metric("Result", _RESULT[earnings.outcome(latest)])
 
     if report.surprises:
         st.subheader("Recent quarters")
@@ -191,7 +192,8 @@ else:
                     "EPS actual": s["eps_actual"],
                     "EPS estimate": s["eps_estimate"],
                     "Surprise %": s["eps_surprise_pct"],
-                    "Result": "Beat" if s["beat"] else ("Miss" if s["beat"] is False else "—"),
+                    "Result": {"beat": "Beat", "met": "Met", "missed": "Miss"}.get(
+                        earnings.outcome(s), "—"),
                 }
                 for s in report.surprises
             ]

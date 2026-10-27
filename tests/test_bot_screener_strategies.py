@@ -26,6 +26,13 @@ from engine.bot.strategies import screener_common as common
 
 TODAY = date(2026, 9, 15)
 
+# What a COMPLETE weekly screen records as n_requested: every name in the list.
+# The rows in these fixtures are a handful, but a real full run asks for all of
+# them, and the loader refuses anything that asked for under 90%.
+from engine import universe as _universe  # noqa: E402
+
+FULL_SP500 = len(_universe.tickers("sp500"))
+
 
 # --------------------------------------------------------------------------
 # Fixtures
@@ -77,7 +84,7 @@ def test_an_empty_leaderboard_refuses_too():
 
 
 def test_a_fresh_leaderboard_loads_and_reports_its_age():
-    payload = {"rows": _rows(3), "generated_at": (TODAY - timedelta(days=3)).isoformat()}
+    payload = {"rows": _rows(3), "n_requested": FULL_SP500, "generated_at": (TODAY - timedelta(days=3)).isoformat()}
     with patch("engine.screener.load_leaderboard", return_value=payload):
         got = common.load_leaderboard(TODAY)
     assert got["age_days"] == 3
@@ -88,21 +95,40 @@ def test_a_stale_leaderboard_is_refused_for_trading():
     """The Screener page tolerates 21 days so a couple of missed weekly runs
     degrade to 'this is getting old' rather than a blank panel. Trading on a
     three-week-old ranking is a different matter, so the bot cuts off sooner."""
-    payload = {"rows": _rows(3), "generated_at": (TODAY - timedelta(days=20)).isoformat()}
+    payload = {"rows": _rows(3), "n_requested": FULL_SP500, "generated_at": (TODAY - timedelta(days=20)).isoformat()}
     with patch("engine.screener.load_leaderboard", return_value=payload):
         with pytest.raises(strategies.StrategyDataError, match="20 days old"):
             common.load_leaderboard(TODAY)
 
 
 def test_the_age_limit_still_absorbs_one_missed_weekly_run():
-    payload = {"rows": _rows(3), "generated_at": (TODAY - timedelta(days=13)).isoformat()}
+    payload = {"rows": _rows(3), "n_requested": FULL_SP500, "generated_at": (TODAY - timedelta(days=13)).isoformat()}
     with patch("engine.screener.load_leaderboard", return_value=payload):
         assert common.load_leaderboard(TODAY)["age_days"] == 13
 
 
+@pytest.mark.parametrize("requested", [40, 120, 440])
+def test_a_partial_sp500_leaderboard_is_refused_not_traded(requested):
+    """A screen that died partway (or a sample) used to be traded as the whole
+    index; on a rebalance every held name missing from it would have been sold.
+    The same 90% bar the S&P 400 merge applies now guards the S&P 500 too."""
+    payload = {"rows": _rows(3), "n_requested": requested,
+               "generated_at": (TODAY - timedelta(days=1)).isoformat()}
+    with patch("engine.screener.load_leaderboard", return_value=payload):
+        with pytest.raises(strategies.StrategyDataError, match=f"only {requested} of"):
+            common.load_leaderboard(TODAY)
+
+
+def test_a_refused_partial_leaderboard_does_not_use_up_the_months_rebalance():
+    """The runner journals the refusal as insufficient_data; that row must not
+    count as the month's run, so the next run still rebalances."""
+    refused = _decision(TODAY, status=journal.ERROR, blocked_by=risk.INSUFFICIENT_DATA)
+    assert common.has_run_this_month(_ctx(_rows(), decisions=[refused])) is False
+
+
 def test_an_unreadable_generated_at_is_refused_not_guessed():
     with patch("engine.screener.load_leaderboard",
-               return_value={"rows": _rows(3), "generated_at": "not-a-date"}):
+               return_value={"rows": _rows(3), "n_requested": FULL_SP500, "generated_at": "not-a-date"}):
         with pytest.raises(strategies.StrategyDataError, match="unreadable generated_at"):
             common.load_leaderboard(TODAY)
 
@@ -615,7 +641,8 @@ def test_before_the_switch_the_real_loader_ignores_the_sp400():
                               factors={n: FactorResult(score=score, reasons=[])
                                        for n in screener.FACTOR_WEIGHTS})
 
-    screener.save_leaderboard(screener.build_leaderboard([result("BIG", 70.0)]))
+    full = dict(screener.build_leaderboard([result("BIG", 70.0)]), n_requested=FULL_SP500)
+    screener.save_leaderboard(full)
     screener.save_leaderboard(screener.build_leaderboard([result("MID", 90.0)], universe="sp400"))
     # Before the November 2026 switch; from it the two are merged (tests below).
     got = common.load_leaderboard(common.MERGE_FROM - timedelta(days=1))

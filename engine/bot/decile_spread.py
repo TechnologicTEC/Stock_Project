@@ -121,6 +121,29 @@ def price_basket(tickers, start: date_, end: date_) -> dict:
     return out
 
 
+def newest_bar(tickers, start: date_, today: date_) -> date_ | None:
+    """The newest cached close for any name in the basket, or None. I/O.
+
+    The two baskets are not refreshed alike: the top decile is HELD, so
+    warm-cache prices it every night, while the bottom decile is never traded
+    and only gets prices from the weekly screen. Priced to "today", the top
+    basket ran to Monday's close and the bottom to the previous Friday's — on
+    27 Oct 2026, three days apart. measure() prices both to the older of the
+    two, so the spread compares the same days.
+    """
+    from engine import cache, price_history
+
+    keys = sorted({(t or "").upper() for t in tickers if t})
+    if not keys:
+        return None
+    try:
+        history = cache.get_closes_for(keys, price_history.canonical_source(), start, today)
+    except Exception:                        # noqa: BLE001 — a statistic must not break a run
+        return None
+    dates = [bars[-1][0] for bars in history.values() if bars]
+    return max(dates) if dates else None
+
+
 def _close_on_or_before(bars, day: date_) -> float | None:
     """Last close at or before `day` from an ascending [(date, close)] list."""
     found = None
@@ -151,16 +174,23 @@ def measure(snapshot: dict, today: date_) -> dict | None:
     if not top_names and not bottom_names:
         return None
 
+    # Both baskets to the SAME close: the older of the two baskets' newest bars
+    # (see newest_bar for why they differ). Without a date for either side,
+    # fall back to today, as before.
+    ends = [newest_bar(names, as_of, today) for names in (top_names, bottom_names)]
+    end = min(ends) if all(ends) else today
+
     top_return, top_priced, top_missing = basket_return(
-        price_basket(top_names, as_of, today))
+        price_basket(top_names, as_of, end))
     bottom_return, bottom_priced, bottom_missing = basket_return(
-        price_basket(bottom_names, as_of, today))
+        price_basket(bottom_names, as_of, end))
 
     spread = (top_return - bottom_return
               if top_return is not None and bottom_return is not None else None)
     return {
         "as_of": as_of,
-        "days": (today - as_of).days,
+        "priced_to": end,
+        "days": (end - as_of).days,
         "top_return": top_return,
         "bottom_return": bottom_return,
         "spread": spread,

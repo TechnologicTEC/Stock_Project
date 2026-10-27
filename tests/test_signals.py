@@ -17,8 +17,16 @@ def _news(score):
     return SimpleNamespace(overall_score=score)
 
 
-def _earn(beat=None, pct=None, release_score=None):
-    surprises = [{"period": "2026-Q1", "beat": beat, "eps_surprise_pct": pct}] if beat is not None else []
+def _earn(beat=None, pct=None, release_score=None, actual=None):
+    """A quarter shaped like earnings._fetch_surprises' rows: the EPS figures
+    are what the outcome is read from, `beat` is only the yes/no beside them."""
+    surprises = []
+    if beat is not None:
+        estimate = 1.00
+        if actual is None:
+            actual = estimate * (1 + (pct or 0) / 100 * (1 if beat else -1))
+        surprises = [{"period": "2026-Q1", "beat": beat, "eps_surprise_pct": pct,
+                      "eps_actual": actual, "eps_estimate": estimate}]
     release = None
     if release_score is not None:
         label = "Positive" if release_score > 0 else "Negative" if release_score < 0 else "Neutral"
@@ -53,6 +61,14 @@ def test_negative_and_mixed_mapping():
     assert (out["positive"], out["negative"], out["counted"]) == (0, 4, 4)
     assert _read(out, "News sentiment").stance == "negative"
     assert _read(out, "Latest earnings").detail == "Missed estimates by 8% (2026-Q1)"
+
+
+def test_a_quarter_exactly_on_its_estimate_is_neutral_not_a_miss():
+    """`beat` is False when EPS lands exactly on the estimate; that is not a miss."""
+    out = _run(earn=_earn(beat=False, pct=0.0, actual=1.00))
+    read = _read(out, "Latest earnings")
+    assert read.stance == "neutral"
+    assert read.detail == "Met estimates (2026-Q1)"
 
 
 def test_hold_and_neutral_news_are_neutral_not_counted_as_lean():

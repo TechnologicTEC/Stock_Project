@@ -314,6 +314,35 @@ def test_the_spread_is_top_minus_bottom(monkeypatch):
     assert out["days"] == 45
 
 
+def test_both_baskets_are_priced_to_the_same_close(monkeypatch):
+    """The held top decile gets nightly prices, the untraded bottom decile only
+    weekly ones. On 27 Oct 2026 that put them three days apart; both are now
+    priced to the older of the two baskets' newest closes."""
+    newest = {"TOP1": date(2026, 10, 26), "BOT1": date(2026, 10, 23)}
+    monkeypatch.setattr(decile_spread, "newest_bar",
+                        lambda names, start, today: max(newest[n] for n in names))
+    seen_ends = []
+
+    def fake(tickers, start, end):
+        seen_ends.append(end)
+        return {t: (100.0, 101.0) for t in tickers}
+
+    monkeypatch.setattr(decile_spread, "price_basket", fake)
+    out = decile_spread.measure({"as_of": "2026-10-02", "top": ["TOP1"], "bottom": ["BOT1"]},
+                                date(2026, 10, 27))
+    assert seen_ends == [date(2026, 10, 23)] * 2
+    assert out["priced_to"] == date(2026, 10, 23)
+    assert out["days"] == 21
+
+
+def test_newest_bar_reads_the_baskets_latest_close(monkeypatch):
+    from engine import cache
+    monkeypatch.setattr(cache, "get_closes_for", lambda t, s, a, b: {
+        "A": [(date(2026, 10, 22), 1.0), (date(2026, 10, 23), 1.0)],
+        "B": [(date(2026, 10, 5), 1.0)], "C": []})
+    assert decile_spread.newest_bar(["A", "B", "C"], date(2026, 10, 1), date(2026, 10, 27)) == date(2026, 10, 23)
+
+
 def test_the_spread_is_none_when_a_side_cannot_be_priced(monkeypatch):
     monkeypatch.setattr(decile_spread, "price_basket",
                         lambda t, s, e: {x: (None, None) for x in t})

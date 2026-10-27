@@ -65,17 +65,19 @@ def _earnings_read(ticker: str) -> SignalRead:
 
     # Prefer a real beat/miss — the most recent quarter that actually has an
     # estimate (the very latest one sometimes doesn't).
-    quarter = next((q for q in analysis.surprises if q.get("beat") is not None), None)
+    quarter = next((q for q in analysis.surprises if earnings.outcome(q) is not None), None)
     if quarter:
+        result = earnings.outcome(quarter)
         pct = quarter.get("eps_surprise_pct")
-        by = f" by {abs(pct):.0f}%" if pct else ""
-        stance = POSITIVE if quarter["beat"] else NEGATIVE
+        by = f" by {abs(pct):.0f}%" if pct and result != "met" else ""
+        # A quarter exactly on its estimate is neither good nor bad news.
+        stance = {"beat": POSITIVE, "met": NEUTRAL, "missed": NEGATIVE}[result]
         # Name the quarter: it is the newest one WITH an estimate, which is not
         # always the newest one, so "Latest" alone could pass an old result off
         # as this quarter's.
         period = f" ({quarter['period']})" if quarter.get("period") else ""
         return SignalRead("Latest earnings", stance,
-                          f"{'Beat' if quarter['beat'] else 'Missed'} estimates{by}{period}")
+                          f"{result.capitalize()} estimates{by}{period}")
 
     # Finnhub's free-tier earnings calendar often returns no EPS actual/estimate,
     # so fall back to the sentiment of the 8-K earnings press release (the same

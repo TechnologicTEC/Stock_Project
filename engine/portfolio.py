@@ -937,6 +937,60 @@ def get_value_history(start: date, end: date) -> list[dict]:
     return [{"date": d, "value": round(v, 2)} for d, v in total.items()]
 
 
+def get_holdings_return_index(start: date, end: date, base: float = 100.0) -> list[dict]:
+    """[{"date", "value"}] — a time-weighted index of what the HOLDINGS earned.
+
+    Each business day's return is what the shares held at the previous close
+    earned by this close: sum(shares[t-1] * price[t]) / sum(shares[t-1] *
+    price[t-1]) - 1, chained from `base` on the first day anything was held.
+    Buying, selling, deposits and withdrawals change which shares are held
+    from the next day, but never show up as a gain or a loss themselves.
+
+    This is what the Health page's risk numbers are measured on. The value line
+    (get_value_history) is the wrong input for them: it moves on every deposit
+    and withdrawal, and it carries the wallet — and since buys began debiting
+    the wallet (3 Sep 2026), past purchases are funded by one backfilled deposit
+    dated before the first purchase, so that line showed thousands of dollars
+    sitting idle for months that were in fact invested as they arrived.
+
+    A ticker with no price on either day is left out of that day's return on
+    both sides, so a missing bar can't look like a crash or a rally.
+    """
+    business_days = pd.bdate_range(start=start, end=end).date
+    if len(business_days) < 2:
+        return []
+
+    holdings = list_holdings()
+    transactions_by_ticker: dict[str, list[dict]] = {}
+    for t in list_transactions():
+        transactions_by_ticker.setdefault(t["ticker"], []).append(t)
+    tickers = sorted(set(transactions_by_ticker) | {h["ticker"] for h in holdings})
+    if not tickers:
+        return []
+
+    shares = pd.DataFrame({t: _shares_series(t, holdings, transactions_by_ticker.get(t, []), business_days)
+                           for t in tickers})
+    prices = pd.DataFrame({t: _price_series(t, start, end, business_days) for t in tickers})
+    held = shares.shift(1)                    # the book at the previous close
+    prev, now = prices.shift(1), prices
+    usable = held.gt(0) & prev.notna() & now.notna() & prev.gt(0)
+    value_before = (held * prev).where(usable).sum(axis=1)
+    value_after = (held * now).where(usable).sum(axis=1)
+
+    out, level = [], None
+    for day, before, after in zip(business_days, value_before, value_after):
+        if level is None:
+            # Start the index the first day the book had something in it.
+            if (shares.loc[day] > 0).any():
+                level = base
+                out.append({"date": day, "value": level})
+            continue
+        if before > 0:
+            level *= after / before
+        out.append({"date": day, "value": round(level, 6)})
+    return out
+
+
 def value_history_markers(activity: list[dict], history: list[dict]) -> list[dict]:
     """Position each activity event (from list_activity()) on the value-over-
     time line, for plotting as chart markers. Returns one marker dict per

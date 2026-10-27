@@ -24,6 +24,13 @@ from db.models import (
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
+# The engine init_db() last finished setting up. Every page calls init_db() at
+# the top, and Streamlit re-runs the page on every click, so without this the
+# live site re-ran ~50 DDL statements (ALTER TABLE ... ROW LEVEL SECURITY,
+# DROP/CREATE POLICY on nine tables) per click — each one a brief exclusive
+# lock on holdings, transactions and the wallet. The setup only needs to
+# happen once per database per process; configure() resets this.
+_initialized_engine: Engine | None = None
 
 # --------------------------------------------------------------------------
 # Multi-user scoping (see multi_user_plan.md). Every read of a user-owned
@@ -103,8 +110,9 @@ def configure(database_url: str | None = None) -> Engine:
 
     before each test, to get a clean, isolated database.
     """
-    global _engine, _SessionLocal, _bootstrap_user_id
+    global _engine, _SessionLocal, _bootstrap_user_id, _initialized_engine
     _bootstrap_user_id = None  # a fresh DB (esp. the in-memory test DB) re-derives this in init_db()
+    _initialized_engine = None  # ...and a fresh database needs its setup run again
 
     url = _name_the_postgres_driver(database_url or _default_db_url())
     kwargs: dict = {}
@@ -136,14 +144,21 @@ def get_engine() -> Engine:
 def init_db() -> None:
     """Create all tables that don't already exist, apply any pending lightweight
     column migrations, ensure the bootstrap owner user exists, backfill any
-    pre-existing rows to it, and (on Postgres) apply Row-Level Security. Safe to
-    call on every app startup."""
-    Base.metadata.create_all(get_engine())
-    _apply_lightweight_migrations(get_engine())
+    pre-existing rows to it, and (on Postgres) apply Row-Level Security.
+
+    Runs once per database per process: a repeat call is a no-op until
+    configure() points at a database again (see _initialized_engine)."""
+    global _initialized_engine
+    engine = get_engine()
+    if _initialized_engine is engine and _bootstrap_user_id is not None:
+        return
+    Base.metadata.create_all(engine)
+    _apply_lightweight_migrations(engine)
     _ensure_bootstrap_user()
-    _backfill_user_ids(get_engine())
-    _apply_postgres_rls(get_engine())
-    _ensure_alembic_stamp(get_engine())
+    _backfill_user_ids(engine)
+    _apply_postgres_rls(engine)
+    _ensure_alembic_stamp(engine)
+    _initialized_engine = engine
 
 
 def _ensure_bootstrap_user() -> None:

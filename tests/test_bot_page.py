@@ -572,6 +572,12 @@ def test_the_decile_panel_gives_a_verdict_once_there_is_a_window():
     assert "separated the two ends" in _page_text(at)
 
 
+def test_the_decile_panel_says_which_close_both_baskets_are_priced_to():
+    at = _run(configs=[_config("top_decile_long", target_slots=50)],
+              spread={**_spread(), "priced_to": date(2026, 10, 23)})
+    assert "priced to the close of <b>23 Oct</b>" in _page_text(at)
+
+
 def test_the_decile_panel_says_so_before_the_first_snapshot():
     at = _run(configs=[_config("top_decile_long", target_slots=50)], spread=None)
     assert "until the first rebalance" in _page_text(at)

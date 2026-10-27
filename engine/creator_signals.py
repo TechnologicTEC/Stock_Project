@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from db.models import Creator, CreatorVideo, VideoMention
@@ -144,6 +144,12 @@ def _screen_and_store_mentions(video_id: str, transcript: str) -> int:
         print(f"    {video_id} screen FAILED (mentions kept, scores blank): {type(exc).__name__}: {exc}", flush=True)
 
     with get_session() as s:
+        # Replace, never add to, this video's mentions. Saving them and marking
+        # the video extracted are two steps (_extract_pending), so a run that
+        # dies between them extracts the video again next time — and without
+        # this the second save doubled its mentions, which the creator bot
+        # counts toward a name's entry. Same transaction as the inserts.
+        s.execute(delete(VideoMention).where(VideoMention.video_id == video_id))
         for m in mentions:
             r = scored.get(m.ticker)
             s.add(VideoMention(

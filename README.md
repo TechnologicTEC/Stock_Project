@@ -42,29 +42,38 @@ code · **649 tests** · 4 scheduled GitHub Actions
 | **Portfolio** | Holdings, valuation, allocation, cash, transactions, CSV import, value-over-time, USD/NZD |
 | **Screener** | Explainable 6-factor score (valuation, growth, profitability, momentum, sentiment, analyst) → Strong Buy…Strong Sell, with per-factor reasons and sector-adjusted thresholds — plus weekly ranked **S&P 500 and S&P 400 leaderboards** (the S&P 400 merged into the screener bots from Nov 2026) |
 | **Validation** | Walk-forward backtest that reconstructs each past score point-in-time and measures its information coefficient — with error bars, effective sample size, and multiple-comparison correction |
-| **Health** | Beta, Sharpe, drawdown, concentration, rule-based flags |
-| **Projections** | Monte Carlo ranges — explicitly not forecasts |
+| **Health** | Beta, Sharpe, drawdown (time-weighted on the holdings), concentration, rule-based flags |
+| **Projections** | Lognormal ranges from an exact formula (no simulation) — explicitly not forecasts |
 | **Backtest** | Vectorised, no-look-ahead technical backtester vs buy-&-hold and SPY |
 | **Paper Trading** | Alpaca paper account — positions, order ticket, cancels |
 | **News & Earnings** | FinBERT headline sentiment; SEC 8-K press-release key-figure extraction |
 | **AI Assistant** | Deterministic intent router (17 tools), with Gemini as an optional free-form layer |
 | **Creator Signals** | Auto-scans a YouTuber's uploads → transcript → LLM ticker extraction → screener → repeat-mention leaderboard + email digest |
+| **Trading Bot** | Five strategies (golden cross, composite top 15, Strong Buy threshold, creator conviction, top decile) each trading its own $10k Alpaca *paper* account on a GitHub Actions schedule, with a decision journal, curves against SPY, and a per-strategy stop |
 
 **Where the data comes from** (all free tier): Finnhub · yfinance/Alpaca · SEC
 EDGAR XBRL · FRED · ECB · Google News RSS · GDELT via BigQuery · YouTube Data API
 + Supadata. ML: FinBERT (sentiment), Gemini (chat + ticker extraction).
 
-**Multi-user**: owner/friend/guest roles, Postgres RLS + ORM-level user scoping, a
-least-privilege `NOBYPASSRLS` runtime role, and a Fernet-encrypted per-user
-API-key vault.
+**Multi-user**: owner/friend/guest roles, ORM-level user scoping (what isolates
+users today — the deployed app connects as `postgres`, which bypasses RLS),
+Postgres RLS closing the Supabase auto-API, a least-privilege `NOBYPASSRLS`
+role provisioned but not yet switched on (see *Accounts* below), and a
+Fernet-encrypted per-user API-key vault.
 
 ## What it found
 
-Across **499 S&P 500 names over five years** (30,096 point-in-time
-reconstructions), the composite score has a cross-sectional information
-coefficient of **+0.046 (t = 2.17)**, positive on 69% of dates. Real, but faint —
-roughly what professional equity factor models achieve, and nothing like a stock
-picker. About **two-thirds is genuine stock selection**; the rest is sector tilt.
+Across **S&P 500 names over five years** (493 names, 29,760 point-in-time
+reconstructions in the Oct 2026 run; +0.046, t = 2.17 on 499 names before), the
+composite score has a cross-sectional information coefficient of **+0.051
+(t = 2.15)**, positive on 69% of dates. Real, but faint — roughly what
+professional equity factor models achieve, and nothing like a stock picker.
+About **two-thirds is genuine stock selection**; the rest is sector tilt.
+
+**It did not replicate on mid caps.** The same test on the S&P 400 (399 names,
+five years, Oct 2026) found **+0.015 (t = 0.72)** — no measurable edge. The
+trading bots merge the S&P 400 into their ranking from November 2026 anyway,
+as a live test, and the pages say so beside those rows.
 
 Two findings that changed the roadmap:
 
@@ -312,11 +321,10 @@ pricing — takes the subject's daily volatility over the past year and projects
 widening **fan chart** of percentile bands **centred on today's value (no assumed
 drift)**, with a 90% and middle-half range and a plain-English explanation. The
 trailing realized return is shown as *context only* — never carried forward as a
-trend. The median then **tilts by the Screener's rating** (on by default,
-toggleable): up for highly-rated stocks, down for poorly-rated ones, flat for
-neutral — a capped ±25%/yr lean set by the fundamental score and shrunk by the
-ticker's validation IC, with no baseline drift (nothing moves without the rating
-to back it). For a single ticker
+trend. For S&P 500 companies the median then **tilts by the Screener's score**
+(on by default, toggleable) at the rate a point of score has actually been
+worth — about +0.28%/yr per point above 50, measured on five years of S&P 500
+history — and stays flat for everything else, where no edge was measured. For a single ticker
 it also pairs the band with recent **news sentiment** (context only — it does not
 move the range) and, on demand, a **historical calibration**: replaying the exact
 model over past windows (no look-ahead) to show how often the actual subsequent
@@ -422,16 +430,14 @@ availability during Phase 2 (insider MSPR's actual range, the price-target
 endpoint losing free-tier access). Computing beta entirely from our own
 cached price history sidesteps that whole class of problem.
 
-**None of these metrics account for cash flows.** Beta, Sharpe, trailing
-return, and max drawdown all use a simple day-over-day change in total
-portfolio value. If you bought or sold a holding partway through the
-lookback window, that purchase/sale shows up as an artificial jump in the
-value series and skews the numbers exactly as if the market itself had
-moved that much. A correct fix is a time-weighted-return calculation,
-which is real added complexity intentionally left out of this phase — the
-health page states this limitation directly rather than presenting the
-numbers as more precise than they are. Pick a lookback window where your
-holdings were stable for the most accurate read.
+**The metrics are time-weighted on the holdings** (since Oct 2026).
+Beta, Sharpe, trailing return and max drawdown are measured on
+`portfolio.get_holdings_return_index`: each day, what the shares held at the
+previous close earned by this one. Buying, selling, deposits and withdrawals
+change what is held but never count as a gain or a loss, and wallet cash is
+not part of it. (They used to use the total value line, which jumped on new
+money — see the +3920% bug below — and, once buys debited the wallet, carried a
+backfilled deposit as months of idle cash.)
 
 **"Expected return" is backward-looking.** Section 6.4 uses that term, but
 what's shown is a trailing annualized return over the lookback window — a
@@ -468,18 +474,10 @@ limitation already documented above, manifesting concretely: they'd added
 a new holding partway through the selected lookback window, and the
 portfolio's value jumped sharply on that date — not because of a market
 move, but because new money arrived. `last ÷ first` annualized that jump
-into an absurd percentage. The fix isn't to attempt a full time-weighted-
-return rewrite (still out of scope, as above) but to detect the situation
-directly: `_detect_mid_window_contributions()` checks whether any current
-holding was purchased after the value series' effective start date, and if
-so, the health page shows a prominent warning naming exactly which
-holding and when, rather than a vague caveat — plus a concrete suggestion
-("try the 3M window instead — your other holdings have been stable that
-long") computed by finding the largest lookback option that predates every
-current holding's purchase. The raw number is still shown rather than
-hidden, consistent with this project's "always show the work" approach
-throughout — it's just no longer presented without the context needed to
-interpret it correctly.
+into an absurd percentage. The first fix only detected it — a warning naming
+the holding bought mid-window — and in October 2026 it was replaced by the real
+one: the metrics are now time-weighted on the holdings (above), so new money is
+never read as a return and there is nothing left to warn about.
 
 **Rule-based thresholds**, documented as named constants in
 `engine/health.py` (same style as the screener's `*_CURVE` constants): any
@@ -495,9 +493,9 @@ extensions in the same spirit, easy to retune in one place.
 This phase exists because of the +3920% bug documented above. The root
 cause traced back further than the health page's return calculation: most
 holdings had **no transaction history at all**, because "Add a holding"
-only ever wrote to the `holdings` table, never to `transactions`. The
-health page's mid-window-contribution warning treats the symptom; this
-phase fixes the actual gap.
+only ever wrote to the `holdings` table, never to `transactions`. This
+phase fixed that gap (and the time-weighted health metrics later removed
+the symptom).
 
 **`add_holding()` now writes a matching "buy" transaction in the same
 commit** — same ticker, shares, price (the cost-basis/share you entered),
@@ -780,27 +778,26 @@ range, percentile — never "predict" or "forecast").
   model is correctly specified) as a sanity check that coverage lands near
   nominal.
 - **Screener outlook tilt** (on by default, toggleable). The median *leans* by
-  the live Screener's fundamental score — a **capped** ±25%/yr, scaling linearly
-  with the score (50 = no lean, so highly-rated stocks trend up and poorly-rated
-  ones down, while a neutral stock stays flat) — and that lean is **shrunk by how
-  much the Screener has actually predicted returns**: the ticker's walk-forward
-  validation IC (`IC_REFERENCE` = the app's own "notable" 0.05 bar; a
-  zero/negative IC → *no* tilt at all; no validation run yet → a 0.75 default,
-  since the fundamental score is itself backing, so running a validation refines
-  it). There is deliberately **no baseline/market drift** — nothing moves without
-  the rating to back it (an earlier idea to center on the equity risk premium was
-  dropped for exactly that reason). The band's *width* never changes — only the
-  centre line moves. The backtester validates *technical trading strategies*
-  rather than a buy-and-hold expected return, so it's deliberately **not** folded
-  into the drift. For the portfolio the tilt is a value-weighted blend of each
-  holding's outlook, with cash contributing zero.
+  the live Screener score at a **measured** rate: `TILT_PER_POINT`, about
+  +0.28%/yr for each point above 50 (and the same down below it), from the S&P
+  500 walk-forward — 61 monthly dates, 29,760 point-in-time scores, 91-day
+  returns over the average stock (score 80 → ~+8.4%/yr). It applies only where
+  that was measured: an S&P 500 company, with a significant S&P 500 validation
+  on record. Everything else stays flat — the S&P 400 showed no edge and nothing
+  else has been tested. It replaced a guessed ±25%/yr curve shrunk by the
+  ticker's own walk-forward IC, which overstated the lean ~1.3–1.8x and let ~22
+  noisy points from one stock switch it fully on or off. There is deliberately
+  **no baseline/market drift** — nothing moves without the score to back it. The
+  band's *width* never changes — only the centre line moves. For the portfolio
+  the tilt is a value-weighted blend of each holding's lean, with cash and
+  untested names contributing zero.
 
 **Honest limits, stated on the page:** the median is flat unless the Screener's
-rating tilts it (and even then it's a capped lean, not a forecast); the band is
+score tilts it (and even then it's a measured lean, not a forecast); the band is
 the real uncertainty and the outcome can land outside it; the trailing return is
 shown as context, never extrapolated; and the *whole-portfolio* projection values
-today's holdings held constant (plus cash), so — unlike the Health metrics — it
-isn't distorted by contributions, though it does assume today's mix.
+today's holdings held constant (plus cash), so it isn't distorted by
+contributions, though it does assume today's mix.
 
 ## How the screener actually scores things (revised twice now, both times from real-world testing)
 
@@ -966,7 +963,8 @@ note (leans + its "does not move the range"
 disclaimer), the walk-forward calibration (full coverage on a flat series, the
 50%-band-nests-inside-90% invariant, near-nominal coverage on GBM data, and the
 insufficient/none paths), the verdict wording, and the **outlook tilt**
-(confidence scaling/clamping by IC, the score→capped-tilt mapping, the
+(the measured per-point rate, that only S&P 500 companies with a significant
+validation lean, that a single ticker's own IC no longer moves it, the
 IC-remember/read round-trip, and that a high/low Screener score tilts the median
 up/down while off keeps it flat); `test_health_page.py` gains projection-section
 tests (the band + framing render, subject-switch calls `project_ticker`, the
@@ -1046,7 +1044,7 @@ factor is now wired to that pipeline (`_score_sentiment()` →
 **Screener Validation** phase, and **Phase 5.5** (Forward-Looking Projections —
 a statistical price-range, explicitly not a prediction, with its methodology
 validated against real historical outcomes via walk-forward calibration, and an
-optional Screener-driven median tilt shrunk by that validation's IC) are all
+optional Screener-driven median tilt at the rate measured on the S&P 500) are all
 done, as is **Phase 6** (Paper Trading via Alpaca — the paper account, positions,
 order ticket, and cancels) and **Phase 7** (the AI Chat Assistant — the
 tool-calling layer, the template responder, *and* the optional Gemini LLM path
@@ -1058,13 +1056,17 @@ Supabase Postgres with RLS, **deployment to Hugging Face Spaces** (done — the 
 below is kept for the reasoning), **Creator Signals**, the weekly **S&P 500
 leaderboard**, and the **cross-sectional validation** work — which is where the
 project stopped adding features and started measuring whether the ones it has
-actually work. The honest answer (IC +0.046, no single factor significant, two
+actually work. The honest answer (IC +0.046 to +0.051 on the S&P 500, none on
+the S&P 400, no single factor significant, two
 scoring "improvements" that failed) is summarised at the top and written up in
 [`docs/scoring-experiment-plan.md`](docs/scoring-experiment-plan.md).
 
-The next genuinely useful step isn't another feature — it's **replication**: the
-+0.046 is marginal (t = 2.17) and deserves a test on a period or universe that
-hasn't been looked at yet.
+The replication that this section used to call the next step has been run: on
+the S&P 400 the score showed **no edge** (+0.015, t = 0.72), so the S&P 500
+result (+0.051, t = 2.15) is a large-cap finding, not a general one. What is
+still open is an untouched **period** (the 2016–2021 holdout), and the paper
+trading bots' own results, which are the first out-of-sample test of the
+ranking with real (paper) fills.
 
 **Deployment note (settled before Phase 4):** FinBERT needs ~0.5–1.5 GB RAM,
 which exceeds Streamlit Community Cloud's 1 GB free tier — so the deploy target

@@ -36,7 +36,7 @@ them **secret** (not public "variable"):
 
 | Secret | Value | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | copy your local `.env` `DATABASE_URL` **verbatim** | It's the `copilot_app` (confined, RLS-enforced) URL. HF runs no migrations, so it does **not** need `ADMIN_DATABASE_URL`. |
+| `DATABASE_URL` | the Supabase **session pooler** URL for the `postgres` role (the same value as your local `.env` `ADMIN_DATABASE_URL` and the GitHub secret `WARM_DATABASE_URL`) | **Not** your local `.env` `DATABASE_URL` — locally that is SQLite. The Space connects as `postgres`, which bypasses RLS; per-user isolation is the ORM scoping in `db/session.py`. To enforce RLS on the app too, provision `copilot_app` (`scripts/setup_app_role.py`) and use its pooler URL (`copilot_app.<ref>`) here instead — see README *Accounts*. HF runs no migrations, so it does **not** need `ADMIN_DATABASE_URL`. |
 | `APP_ENCRYPTION_KEY` | **copy verbatim from your local `.env`** | MUST match everywhere that shares this DB, or stored user keys can't be decrypted. |
 | `FINNHUB_API_KEY` | your Finnhub key | Powers most pages; without it the deployed app shows little data. |
 | `FRED_API_KEY` | your FRED key | Sharpe ratio / risk-free rate. |

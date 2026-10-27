@@ -335,69 +335,49 @@ def test_risk_free_rate_falls_back_on_empty_series():
 # the lookback window, misread as a market move rather than new money.
 # --------------------------------------------------------------------------
 
-def test_detect_mid_window_contributions_flags_a_later_purchase():
-    series = pd.Series(
-        {date(2026, 1, d): 100.0 for d in range(1, 11)} | {date(2026, 1, d): 200.0 for d in range(11, 21)}
-    ).sort_index()
-    holdings = [
-        {"ticker": "OLD", "purchase_date": date(2026, 1, 1)},
-        {"ticker": "NEW", "purchase_date": date(2026, 1, 11)},  # added partway through
-    ]
-    result = health._detect_mid_window_contributions(series, holdings)
-    assert [c.ticker for c in result] == ["NEW"]
-
-
-def test_detect_mid_window_contributions_empty_when_all_holdings_share_start_date():
-    series = pd.Series({date(2026, 1, d): 100.0 for d in range(1, 11)}).sort_index()
-    holdings = [
-        {"ticker": "A", "purchase_date": date(2026, 1, 1)},
-        {"ticker": "B", "purchase_date": date(2026, 1, 1)},  # same day - a bulk CSV import, not a contamination event
-    ]
-    assert health._detect_mid_window_contributions(series, holdings) == []
-
-
-def test_detect_mid_window_contributions_empty_when_series_is_empty():
-    assert health._detect_mid_window_contributions(pd.Series(dtype="float64"), [{"ticker": "X", "purchase_date": date(2026, 1, 1)}]) == []
-
-
-def test_detect_mid_window_contributions_sorted_by_purchase_date():
-    series = pd.Series({date(2026, 1, d): 100.0 for d in range(1, 31)}).sort_index()
-    holdings = [
-        {"ticker": "FIRST", "purchase_date": date(2026, 1, 1)},
-        {"ticker": "LATER_B", "purchase_date": date(2026, 1, 20)},
-        {"ticker": "LATER_A", "purchase_date": date(2026, 1, 10)},
-    ]
-    result = health._detect_mid_window_contributions(series, holdings)
-    assert [c.ticker for c in result] == ["LATER_A", "LATER_B"]
-
-
-def test_recommend_clean_lookback_days_picks_largest_clean_option():
+def _bars(days, start=100.0, end=110.0):
     today = date.today()
-    holdings = [{"ticker": "X", "purchase_date": today - timedelta(days=200)}]
-    options = {"3M": 90, "6M": 182, "1Y": 365, "2Y": 730}
-    result = health.recommend_clean_lookback_days(holdings, options)
-    assert result == ("6M", 182)  # 200 days of history covers 3M and 6M but not 1Y/2Y
+    return [
+        {"date": today - timedelta(days=days - i), "open": p, "high": p, "low": p, "close": p, "volume": 1000}
+        for i, p in enumerate(np.linspace(start, end, days))
+    ]
 
 
-def test_recommend_clean_lookback_days_none_when_nothing_is_clean_yet():
-    today = date.today()
-    holdings = [{"ticker": "X", "purchase_date": today - timedelta(days=5)}]
-    options = {"3M": 90, "6M": 182}
-    assert health.recommend_clean_lookback_days(holdings, options) is None
+def test_the_holdings_index_is_untouched_by_new_money():
+    """A second holding five times the size of the first, bought five days
+    ago, at the same rising price: the index follows the price (+10%), not
+    the 6x jump in money invested."""
+    portfolio.add_holding("OLD", 10, 100.0, date.today() - timedelta(days=300))
+    portfolio.add_holding("NEW", 50, 100.0, date.today() - timedelta(days=5))
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=_bars(365)):
+        index = portfolio.get_holdings_return_index(date.today() - timedelta(days=365), date.today())
+    growth = index[-1]["value"] / index[0]["value"]
+    assert 1.05 < growth < 1.11
 
 
-def test_recommend_clean_lookback_days_none_with_no_holdings():
-    assert health.recommend_clean_lookback_days([], {"3M": 90}) is None
+def test_the_holdings_index_is_untouched_by_deposits_and_withdrawals():
+    portfolio.add_holding("AAPL", 10, 100.0, date.today() - timedelta(days=300))
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=_bars(365)):
+        before = portfolio.get_holdings_return_index(date.today() - timedelta(days=365), date.today())
+        portfolio.deposit_to_wallet(50_000.0)
+        portfolio.withdraw_from_wallet(20_000.0)
+        after = portfolio.get_holdings_return_index(date.today() - timedelta(days=365), date.today())
+    assert before == after
 
 
-def test_get_health_report_real_world_reproduction_of_the_inflated_return_bug():
-    """Reproduces the actual reported bug: a long-held position plus a
-    recently-added one inflates trailing return into the thousands of
-    percent, purely from new money being misread as a market move. This
-    test confirms the new detection catches it rather than asserting an
-    exact 'fixed' percentage - the underlying number is still computed
-    (transparency over hiding), but it's now accompanied by a clear,
-    correctly-targeted warning."""
+def test_the_holdings_index_starts_the_day_something_is_held():
+    portfolio.add_holding("AAPL", 10, 100.0, date.today() - timedelta(days=30))
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=_bars(365)):
+        index = portfolio.get_holdings_return_index(date.today() - timedelta(days=365), date.today())
+    assert index[0]["value"] == 100.0
+    assert index[0]["date"] >= date.today() - timedelta(days=31)
+
+
+def test_get_health_report_a_mid_window_purchase_is_not_read_as_a_return():
+    """The original bug: a long-held position plus a recently-added one inflated
+    the trailing return into the hundreds of percent — new money read as a
+    market move. Measured time-weighted on the holdings, the return now follows
+    the price path (100 -> 110 over the year), whatever was added when."""
     portfolio.add_holding("OLD", 10, 100.0, date.today() - timedelta(days=300))
     portfolio.add_holding("NEW", 50, 100.0, date.today() - timedelta(days=5))
 
@@ -415,29 +395,7 @@ def test_get_health_report_real_world_reproduction_of_the_inflated_return_bug():
                     report = health.get_health_report(lookback_days=365)
 
     assert report.expected_return_annualized_pct is not None
-    assert report.expected_return_annualized_pct > 200  # confirms we reproduced a real, large distortion
-    assert len(report.mid_window_contributions) == 1
-    assert report.mid_window_contributions[0].ticker == "NEW"
-
-
-def test_get_health_report_no_warning_when_holdings_predate_the_window():
-    portfolio.add_holding("AAPL", 10, 100.0, date.today() - timedelta(days=400))
-
-    days = 365
-    today = date.today()
-    fake_bars = [
-        {"date": today - timedelta(days=days - i), "open": p, "high": p, "low": p, "close": p, "volume": 1000}
-        for i, p in enumerate(np.linspace(100, 110, days))
-    ]
-
-    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)):
-        with patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("no profile")):
-            with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
-                with patch("engine.health.fred_client.get_series", return_value=[{"date": "2026-01-01", "value": 4.0}]):
-                    report = health.get_health_report(lookback_days=365)
-
-    assert report.mid_window_contributions == []
-    assert report.recommended_clean_lookback_days is None  # no recommendation needed when nothing's dirty
+    assert 5.0 < report.expected_return_annualized_pct < 15.0   # was > 200 before
 
 
 # --------------------------------------------------------------------------

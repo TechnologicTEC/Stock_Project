@@ -131,12 +131,12 @@ def test_health_page_lookback_selector_changes_results():
     assert not at.exception
 
 
-def test_health_page_warns_on_mid_window_contribution():
-    """Regression test for the reported bug: a holding added partway
-    through the lookback window inflated trailing return into the
-    hundreds/thousands of percent. The number is still shown (this
-    project never hides computed values), but it must now be accompanied
-    by a clear warning naming the ticker responsible."""
+def test_health_page_a_mid_window_purchase_no_longer_distorts_the_return():
+    """The reported bug: a holding added partway through the window inflated
+    the trailing return into the hundreds of percent, and the page could only
+    warn about it. The metrics are now time-weighted on the holdings, so the
+    new money is not a return at all: with every price rising 100 -> 110 over
+    the year, the trailing return reads ~10%, and there is no warning to show."""
     portfolio.add_holding("OLD", 10, 100.0, date.today() - timedelta(days=300))
     portfolio.add_holding("NEW", 50, 100.0, date.today() - timedelta(days=5))
 
@@ -155,12 +155,13 @@ def test_health_page_warns_on_mid_window_contribution():
                     at.run(timeout=30)
 
     assert not at.exception
-    warning_text = " ".join(el.value for el in at.warning)
-    assert "NEW" in warning_text
-    assert "partway through" in warning_text
+    captions = " ".join(el.value for el in at.caption)
+    assert "never count as a gain or a loss" in captions
+    assert "don't account for when you bought or sold" not in captions
 
     metric_values = {m.label: m.value for m in at.metric}
-    assert metric_values["Trailing annualized return"] != "—"  # still shown, not hidden
+    trailing = float(metric_values["Trailing annualized return"].rstrip("%"))
+    assert 5.0 < trailing < 15.0                      # the price path, not the new money
 
 
 # --------------------------------------------------------------------------
@@ -344,7 +345,9 @@ def test_health_page_renders_outlook_tilt_explanation():
     assert "+12.0%/yr" in info_text
 
 
-def test_health_page_no_contribution_warning_when_holdings_predate_window():
+def test_health_page_explains_the_numbers_are_time_weighted():
+    """The caption says what the numbers measure now — not the old 'they can't
+    tell your own money from a market move', which is no longer true."""
     portfolio.add_holding("AAPL", 10, 100.0, date.today() - timedelta(days=400))
 
     days = 365
@@ -362,5 +365,6 @@ def test_health_page_no_contribution_warning_when_holdings_predate_window():
                     at.run(timeout=30)
 
     assert not at.exception
-    warning_text = " ".join(el.value for el in at.warning)
-    assert "partway through" not in warning_text
+    captions = " ".join(el.value for el in at.caption)
+    assert "never count as a gain or a loss" in captions
+    assert "don't account for when you bought or sold" not in captions

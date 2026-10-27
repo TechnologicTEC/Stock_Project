@@ -167,6 +167,36 @@ def test_extraction_retries_previously_unextracted_video():
         assert v.mentions_extracted_at is not None
 
 
+def test_a_video_extracted_twice_keeps_one_set_of_mentions(monkeypatch):
+    """Saving the mentions and marking the video done are two steps. A run
+    that dies between them re-extracts the video next time; that must replace
+    its mentions, not double them — the creator bot counts them."""
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+        s.add(CreatorVideo(creator_id=cid, video_id="AAA", title="t", url="u",
+                           transcript_status="ok", transcript="body"))
+
+    def run():
+        with patch("engine.data_sources.youtube_client.latest_videos", return_value=[]), \
+             patch("engine.ticker_extraction.extract_mentions",
+                   return_value=[Mention("NVDA", "NVIDIA", "bullish", 0.9)]), \
+             patch("engine.screener.screen_tickers",
+                   return_value=[SimpleNamespace(ticker="NVDA", overall_score=70.0, recommendation="Buy")]):
+            creator_signals.scan_creators()
+
+    # First run: the mentions are saved, then the run dies before marking.
+    with monkeypatch.context() as m:
+        m.setattr(creator_signals, "_mark_extracted",
+                  lambda vid: (_ for _ in ()).throw(RuntimeError("connection lost")))
+        run()
+    run()                                                     # the retry
+
+    with get_session() as s:
+        rows = s.execute(select(VideoMention).where(VideoMention.video_id == "AAA")).scalars().all()
+    assert [r.ticker for r in rows] == ["NVDA"]
+
+
 def test_transient_extraction_failure_leaves_flag_unset_for_retry():
     from engine.ticker_extraction import TransientExtractionError
     with patch("engine.data_sources.youtube_client.latest_videos", return_value=[_video("AAA")]), \

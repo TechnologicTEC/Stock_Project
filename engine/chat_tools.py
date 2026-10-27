@@ -252,7 +252,10 @@ def get_period_performance(period: str = "1M") -> dict:
     period = period.strip().upper()
     start = date(today.year, 1, 1) if period == "YTD" else today - timedelta(days=_PERIOD_DAYS.get(period, 30))
 
-    hist = portfolio.get_value_history(start, today)
+    # What the holdings earned (time-weighted), not the value line: that one
+    # moves on every deposit and withdrawal and carries the wallet's cash, so
+    # "am I beating the S&P" used to compare new money and idle cash with SPY.
+    hist = portfolio.get_holdings_return_index(start, today)
     values = [h["value"] for h in hist if h.get("value")]
     if len(values) < 2:
         return {"period": period, "note": "not enough portfolio history in this window"}

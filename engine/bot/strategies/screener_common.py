@@ -79,6 +79,20 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
             f"The leaderboard in the S&P 500 slot is labelled {payload.get('universe')!r}. "
             "That slot must hold the S&P 500 ranking; refusing."
         )
+    # The same completeness bar the S&P 400 merge applies. A sample, or a weekly
+    # screen that died partway, would otherwise be traded as the whole index —
+    # and on a rebalance every held name missing from it would be SOLD. Refusing
+    # is safe: the run journals insufficient_data, which does not use up the
+    # month (_is_non_run), so the next run rebalances on a complete list.
+    from engine import universe as universes
+
+    expected = len(universes.tickers("sp500"))
+    covered = payload.get("n_requested") or len(payload["rows"])
+    if covered < MIN_MERGE_COVERAGE * expected:
+        raise StrategyDataError(
+            f"The S&P 500 leaderboard covers only {covered} of {expected} names (a sample or "
+            "an unfinished screen). Refusing to trade on part of the index."
+        )
 
     generated = _as_date(payload.get("generated_at"))
     if generated is None:

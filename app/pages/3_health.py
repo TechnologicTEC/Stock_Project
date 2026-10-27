@@ -53,32 +53,6 @@ if report.errors:
             st.caption(f"- {err}")
 
 # --------------------------------------------------------------------------
-# Mid-window contribution warning - shown ABOVE the four metrics, since it
-# affects how trustworthy every one of them is for this window. See
-# engine/health.py's _detect_mid_window_contributions() docstring.
-# --------------------------------------------------------------------------
-
-if report.mid_window_contributions:
-    added_list = ", ".join(
-        f"**{c.ticker}** (added {c.purchase_date.isoformat()})" for c in report.mid_window_contributions
-    )
-    suggestion = ""
-    if report.recommended_clean_lookback_days is not None:
-        clean_label = next(
-            label for label, days in health.LOOKBACK_OPTIONS.items() if days == report.recommended_clean_lookback_days
-        )
-        suggestion = f" Try the **{clean_label}** window instead — your other holdings have been stable that long."
-    else:
-        suggestion = " None of the available windows are fully clean yet — check back once your holdings have settled."
-
-    st.warning(
-        f"You added {added_list} partway through this {lookback_label} window. The four numbers below "
-        f"can't tell the difference between new money arriving and the market actually moving, so they're "
-        f"likely distorted by that contribution rather than reflecting real performance." + suggestion,
-        icon="⚠️",
-    )
-
-# --------------------------------------------------------------------------
 # Headline metrics
 # --------------------------------------------------------------------------
 
@@ -107,10 +81,10 @@ with _theme.section("Risk metrics", tag="from daily value changes"):
         st.caption(f"{report.max_drawdown_data_points} trading days" if report.max_drawdown_pct is not None else MIN_DATA_NOTE)
 
     st.caption(
-        "These four numbers come from your portfolio's day-to-day value changes and don't account for when "
-        "you bought or sold — adding or removing a holding partway through the lookback window will show up "
-        "as a price swing in these calculations, not just as your own contribution. They're most accurate "
-        "over a window where your holdings didn't change."
+        "These four numbers measure what your **stocks** earned each day — the shares you held at one "
+        "close, valued at the next. Buying, selling, deposits and withdrawals change what you hold, but "
+        "never count as a gain or a loss, and wallet cash isn't included. So a holding added partway "
+        "through the window counts from the day after you bought it, and nothing else."
     )
 
 # --------------------------------------------------------------------------
@@ -171,10 +145,10 @@ st.caption(
     "**A statistical projection, not a prediction.** This does *not* forecast where anything is headed. It "
     "takes how much this stock (or your portfolio) has moved day-to-day over the past year — its **volatility** "
     "— and spreads that forward with the lognormal/geometric-Brownian-motion math behind options pricing. The "
-    "band's *width* is pure volatility. Its *centre* leans with the **Screener's rating** — up for highly-rated "
-    "stocks, down for poorly-rated ones, flat for neutral (toggle below; capped and shrunk by the Screener's "
-    "validation IC). Nothing drifts without the rating to back it, and the real future can still land anywhere, "
-    "including outside the band."
+    "band's *width* is pure volatility. Its *centre* can lean with the **Screener's score** (toggle below), by "
+    "what a point of score has actually been worth on the S&P 500 — about +0.28%/yr per point above 50. Only "
+    "S&P 500 companies lean, because that is the only place the edge was measured; everything else stays flat. "
+    "The real future can still land anywhere, including outside the band."
 )
 
 holding_tickers = sorted({h["ticker"] for h in portfolio.list_holdings()})
@@ -188,11 +162,11 @@ proj_horizon_days = health.LOOKBACK_OPTIONS[proj_horizon_label]
 apply_outlook = st.checkbox(
     "Tilt the median by the Screener's outlook (runs the Screener)",
     value=True,
-    help="On: the median leans up for highly-rated stocks and down for poorly-rated ones — the Screener's "
-         "fundamental score, capped at ±25%/yr, scaled by the score, and shrunk by the ticker's validation IC "
-         "(run a validation to sharpen it). A neutrally-rated stock stays flat — nothing drifts without the "
-         "score to back it. Off: a pure volatility cone with a flat median. Runs the Screener for the subject, "
-         "so the first run can take a moment (cached afterwards).",
+    help="On: an S&P 500 company's median leans by its Screener score — about +0.28%/yr for each point above "
+         "50 (score 80 → about +8.4%/yr), and the same down below 50. That rate was measured: across five years "
+         "of S&P 500 history, higher scores beat the average stock by about that much. Other companies stay "
+         "flat — the S&P 400 test found no edge, and nothing else has been tested. Off: a pure volatility cone "
+         "with a flat median. Runs the Screener for the subject, so the first run can take a moment.",
 )
 
 with st.spinner(f"Projecting {subject} {proj_horizon_label} forward…"):
@@ -274,20 +248,21 @@ else:
         if projection.outlook_score is None:
             st.caption("The Screener couldn't score this subject (no usable fundamentals), so the median is left flat.")
         else:
-            if projection.outlook_ic is not None:
-                conf_txt = (f"validation IC {projection.outlook_ic:+.2f} → the tilt is scaled to "
-                            f"{projection.outlook_confidence:.0%} confidence")
-            else:
-                conf_txt = (f"no validation run yet → a cautious {projection.outlook_confidence:.0%} confidence "
-                            "(run a validation on the Screener Validation page to sharpen this)")
             reco = f" ({projection.outlook_recommendation})" if projection.outlook_recommendation else ""
-            blend = f", {projection.outlook_detail}" if projection.outlook_detail else ""
-            st.info(
-                f"📈 **Screener outlook applied.** Score **{projection.outlook_score:.0f}/100**{reco}{blend}; "
-                f"{conf_txt}, tilting the median by **{projection.applied_annual_tilt_pct:+.1f}%/yr** (capped at "
-                f"±25%). Only the centre line moves — the band's width still comes purely from volatility, so the "
-                f"outcome can easily land the other way."
-            )
+            if projection.outlook_confidence <= 0:
+                why = projection.outlook_detail or "the measured edge doesn't apply here"
+                st.info(f"📈 **No Screener lean.** Score **{projection.outlook_score:.0f}/100**{reco}, but "
+                        f"the median stays flat: {why}.")
+            else:
+                ic = (f" (S&P 500 validation IC {projection.outlook_ic:+.3f})"
+                      if projection.outlook_ic is not None else "")
+                blend = f" — {projection.outlook_detail}" if projection.outlook_detail else ""
+                st.info(
+                    f"📈 **Screener outlook applied.** Score **{projection.outlook_score:.0f}/100**{reco}{blend}, "
+                    f"tilting the median by **{projection.applied_annual_tilt_pct:+.1f}%/yr** — the rate a "
+                    f"point of score has been worth on the S&P 500{ic}. Only the centre line moves — the band's "
+                    "width still comes purely from volatility, so the outcome can easily land the other way."
+                )
 
     st.markdown(projections.describe(projection, proj_horizon_label, "year"))
     tilted = projection.outlook_applied and abs(projection.applied_annual_tilt_pct) > 0.05

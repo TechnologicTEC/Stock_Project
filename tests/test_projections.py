@@ -296,33 +296,47 @@ def test_calibration_verdict_reads_the_coverage():
 
 
 # --------------------------------------------------------------------------
-# Outlook tilt — Screener score + validation IC -> a capped median drift
+# Outlook tilt — the Screener score, at the rate measured on the S&P 500
 # --------------------------------------------------------------------------
 
-def test_outlook_confidence_scales_and_clamps():
-    assert proj.outlook_confidence(None) == proj.DEFAULT_OUTLOOK_CONFIDENCE
-    assert proj.outlook_confidence(proj.IC_REFERENCE) == 1.0
-    assert proj.outlook_confidence(proj.IC_REFERENCE * 3) == 1.0     # clamped
-    assert proj.outlook_confidence(0.0) == 0.0
-    assert proj.outlook_confidence(-0.1) == 0.0                      # anti-predictive -> no trust
-    assert proj.outlook_confidence(proj.IC_REFERENCE / 2) == pytest.approx(0.5)
+def _store_sp500_validation(significant=True, ic=0.051):
+    from engine import screener_validation
+    screener_validation.save_universe_result({
+        "universe": "sp500", "n_tickers": 493,
+        "overall": {"mean_ic": ic, "t_stat": 2.15, "significant": significant}})
 
 
-def test_outlook_annual_tilt_scales_with_score_and_shrinks_by_ic():
-    # Full-confidence extremes hit the ±cap.
-    tilt, conf = proj.outlook_annual_tilt(100.0, proj.IC_REFERENCE)
-    assert conf == 1.0 and tilt == pytest.approx(proj.MAX_ANNUAL_TILT)
-    assert proj.outlook_annual_tilt(0.0, proj.IC_REFERENCE)[0] == pytest.approx(-proj.MAX_ANNUAL_TILT)
-    # Neutral score -> no tilt.
-    assert proj.outlook_annual_tilt(50.0, proj.IC_REFERENCE)[0] == pytest.approx(0.0)
-    # No validation IC yet -> cautious default confidence.
-    tilt, conf = proj.outlook_annual_tilt(100.0, None)
-    assert conf == proj.DEFAULT_OUTLOOK_CONFIDENCE
-    assert tilt == pytest.approx(proj.MAX_ANNUAL_TILT * proj.DEFAULT_OUTLOOK_CONFIDENCE)
-    # Negative IC -> the Screener hasn't predicted returns -> no tilt at all.
-    assert proj.outlook_annual_tilt(90.0, -0.2)[0] == 0.0
-    # No score -> no tilt.
-    assert proj.outlook_annual_tilt(None, 0.05) == (0.0, 0.0)
+def test_the_lean_is_the_measured_rate_per_point():
+    """Measured on the S&P 500 walk-forward: ~+0.28%/yr a point. Score 80 is
+    about +8.4%/yr (the old guessed curve gave +11 to +15%)."""
+    assert proj.outlook_annual_tilt(80.0, 1.0) == pytest.approx(0.084)
+    assert proj.outlook_annual_tilt(20.0, 1.0) == pytest.approx(-0.084)
+    assert proj.outlook_annual_tilt(50.0, 1.0) == 0.0
+    assert proj.outlook_annual_tilt(90.0, 0.0) == 0.0          # no evidence, no lean
+    assert proj.outlook_annual_tilt(None, 1.0) == 0.0
+
+
+def test_the_edge_applies_only_to_sp500_companies_with_a_significant_validation():
+    assert proj.outlook_evidence("AAPL")[0] == 0.0             # nothing stored yet
+    _store_sp500_validation(significant=False)
+    assert proj.outlook_evidence("AAPL")[0] == 0.0             # measured, but not significant
+    _store_sp500_validation(significant=True)
+    conf, ic, why = proj.outlook_evidence("AAPL")
+    assert (conf, ic, why) == (1.0, 0.051, "")
+    # Outside the S&P 500 there is no measured edge: the S&P 400 showed none,
+    # and a name in neither index was never tested.
+    from engine import universe
+    mid = universe.sp400()[0]
+    assert proj.outlook_evidence(mid)[0] == 0.0
+    assert proj.outlook_evidence("ASML")[0] == 0.0
+
+
+def test_a_single_tickers_own_ic_no_longer_moves_the_lean():
+    """~22 points from one stock is noise. A large remembered IC must not turn
+    the lean on, and a negative one must not turn it off."""
+    _store_sp500_validation(significant=True)
+    proj.remember_validation_ic("AAPL", -0.5, n=22, horizon_days=91)
+    assert proj.outlook_evidence("AAPL")[0] == 1.0
 
 
 def test_remember_and_read_validation_ic_roundtrip():
@@ -339,28 +353,39 @@ def _screener_result(ticker, score, reco="Buy"):
 
 
 def test_project_ticker_outlook_tilts_median_up_for_high_score():
+    _store_sp500_validation()
     df = _rising_close_df(80)
     with patch("engine.projections.price_history.get_history_df", return_value=df), \
-         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 90.0, "Strong Buy")]), \
-         patch("engine.projections.cached_validation_ic", return_value=proj.IC_REFERENCE):
+         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 90.0, "Strong Buy")]):
         result = proj.project_ticker("AAPL", horizon_days=365, as_of=date(2024, 1, 2), apply_outlook=True)
 
     assert result.outlook_applied
     assert result.outlook_score == 90.0
-    # score 90, full confidence -> (90-50)/50 * 25% = +20%/yr
-    assert result.applied_annual_tilt_pct == pytest.approx(20.0)
-    assert result.horizon_returns_pct[50] == pytest.approx(20.0, abs=0.6)   # median lifted, not flat
+    # score 90 -> 40 points x 0.28%/yr = +11.2%/yr
+    assert result.applied_annual_tilt_pct == pytest.approx(11.2)
+    assert result.horizon_returns_pct[50] == pytest.approx(11.2, abs=0.6)   # median lifted, not flat
 
 
 def test_project_ticker_outlook_tilts_median_down_for_low_score():
+    _store_sp500_validation()
     df = _rising_close_df(80)
     with patch("engine.projections.price_history.get_history_df", return_value=df), \
-         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 20.0, "Sell")]), \
-         patch("engine.projections.cached_validation_ic", return_value=proj.IC_REFERENCE):
+         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 20.0, "Sell")]):
         result = proj.project_ticker("AAPL", horizon_days=365, as_of=date(2024, 1, 2), apply_outlook=True)
 
-    assert result.applied_annual_tilt_pct == pytest.approx(-15.0)   # (20-50)/50 * 25%
+    assert result.applied_annual_tilt_pct == pytest.approx(-8.4)   # -30 points x 0.28%/yr
     assert result.horizon_returns_pct[50] < 0
+
+
+def test_project_ticker_outside_the_sp500_stays_flat_and_says_why():
+    _store_sp500_validation()
+    df = _rising_close_df(80)
+    with patch("engine.projections.price_history.get_history_df", return_value=df), \
+         patch("engine.screener.screen_tickers", return_value=[_screener_result("ASML", 90.0, "Strong Buy")]):
+        result = proj.project_ticker("ASML", horizon_days=365, as_of=date(2024, 1, 2), apply_outlook=True)
+
+    assert result.applied_annual_tilt_pct == 0.0
+    assert "S&P 500" in result.outlook_detail
 
 
 def test_project_ticker_without_outlook_keeps_flat_median():
@@ -382,10 +407,10 @@ def test_project_portfolio_outlook_is_value_weighted():
          patch("engine.projections.portfolio.get_wallet_balance", return_value=0.0), \
          patch("engine.projections.portfolio.get_allocation_by_ticker", return_value=[{"label": "AAPL", "value": 1000.0}]), \
          patch("engine.projections.price_history.price_series", side_effect=fake_price_series), \
-         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 90.0)]), \
-         patch("engine.projections.cached_validation_ic", return_value=proj.IC_REFERENCE):
+         patch("engine.screener.screen_tickers", return_value=[_screener_result("AAPL", 90.0)]):
+        _store_sp500_validation()
         result = proj.project_portfolio(365, as_of=date(2024, 1, 2), apply_outlook=True)
 
     assert result.outlook_applied
     assert result.outlook_score == pytest.approx(90.0)          # 100%-weighted single holding
-    assert result.applied_annual_tilt_pct == pytest.approx(20.0)
+    assert result.applied_annual_tilt_pct == pytest.approx(11.2)

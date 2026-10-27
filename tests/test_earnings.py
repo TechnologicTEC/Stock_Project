@@ -76,6 +76,26 @@ def test_analyze_ticker_builds_beat_and_sentiment_summary():
     assert "beat" in analysis.summary
     assert "Positive" in analysis.summary
     assert analysis.release["sentiment_label"] == "Positive"
+    # The headline scale (0-100, 50 neutral), not -100..+100: 0.5 -> 75, not "+50".
+    assert "(75/100)" in analysis.summary
+
+
+def test_outcome_reads_beat_met_and_missed_from_the_eps_figures():
+    q = lambda a, e: {"eps_actual": a, "eps_estimate": e}       # noqa: E731
+    assert earnings.outcome(q(1.21, 1.10)) == "beat"
+    assert earnings.outcome(q(1.10, 1.10)) == "met"               # `beat` is False here
+    assert earnings.outcome(q(1.1000001, 1.10)) == "met"          # same in cents
+    assert earnings.outcome(q(0.95, 1.10)) == "missed"
+    assert earnings.outcome(q(1.10, None)) is None
+    assert earnings.outcome(None) is None
+
+
+def test_a_quarter_on_its_estimate_is_described_as_met():
+    raw = {"earningsCalendar": [{"date": "2026-05-01", "epsActual": 1.1, "epsEstimate": 1.1}]}
+    with patch("engine.earnings.finnhub_client.get_earnings_calendar", return_value=raw), \
+         patch("engine.earnings.edgar_client.get_cik_for_ticker", return_value=None):
+        analysis = earnings.analyze_ticker("AAPL")
+    assert "— met." in analysis.summary
 
 
 def test_analyze_ticker_with_nothing_found():

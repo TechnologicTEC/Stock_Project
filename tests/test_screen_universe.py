@@ -76,6 +76,33 @@ def test_auto_repair_looks_for_gaps_in_its_own_universe(screened, monkeypatch):
     assert screener.load_leaderboard() is None
 
 
+def test_a_screen_that_dies_partway_leaves_last_weeks_ranking_live(screened, monkeypatch):
+    """Progress is saved after every chunk, but into its own slot. A run that
+    crashes after the first chunk must leave the previous COMPLETE ranking in
+    the live slot — not a partial one dated today, which the bots would trade."""
+    screener.save_leaderboard(screener.build_leaderboard(_results(["AAPL", "MSFT"])))
+    monkeypatch.setenv("SCREEN_CHUNK", "1")
+    calls = {"n": 0}
+
+    def dies_on_the_second_chunk(batch):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("Finnhub outage")
+        return _results(batch)
+
+    monkeypatch.setattr(screen_universe.screener, "screen_tickers", dies_on_the_second_chunk)
+    with pytest.raises(RuntimeError):
+        screen_universe.main()
+    assert [r["ticker"] for r in screener.load_leaderboard()["rows"]] == ["MSFT", "AAPL"]
+
+
+def test_a_finished_screen_replaces_the_live_ranking(screened, monkeypatch):
+    screener.save_leaderboard(screener.build_leaderboard(_results(["OLD"])))
+    monkeypatch.setenv("SCREEN_CHUNK", "1")
+    screen_universe.main()
+    assert {r["ticker"] for r in screener.load_leaderboard()["rows"]} == set(universe.sp500()[:3])
+
+
 def test_an_unknown_universe_stops_the_run(screened, monkeypatch):
     monkeypatch.setenv("SCREEN_UNIVERSE", "ftse100")
     with pytest.raises(ValueError):

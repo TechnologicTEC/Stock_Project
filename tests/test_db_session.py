@@ -27,6 +27,27 @@ def back_to_sqlite():
     db_session.init_db()
 
 
+def test_init_db_sets_a_database_up_once_not_on_every_page_run():
+    """Every page calls init_db() and Streamlit re-runs pages on every click;
+    on Postgres the setup is ~50 DDL statements that lock user tables. A repeat
+    call against the same database must do nothing, and a newly configured
+    database must still be set up."""
+    from unittest.mock import patch
+
+    db_session.configure("sqlite:///:memory:")
+    db_session.init_db()
+    with patch.object(db_session, "_apply_postgres_rls") as rls, \
+         patch.object(db_session.Base.metadata, "create_all") as create:
+        db_session.init_db()
+        db_session.init_db()
+    assert not rls.called and not create.called
+
+    db_session.configure("sqlite:///:memory:")
+    with patch.object(db_session, "_apply_postgres_rls") as rls:
+        db_session.init_db()
+    assert rls.call_count == 1
+
+
 def test_a_bare_postgres_url_uses_the_driver_we_install():
     engine = db_session.configure(FAKE_PG)
     # The URL must SAY psycopg2, not merely resolve to it. On SQLAlchemy 2.0 a

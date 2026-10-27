@@ -17,17 +17,14 @@ Four design choices worth being upfront about:
    losing free-tier access mid-build). Computing beta entirely from our
    own cached price history sidesteps that whole class of problem.
 
-2. NO CASH-FLOW ADJUSTMENT: beta/Sharpe/expected-return/max-drawdown all
-   use a simple day-over-day pct_change() of total portfolio value. This
-   does NOT account for cash flows — if you bought or sold a holding
-   partway through the lookback window, that shows up as an artificial
-   jump in the value series and will skew these numbers exactly as if the
-   market itself had moved that much. A correct fix is a time-weighted
-   return calculation, which is real added complexity out of scope for
-   this phase (Section 7 frames Phase 3 as reusing Phase 2's patterns, not
-   building a full returns-accounting engine). The practical mitigation:
-   pick a lookback window where your holdings were stable, and the health
-   page says this directly rather than presenting the numbers as exact.
+2. TIME-WEIGHTED, HOLDINGS ONLY: beta/Sharpe/trailing return/max drawdown
+   are measured on `portfolio.get_holdings_return_index` — what the shares
+   held at each close earned by the next one. Buys, sells, deposits and
+   withdrawals change what is held, but are never read as a gain or a loss,
+   and the wallet's cash is not part of it. (It used to be the total value
+   line, which jumped on new money; since buys began debiting the wallet it
+   also carried a backfilled deposit as idle cash for months, so the page
+   warned about every mid-window purchase and the numbers were diluted.)
 
 3. "EXPECTED RETURN" IS BACKWARD-LOOKING: Section 6.4 uses the term
    "expected return", but what's actually computed is a trailing
@@ -100,16 +97,6 @@ class HealthFlag:
 
 
 @dataclass
-class MidWindowContribution:
-    """A holding bought after the analysis window's effective start date -
-    i.e. new money added partway through, which distorts every metric
-    derived from the value series (see compute_trailing_annualized_return's
-    +3920%-style failure mode this guards against)."""
-    ticker: str
-    purchase_date: date
-
-
-@dataclass
 class HealthReport:
     as_of: date
     lookback_days: int
@@ -125,8 +112,6 @@ class HealthReport:
     risk_free_rate_annual: float
     risk_free_rate_source: str
     flags: list[HealthFlag]
-    mid_window_contributions: list[MidWindowContribution] = field(default_factory=list)
-    recommended_clean_lookback_days: int | None = None
     errors: list[str] = field(default_factory=list)
 
 
@@ -138,9 +123,7 @@ class HealthReport:
 def _trim_leading_zeros(series: pd.Series) -> pd.Series:
     """Drops leading zeros (the period before any holding existed) so a
     return calculation doesn't include a fake '$0 -> first real value'
-    jump. Does NOT address zeros or jumps *in the middle* of the series
-    from buying/selling mid-window - see module docstring's cash-flow
-    caveat for that."""
+    jump."""
     nonzero = series[series != 0]
     if nonzero.empty:
         return series.iloc[0:0]
@@ -153,55 +136,6 @@ def _daily_returns(value_series: pd.Series) -> pd.Series:
         return pd.Series(dtype="float64")
     returns = trimmed.pct_change().dropna()
     return returns[np.isfinite(returns)]
-
-
-def _detect_mid_window_contributions(value_series: pd.Series, holdings: list[dict]) -> list[MidWindowContribution]:
-    """
-    Finds holdings purchased strictly after the value series' effective
-    start (the first day the portfolio had ANY nonzero value). Those
-    represent new money added partway through the window being analyzed -
-    which shows up in the value series as a jump indistinguishable from a
-    market move, and corrupts every metric derived from it (beta, Sharpe,
-    trailing return, max drawdown all use the same underlying daily-return
-    series). Holdings that share the effective start date itself (the
-    earliest purchase, or several holdings bought together on the same
-    day - e.g. a bulk CSV import) are correctly NOT flagged; only ones that
-    came later, inside the window already being measured.
-
-    Returns [] if there's no usable value series, or if every current
-    holding's purchase predates the window (or all started together).
-    """
-    trimmed = _trim_leading_zeros(value_series)
-    if trimmed.empty:
-        return []
-    effective_start = trimmed.index[0]
-    return sorted(
-        (
-            MidWindowContribution(ticker=h["ticker"], purchase_date=h["purchase_date"])
-            for h in holdings
-            if h["purchase_date"] > effective_start
-        ),
-        key=lambda c: c.purchase_date,
-    )
-
-
-def recommend_clean_lookback_days(holdings: list[dict], options: dict[str, int]) -> tuple[str, int] | None:
-    """
-    Among `options` (e.g. {"3M": 90, "6M": 182, ...}), returns the
-    (label, days) pair for the LARGEST window where every current holding
-    already existed at the window's start - i.e. a window the mid-window
-    detection above wouldn't flag. Returns None if even the shortest
-    option isn't clean yet (every holding is too recent), or if there are
-    no holdings at all.
-    """
-    if not holdings:
-        return None
-    most_recent_purchase = max(h["purchase_date"] for h in holdings)
-    days_since = (date.today() - most_recent_purchase).days
-    clean_options = [(label, days) for label, days in options.items() if days <= days_since]
-    if not clean_options:
-        return None
-    return max(clean_options, key=lambda lo: lo[1])
 
 
 # --------------------------------------------------------------------------
@@ -401,25 +335,16 @@ def get_health_report(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> HealthRepor
     except Exception as exc:
         errors.append(f"concentration: {exc}")
 
+    # The holdings' time-weighted return index, not the value line — see the
+    # module docstring (point 2). Money moving in or out is never a return.
     value_series = pd.Series(dtype="float64")
-    holdings = portfolio.list_holdings()
-    if holdings:
+    if portfolio.list_holdings():
         try:
-            raw_values = portfolio.get_value_history(start, end)
-            if raw_values:
-                value_series = pd.Series({v["date"]: v["value"] for v in raw_values}).sort_index()
+            index = portfolio.get_holdings_return_index(start, end)
+            if index:
+                value_series = pd.Series({v["date"]: v["value"] for v in index}).sort_index()
         except Exception as exc:
-            errors.append(f"portfolio value history: {exc}")
-
-    mid_window_contributions: list[MidWindowContribution] = []
-    recommended_clean: int | None = None
-    try:
-        mid_window_contributions = _detect_mid_window_contributions(value_series, holdings)
-        if mid_window_contributions:
-            clean = recommend_clean_lookback_days(holdings, LOOKBACK_OPTIONS)
-            recommended_clean = clean[1] if clean else None
-    except Exception as exc:
-        errors.append(f"mid-window contribution check: {exc}")
+            errors.append(f"portfolio return history: {exc}")
 
     trimmed_values = _trim_leading_zeros(value_series)
     portfolio_returns = _daily_returns(value_series)
@@ -456,7 +381,5 @@ def get_health_report(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> HealthRepor
         risk_free_rate_annual=risk_free_rate,
         risk_free_rate_source=rf_source,
         flags=flags,
-        mid_window_contributions=mid_window_contributions,
-        recommended_clean_lookback_days=recommended_clean,
         errors=errors,
     )

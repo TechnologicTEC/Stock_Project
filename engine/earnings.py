@@ -148,10 +148,24 @@ def get_press_release(ticker: str) -> dict | None:
 # Report
 # --------------------------------------------------------------------------
 
+def outcome(quarter: dict | None) -> str | None:
+    """"beat", "met" or "missed" for one quarter — or None without an estimate.
+
+    `beat` alone is a yes/no, so a quarter that landed exactly on its estimate
+    read as False: the News page showed it as "Miss" and the cross-signal
+    summary counted it against the stock, while this module's own summary said
+    "met". Compared in cents, the precision EPS is reported in.
+    """
+    if not quarter or quarter.get("eps_actual") is None or quarter.get("eps_estimate") is None:
+        return None
+    actual, estimate = round(quarter["eps_actual"], 2), round(quarter["eps_estimate"], 2)
+    return "beat" if actual > estimate else "met" if actual == estimate else "missed"
+
+
 def _describe_surprise(latest: dict | None) -> str:
-    if not latest or latest.get("beat") is None:
+    verb = outcome(latest)
+    if verb is None:
         return ""
-    verb = "beat" if latest["beat"] else ("met" if latest["eps_surprise"] == 0 else "missed")
     pct = latest.get("eps_surprise_pct")
     by = f" by {abs(pct):.1f}%" if pct else ""
     return (f"Latest quarter ({latest['period']}): EPS ${latest['eps_actual']:.2f} vs "
@@ -218,7 +232,9 @@ def _describe_release(release: dict | None) -> str:
     score = release.get("sentiment_score")
     if score is None:
         return " An 8-K press release is available (sentiment scoring unavailable)."
-    return f" Press-release sentiment: {news.sentiment_label(score)} ({round(score * 100):+d}/100)."
+    # The 0-100 scale the headline score uses (50 = neutral), not -100..+100:
+    # the two sat on the same page and "+45/100" read as below a neutral 50.
+    return f" Press-release sentiment: {news.sentiment_label(score)} ({news.scale_to_100(score)}/100)."
 
 
 def analyze_ticker(ticker: str) -> EarningsAnalysis:

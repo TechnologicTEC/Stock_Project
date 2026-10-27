@@ -1336,6 +1336,20 @@ def load_leaderboard(universe: str = "sp500") -> dict | None:
     return cache.get_value(leaderboard_key(universe), ttl_seconds=LEADERBOARD_TTL_SECONDS) or None
 
 
+def save_partial_leaderboard(payload: dict) -> None:
+    """A weekly screen's progress, saved where nothing reads it as THE ranking.
+
+    The full run saves after every chunk so a crash keeps its work, and it used
+    to save into the live slot — so a screen that died at name 120 left a
+    120-name ranking, dated today, as what the Screener page showed and the bots
+    traded for the whole week. Progress goes here instead; the live slot is
+    written once, when the run has finished (scripts/screen_universe.py).
+    """
+    name = payload.get("universe") or "sp500"
+    leaderboard_key(name)                       # same validation as the live slot
+    cache.set_value(f"leaderboard_partial:{name}", payload)
+
+
 def merge_leaderboards(parts: list[tuple[str, dict]]) -> list[dict]:
     """Several universes' rows as ONE ranking: sorted by score, renumbered, each
     row tagged with its `universe`. The only merge — the bots, the Screener page

@@ -25,12 +25,12 @@ handful of z-values we need are constants), which gives an exact, reproducible
 fan of outcomes that widens with the square root of time.
 
 Two honest caveats, surfaced in the UI:
-  * The central (median) line slopes with the *historical* drift continuing.
-    That's an assumption the model makes, not a claim about the future.
-  * Projecting the whole *portfolio* uses its value series, which — like the
-    Health page's metrics — can't tell new contributions apart from market
-    moves (see engine/health.py's cash-flow caveat). Per-ticker projections
-    don't have that problem.
+  * The central (median) line is FLAT at today's value — past direction is not
+    carried forward. The only thing that can lean it is the optional Screener
+    outlook below, sized from what the score has actually been worth.
+  * The *portfolio* projection values today's holdings held constant across
+    the lookback (plus today's cash), so it describes the current mix, not the
+    one you had in the past.
 """
 from __future__ import annotations
 
@@ -47,16 +47,20 @@ TRADING_DAYS_PER_YEAR = 252            # matches engine/health.py
 DEFAULT_LOOKBACK_DAYS = 365            # how much history estimates drift/volatility ("the past year")
 MIN_RETURN_POINTS = 30                 # below this the drift/vol estimate is too noisy to project from
 
-# --- Outlook tilt (optional): let the Screener's fundamental score lean the
-# median, but keep it honest. The lean is capped, scales continuously with the
-# score, and is shrunk by how much predictive skill the Screener has actually
-# demonstrated for the ticker (its walk-forward validation IC). This is the ONE
-# place the projection stops being direction-agnostic. There is deliberately NO
-# baseline/market drift — a neutrally-rated stock stays flat; only the rating
-# moves the median, so nothing drifts up (or down) without the score to back it.
-MAX_ANNUAL_TILT = 0.25                 # ±25%/yr at the extreme ends of the 0-100 score; scales linearly within
-IC_REFERENCE = 0.05                    # IC at/above which the lean is trusted fully (the app's own "notable" bar)
-DEFAULT_OUTLOOK_CONFIDENCE = 0.75      # used when no validation IC is cached yet — the score itself is backing
+# --- Outlook tilt (optional): let the Screener's score lean the median, sized
+# by what a score point has ACTUALLY been worth — measured, not assumed. This is
+# the ONE place the projection stops being direction-agnostic. There is
+# deliberately no baseline/market drift: a 50 stays flat.
+#
+# Measured 27 Oct 2026 on the S&P 500 walk-forward (wf_points, 61 monthly dates
+# Jun 2021 - Jun 2026, 29,760 point-in-time scores, 91-day forward returns minus
+# that date's average): each point of score was worth +0.069% per 91 days over
+# the average stock, about +0.28% a year. By band: 75+ about +7.8%/yr, 70-75
+# +7.1%, 60-70 +2.4%, 50-60 -2.2%, 40-50 -4.3%, under 40 -3.1%. It replaced a
+# guessed ±25%/yr at the ends (score 80 got +11 to +15%/yr; measured ~+8.5%).
+# Caveats: that score leaves out news sentiment and analyst confidence, and
+# today's index omits companies that failed (it flatters returns, not slopes).
+TILT_PER_POINT = 0.0028                # annual lean per score point away from 50
 VALIDATION_IC_TTL_SECONDS = 120 * 24 * 60 * 60   # a remembered IC stays usable ~4 months
 
 # The percentiles that define the fan, with their standard-normal quantiles
@@ -89,16 +93,16 @@ class ProjectionResult:
     horizon_values: dict[int, float] = field(default_factory=dict)       # percentile -> value at the horizon
     horizon_returns_pct: dict[int, float] = field(default_factory=dict)  # percentile -> return % at the horizon
     insufficient_data: bool = False
-    # --- Optional "outlook" tilt: the median leans by the Screener's score,
-    # shrunk by how much predictive skill the Screener has actually shown
-    # (its validation IC). All zero/None unless apply_outlook was requested.
+    # --- Optional "outlook" tilt: the median leans by the Screener's score, at
+    # the per-point rate measured on the S&P 500 (TILT_PER_POINT), where that
+    # measurement applies (outlook_evidence). All zero/None unless requested.
     outlook_applied: bool = False
     outlook_score: float | None = None            # Screener overall score driving the tilt
     outlook_recommendation: str | None = None
-    outlook_ic: float | None = None               # validation IC used (None = none cached, cautious default used)
-    outlook_confidence: float = 0.0               # 0..1 shrink factor actually applied
+    outlook_ic: float | None = None               # the S&P 500 validation IC behind it (None = none stored)
+    outlook_confidence: float = 0.0               # share of the subject the measured edge applies to, 0..1
     applied_annual_tilt_pct: float = 0.0          # the annualized drift applied to the median
-    outlook_detail: str = ""                      # short human note for the caption
+    outlook_detail: str = ""                      # short human note: what was blended, or why no lean
 
 
 # --------------------------------------------------------------------------
@@ -198,8 +202,8 @@ def project_from_returns(
 
 
 # --------------------------------------------------------------------------
-# Outlook tilt — turn the Screener's score (+ validation IC) into a capped,
-# confidence-shrunk annual drift for the median. Pure and small so the mapping
+# Outlook tilt — turn the Screener's score into an annual drift for the median,
+# at the rate measured on the S&P 500, where that measurement applies. Small so the mapping
 # is testable without touching the Screener or DB.
 # --------------------------------------------------------------------------
 
@@ -211,10 +215,11 @@ def remember_validation_ic(
     ticker: str, information_coefficient: float | None, *, n: int | None = None,
     horizon_days: int | None = None, as_of: date | None = None, include_news: bool | None = None,
 ) -> None:
-    """Persist a ticker's walk-forward IC so the projection can reuse it as the
-    tilt's confidence without re-running the (slow) validation. `include_news`
-    records whether the validated score included the news-sentiment factor, so
-    the Screener's track-record note can be honest about what the IC covers."""
+    """Persist a ticker's single-name walk-forward IC, for the Screener page's
+    track-record note on that ticker. `include_news` records whether the
+    validated score included the news-sentiment factor, so that note can be
+    honest about what the IC covers. (The projection no longer reads it: ~22
+    points from one stock is noise — see outlook_evidence.)"""
     cache.set_value(_validation_ic_cache_key(ticker), {
         "information_coefficient": information_coefficient,
         "n": n, "horizon_days": horizon_days, "include_news": include_news,
@@ -238,24 +243,36 @@ def cached_validation_record(ticker: str) -> dict | None:
     return cache.get_value(_validation_ic_cache_key(ticker), ttl_seconds=VALIDATION_IC_TTL_SECONDS) or None
 
 
-def outlook_confidence(ic: float | None) -> float:
-    """0..1 shrink factor for the tilt. No cached IC → a cautious default; a
-    measured IC scales linearly up to IC_REFERENCE; a zero/negative IC (the
-    Screener hasn't predicted returns, or predicted them backwards) → 0, i.e.
-    no tilt at all."""
+def outlook_evidence(ticker: str) -> tuple[float, float | None, str]:
+    """(confidence 0 or 1, the S&P 500 IC, why) — does the measured edge apply here?
+
+    Only where it was measured: an S&P 500 company, with a STATISTICALLY
+    SIGNIFICANT S&P 500 validation on record. Everything else gets no lean —
+    the S&P 400 run found no edge (+0.015, t=0.72), and nothing outside the two
+    indexes has been tested at all. A single ticker's own walk-forward IC is not
+    used: ~22 overlapping points from one stock is noise, as the Validation
+    page itself says, and it used to swing the lean between full and none.
+    """
+    from engine import screener_validation, universe
+
+    if ticker.upper() not in set(universe.tickers("sp500")):
+        return 0.0, None, "not an S&P 500 company, and the score's edge was only measured there"
+    overall = (screener_validation.load_universe_result("sp500") or {}).get("overall") or {}
+    ic = overall.get("mean_ic")
     if ic is None:
-        return DEFAULT_OUTLOOK_CONFIDENCE
-    return max(0.0, min(1.0, ic / IC_REFERENCE))
+        return 0.0, None, "no S&P 500 validation is stored yet"
+    if not overall.get("significant"):
+        return 0.0, ic, "the S&P 500 validation is not statistically significant"
+    return 1.0, ic, ""
 
 
-def outlook_annual_tilt(screener_score: float | None, ic: float | None) -> tuple[float, float]:
-    """(annual_tilt, confidence). The tilt is a linear lean of up to
-    ±MAX_ANNUAL_TILT set by the score (50 = neutral = 0), shrunk by confidence."""
+def outlook_annual_tilt(screener_score: float | None, confidence: float) -> float:
+    """The annual lean: TILT_PER_POINT for each point away from 50, times the
+    0..1 confidence (outlook_evidence). A 50, a missing score, or no evidence
+    all give 0."""
     if screener_score is None:
-        return 0.0, 0.0
-    raw = (screener_score - 50.0) / 50.0 * MAX_ANNUAL_TILT
-    conf = outlook_confidence(ic)
-    return raw * conf, conf
+        return 0.0
+    return (screener_score - 50.0) * TILT_PER_POINT * confidence
 
 
 def _annual_to_daily_drift(annual_tilt: float) -> float:
@@ -273,8 +290,8 @@ def _apply_outlook_fields(result: ProjectionResult, *, score, recommendation, ic
 
 
 def _ticker_outlook(ticker: str) -> dict:
-    """Run the live Screener for one ticker and fold in its cached validation
-    IC. Returns everything needed to both tilt the fan and explain it."""
+    """Run the live Screener for one ticker and check whether the measured edge
+    applies to it. Returns everything needed to both tilt the fan and explain it."""
     from engine import screener  # local: keeps screener/pandas_ta off module import
 
     ticker = ticker.upper()
@@ -282,14 +299,14 @@ def _ticker_outlook(ticker: str) -> dict:
     res = results[0] if results else None
     score = res.overall_score if res else None
     reco = res.recommendation if res else None
-    ic = cached_validation_ic(ticker)
-    tilt, conf = outlook_annual_tilt(score, ic)
-    return {"score": score, "recommendation": reco, "ic": ic, "confidence": conf, "annual_tilt": tilt}
+    conf, ic, why_not = outlook_evidence(ticker)
+    return {"score": score, "recommendation": reco, "ic": ic, "confidence": conf,
+            "annual_tilt": outlook_annual_tilt(score, conf), "detail": why_not}
 
 
 def _portfolio_outlook(as_of: date) -> dict:
-    """Value-weighted blend of each holding's Screener outlook. Cash gets a
-    zero tilt (it's not a bet), so a cash-heavy book leans less."""
+    """Value-weighted blend of each holding's lean. Cash and holdings the edge
+    was never measured on lean zero, so they dilute the blend."""
     from engine import screener
 
     alloc = portfolio.get_allocation_by_ticker()  # [{"label": ticker, "value": usd}], holdings only
@@ -305,24 +322,28 @@ def _portfolio_outlook(as_of: date) -> dict:
     weighted_conf = 0.0
     weighted_score_num = 0.0
     scored_weight = 0.0
-    n_scored = 0
+    n_scored = n_backed = 0
+    ic = None
     for t, value in values.items():
         r = scored.get(t)
         score = r.overall_score if r else None
-        tilt, conf = outlook_annual_tilt(score, cached_validation_ic(t))
+        conf, t_ic, _why = outlook_evidence(t)
+        ic = ic if t_ic is None else t_ic
         w = value / total
-        weighted_tilt += tilt * w
+        weighted_tilt += outlook_annual_tilt(score, conf) * w
         weighted_conf += conf * w
         if score is not None:
             weighted_score_num += score * value
             scored_weight += value
             n_scored += 1
+            n_backed += conf > 0
 
     avg_score = (weighted_score_num / scored_weight) if scored_weight else None
     return {
-        "score": avg_score, "recommendation": None, "ic": None,
+        "score": avg_score, "recommendation": None, "ic": ic,
         "confidence": weighted_conf, "annual_tilt": weighted_tilt,
-        "detail": f"value-weighted blend of {n_scored} scored holding(s)",
+        "detail": (f"value-weighted blend of {n_scored} scored holding(s), {n_backed} of them "
+                   "S&P 500 companies the measured edge applies to"),
     }
 
 
@@ -358,7 +379,7 @@ def project_ticker(
         _apply_outlook_fields(
             result, score=outlook["score"], recommendation=outlook["recommendation"],
             ic=outlook["ic"], confidence=outlook["confidence"],
-            annual_tilt=outlook["annual_tilt"], detail="",
+            annual_tilt=outlook["annual_tilt"], detail=outlook["detail"],
         )
     return result
 
@@ -592,8 +613,8 @@ def describe(result: ProjectionResult, horizon_label: str, lookback_label: str) 
     r = result.horizon_returns_pct
     tilted = result.outlook_applied and abs(result.applied_annual_tilt_pct) > 0.05
     centre = (
-        "centred on a **Screener-tilted median** (a small, capped lean — the band's *width* still comes purely "
-        "from volatility)" if tilted else
+        "centred on a **Screener-tilted median** (a lean sized from what the score has been worth on the "
+        "S&P 500 — the band's *width* still comes purely from volatility)" if tilted else
         "**centred on today's value** — it assumes *no* drift up or down, because past direction doesn't reliably "
         "persist"
     )

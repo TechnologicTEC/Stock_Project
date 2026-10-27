@@ -112,8 +112,8 @@ if st.button("▶️ Run validation", type="primary"):
             ticker, start_date, today, step_days=step_days, horizon_days=horizon_days, include_news=include_news
         )
         summary = validation.summarize(points)
-        # Remember the IC so the Health page's projection can use it as the
-        # confidence behind its optional median tilt (no need to re-run this).
+        # Remember the IC for the Screener page's per-ticker track-record note
+        # (no need to re-run this to see it there).
         if summary.get("information_coefficient") is not None:
             projections.remember_validation_ic(
                 ticker, summary["information_coefficient"], n=summary.get("n"),

@@ -92,9 +92,11 @@ def test_get_projection_ticker_uses_project_ticker():
 
 
 def test_get_period_performance_compares_to_benchmark():
-    hist = [{"date": "2026-06-01", "value": 1000.0}, {"date": "2026-06-30", "value": 1100.0}]
+    hist = [{"date": "2026-06-01", "value": 100.0}, {"date": "2026-06-30", "value": 110.0}]
     spy = pd.DataFrame({"close": [100.0, 105.0]})
-    with patch("engine.chat_tools.portfolio.get_value_history", return_value=hist), \
+    # The holdings' time-weighted index — never the value line, which moves on
+    # deposits and carries the wallet's cash.
+    with patch("engine.chat_tools.portfolio.get_holdings_return_index", return_value=hist), \
          patch("engine.price_history.get_history_df", return_value=spy):
         out = chat_tools.get_period_performance("1M")
     assert out["portfolio_return_pct"] == 10.0 and out["sp500_return_pct"] == 5.0
