@@ -5,9 +5,10 @@ Everything in this app is stored and computed in **USD** — that's the base
 currency for every free data source (Finnhub/yfinance/Alpaca quotes are all
 USD). This module only handles converting a USD amount to a chosen *display*
 currency at render time; it never changes what's stored. USD is always
-available (rate 1.0); NZD needs an FX rate, which comes from FRED's DEXUSNZ
-series through the cache layer (Section 5's rule: engine talks to the API
-only via cache.py, never a page directly).
+available (rate 1.0); NZD needs an FX rate, which comes from the ECB's daily
+fixing (Frankfurter), with FRED's lagged DEXUSNZ series as the fallback, through
+the cache layer (Section 5's rule: engine talks to the API only via cache.py,
+never a page directly).
 """
 from __future__ import annotations
 

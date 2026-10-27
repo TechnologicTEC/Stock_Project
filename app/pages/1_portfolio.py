@@ -41,7 +41,8 @@ st.caption(
 )
 
 # --------------------------------------------------------------------------
-# Display currency (USD default; NZD via FRED's USD/NZD rate). Everything is
+# Display currency (USD default; NZD via the ECB's daily USD/NZD fixing, FRED as
+# the lagged fallback — engine/currency.py). Everything is
 # stored and priced in USD — this only converts what's *shown*. Amounts you
 # enter (cost basis, sale price, deposits) stay in USD.
 # --------------------------------------------------------------------------

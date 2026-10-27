@@ -66,6 +66,8 @@ def test_news_page_cross_signal_summary_is_opt_in():
     agg.assert_called_once()
     md = " ".join(m.value for m in at.markdown)
     assert "Signals lean positive" in md and "2 positive" in md
+    # The Screener weights news sentiment, so the panel must not call them independent.
+    assert "partly overlap" in md and "independent reads" not in md
 
 
 def test_news_page_earnings_view_shows_beat():

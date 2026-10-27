@@ -37,6 +37,35 @@ def test_validation_page_prompts_when_no_ticker():
     assert any("validate the Screener" in el.value for el in at.info)
 
 
+def _universe_result(**overrides):
+    factor = {"label": "Valuation", "mean_ic": 0.03, "t_stat": 1.2, "ic_ir": 0.2,
+              "hit_rate": 0.6, "significant": False, "n_dates": 61}
+    return {"universe": "sp500", "n_tickers": 493, "n_points": 29760, "horizon_days": 91,
+            "step_days": 30, "generated_at": "2026-10-02", "n_tests": 4, "t_threshold": 2.5,
+            "include_analyst": False,
+            "overall": {"mean_ic": 0.051, "t_stat": 2.15, "n_dates": 61, "n_dates_eff": 20,
+                        "hit_rate": 0.69, "ic_ir": 0.479, "significant": True},
+            "factor_ic": {"valuation": factor}, **overrides}
+
+
+def test_the_universe_section_states_what_the_stored_run_tested():
+    """The multiple-testing sentence follows the run's own test count (4 here,
+    not the 6 it used to assume), and a run with analyst switched off says so
+    rather than calling that factor 'thin'."""
+    from engine import screener_validation
+
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+    screener_validation.save_universe_result(_universe_result())
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    captions = " ".join(c.value for c in at.caption)
+    assert "With 4 factors there's a ~19% chance" in captions
+    assert "6 factors" not in captions
+    assert "**not included**" in captions and "will be thin" not in captions
+    assert "**S&P 500**" in captions and "SP500" not in captions
+
+
 def test_validation_page_runs_and_renders_verdict():
     portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
 

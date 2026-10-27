@@ -99,7 +99,9 @@ if st.checkbox(
             '<th>Detail</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
             '<div class="cp-foot"><b>Not a prediction, and not a combined score.</b> These are the app\'s '
-            "independent reads shown side by side — each keeps its own caveats on its own page.</div>",
+            "separate reads shown side by side — each keeps its own caveats on its own page. They are "
+            "not fully independent: the Screener score already includes news sentiment (15% of it), "
+            "so those two rows partly overlap.</div>",
             tag=ticker,
         )
 

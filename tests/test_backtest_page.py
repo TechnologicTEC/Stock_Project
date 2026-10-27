@@ -36,6 +36,15 @@ def test_backtest_page_prompts_when_no_ticker():
     assert any("backtest a strategy" in el.value for el in at.info)
 
 
+def test_backtest_page_points_screener_testing_at_the_validation_page():
+    """It used to say the Screener could only be tested by saving daily scores
+    to `screener_scores` — a table nothing writes. The Validation page does it."""
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    md = " ".join(m.value for m in at.markdown)
+    assert "Screener Validation" in md and "screener_scores" not in md
+
+
 def test_backtest_page_runs_and_renders_comparison():
     portfolio.add_holding("TEST", 10, 100.0, date(2023, 1, 2))
 

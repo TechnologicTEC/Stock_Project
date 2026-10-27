@@ -137,3 +137,44 @@ def test_from_the_switch_the_dashboard_shows_the_ranking_the_bots_trade(monkeypa
         md = " ".join(m.value for m in at.markdown)
         assert title in md
         assert md.index(first) < md.index("BIG" if first == "MID" else "Ranking, not a buy list")
+
+
+def test_beside_a_merged_ranking_the_confidence_panel_gives_the_sp400_result(monkeypatch):
+    """The panel's headline IC is the S&P 500's. Once mid caps fill the top of
+    the leaderboard beside it, the S&P 400's own (much weaker) result has to be
+    there too, or the panel vouches for rows it never measured."""
+    from engine import screener, screener_validation
+    from engine.bot.strategies import screener_common
+
+    def lb(ticker, universe):
+        return {"universe": universe, "generated_at": "2026-11-01",
+                "rows": [{"ticker": ticker, "score": 80.0, "rank": 1, "recommendation": "Strong Buy"}]}
+
+    def result(universe, ic, t, significant):
+        return {"universe": universe, "n_tickers": 400,
+                "overall": {"mean_ic": ic, "t_stat": t, "hit_rate": 0.6, "significant": significant}}
+
+    screener.save_leaderboard(lb("BIG", "sp500"))
+    screener.save_leaderboard(lb("MID", "sp400"))
+    screener_validation.save_universe_result(result("sp500", 0.051, 2.15, True))
+
+    def render():
+        with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
+             patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
+             patch("engine.portfolio.get_live_valuation", return_value=[]), \
+             patch("engine.creator_signals.mention_leaderboard", return_value=[]):
+            at = AppTest.from_file(_MAIN)
+            at.run(timeout=30)
+        assert not at.exception
+        return " ".join(m.value for m in at.markdown)
+
+    # Before the switch: S&P 500 only, so no S&P 400 line.
+    monkeypatch.setattr(screener_common, "MERGE_FROM", datetime(2100, 1, 1).date())
+    assert "S&P 400 rows" not in render()
+
+    monkeypatch.setattr(screener_common, "MERGE_FROM", datetime(2000, 1, 1).date())
+    assert "have not been validated yet" in render()
+
+    screener_validation.save_universe_result(result("sp400", 0.015, 0.72, False))
+    md = render()
+    assert "+0.015" in md and "no measurable edge" in md

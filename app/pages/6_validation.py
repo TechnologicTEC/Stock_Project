@@ -145,8 +145,11 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
         )
     else:
         o = uni["overall"]
+        from engine import universe as _universes
+
         st.caption(
-            f"**{uni.get('universe', 'sp500').upper()}** · {uni['n_tickers']} tickers · {uni['n_points']} "
+            f"**{_universes.LABELS.get(uni.get('universe') or 'sp500', uni.get('universe'))}** · "
+            f"{uni['n_tickers']} tickers · {uni['n_points']} "
             f"reconstructions · horizon {uni['horizon_days']}d, step {uni['step_days']}d · "
             f"run {uni.get('generated_at', '—')}"
         )
@@ -218,22 +221,32 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
         )
         thr, n_tests = uni.get("t_threshold"), uni.get("n_tests")
         if thr:
+            # Worked out from the stored test count rather than written down: the
+            # bar is set by how many factors this run actually tested (4 when
+            # analyst and sentiment are off), and "6 factors, ~26%" was wrong then.
+            luck = 1 - 0.95 ** (n_tests or 1)
             st.caption(
                 f"⚖️ The bar here is **|t| > {thr}**, not the familiar 1.96, because we test "
-                f"**{n_tests} factors against the same data at once**. With 6 factors there's a ~26% chance "
-                "at least one clears 1.96 by pure luck — so reporting whichever one does would be p-hacking "
-                "by accident. Rows marked *“no (marginal)”* passed 1.96 but not this bar: that's exactly what "
-                "a false positive looks like."
+                f"**{n_tests} factors against the same data at once**. With {n_tests} factors there's a "
+                f"~{luck:.0%} chance at least one clears 1.96 by pure luck — so reporting whichever one "
+                "does would be p-hacking by accident. Rows marked **MARGINAL** passed 1.96 but not this "
+                "bar: that's exactly what a false positive looks like."
             )
+        analyst_note = (
+            "And the **analyst confidence** factor is **not included** in this run — it reconstructs "
+            "from Yahoo, which blocks the GitHub Action's datacenter IP, so it was switched off; run the "
+            "script locally with `VALIDATION_INCLUDE_ANALYST=1` to cover it."
+            if uni.get("include_analyst") is False else
+            "And if the run came from the GitHub Action, **analyst confidence will be thin** — it "
+            "reconstructs from Yahoo, which blocks datacenter IPs; run the script locally for full coverage."
+        )
         st.caption(
             "**IC-IR** is consistency (mean ÷ spread): a small IC that shows up every date beats a big one "
             "that flips sign. **Read against the pooled run above — where a factor's sign flips between the "
             "two, the personal-holdings number is the one to distrust**, because those are stocks you chose.\n\n"
             "Caveats, honestly: the universe is **today's** index, so failed companies are missing "
             "(survivorship bias — it inflates return *levels*, but hits every factor alike, which is why "
-            "comparing factors is still fair). It covers one macro regime. And if the run came from the "
-            "GitHub Action, **analyst confidence will be thin** — it reconstructs from Yahoo, which blocks "
-            "datacenter IPs; run the script locally for full coverage."
+            "comparing factors is still fair). It covers one macro regime. " + analyst_note
         )
 
 # --------------------------------------------------------------------------

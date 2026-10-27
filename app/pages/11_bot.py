@@ -323,7 +323,8 @@ def _last_run_summary(decisions: list[dict]) -> str:
 _theme.page_header(
     "Trading Bot",
     eyebrow="Execution",
-    sub="Autonomous paper trading · one Alpaca account per strategy · daily after the close",
+    sub="Autonomous paper trading · one Alpaca account per strategy · after each close, "
+        "plus a pre-market run",
 )
 st.caption(
     "Personal, educational tool — not financial advice. Every account here is **paper money** "
@@ -348,7 +349,11 @@ for cfg in configs:
     name = cfg["strategy"]
     curve = _cache.bot_equity_curve(name)
     decisions = _cache.bot_decisions(name, JOURNAL_LIMIT)
-    trades = sum(1 for d in decisions if d["status"] in (journal.SUBMITTED, journal.FILLED))
+    # Counted from the FULL trade history, not the JOURNAL_LIMIT window above:
+    # top_decile_long passed 400 rows in October and adds ~110 a rebalance, so
+    # counting the window would quietly drop its oldest trades from the total.
+    # journal.fills is every submitted or filled order, which is what a trade is.
+    trades = len(_cache.bot_fills(name))
     rows.append({
         "config": cfg,
         "name": name,
@@ -956,8 +961,8 @@ with st.expander(f"Decision journal — every strategy · {_journal_label}"):
     pick = f1.selectbox("Strategy", ["All strategies"] + [r["label"] for r in rows], index=0)
     statuses = f2.multiselect(
         "Result",
-        [journal.SUBMITTED, journal.FILLED, journal.BLOCKED, journal.SKIPPED,
-         journal.DRY_RUN, journal.ERROR],
+        [journal.SUBMITTED, journal.FILLED, journal.CANCELLED, journal.BLOCKED,
+         journal.SKIPPED, journal.DRY_RUN, journal.ERROR],
         default=[],
         placeholder="Any result",
     )

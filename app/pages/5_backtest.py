@@ -37,12 +37,11 @@ with st.expander("ℹ️ What this does (and honestly can't do)", expanded=False
         "(moving averages, RSI, momentum) — with **no look-ahead**: a signal built from prices up to "
         "day *t* is only acted on at day *t+1*. Each run is compared to simply **buying and holding** "
         "the same ticker, and to holding **SPY**.\n\n"
-        "It deliberately does **not** backtest the fundamental Screener. That scorer uses *today's* "
-        "P/E, margins, and analyst data, and free-tier APIs have no point-in-time history for those — "
-        "replaying it in the past would secretly use information you couldn't have known then "
-        "(look-ahead bias), making the result meaningless. The honest path to validating the Screener "
-        "is the `screener_scores` table: keep saving daily scores, and over time they can be checked "
-        "against what actually happened next."
+        "It deliberately does **not** backtest the fundamental Screener here. The live scorer uses "
+        "*today's* P/E, margins and analyst data, so replaying it on past prices would secretly use "
+        "information you couldn't have known then (look-ahead bias). Testing the Screener is the "
+        "**Screener Validation** page's job: it rebuilds past scores from SEC filings as they stood "
+        "on each date, then checks them against what the stocks actually did next."
     )
 
 # --------------------------------------------------------------------------

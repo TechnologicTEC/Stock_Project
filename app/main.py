@@ -170,6 +170,25 @@ with left:
         )
 
 with right:
+    # The leaderboard the screener bots trade — cheap cache reads. From the November
+    # 2026 switch that is the S&P 500 and S&P 400 merged (screener_common.MERGE_FROM),
+    # through the same merge the bots use. Loaded first because the confidence
+    # panel above it has to say what the S&P 400 rows are worth once they're in.
+    from datetime import date as _date
+
+    from engine import screener as _screener  # lazy: keeps the screener stack off page import
+    from engine.bot.strategies import screener_common as _common
+
+    lb = _screener.load_leaderboard()
+    lb_title = "S&P 500 leaderboard"
+    merged = False
+    if lb and _date.today() >= _common.MERGE_FROM:
+        mid = _screener.load_leaderboard(_common.MERGED_UNIVERSE)
+        if mid:
+            lb = dict(lb, rows=_screener.merge_leaderboards([("sp500", lb), (_common.MERGED_UNIVERSE, mid)]))
+            lb_title = "S&P 500 + S&P 400 leaderboard"
+            merged = True
+
     # Signal confidence — cheap cache read of the S&P 500 validation.
     uni = screener_validation.load_universe_result()
     if uni and (uni.get("overall") or {}).get("mean_ic") is not None:
@@ -178,13 +197,29 @@ with right:
         fill = min(abs(ic) * 100 * 2.2, 100)          # a faint IC reads as a small fill
         sig = "distinguishable from zero" if o.get("significant") else "not statistically significant"
         hit = f" · hit {o['hit_rate']:.0%}" if o.get("hit_rate") is not None else ""
+        # The figure above is the S&P 500's. Beside a merged ranking, where mid
+        # caps take most of the top places, it would overstate what the list is
+        # worth unless the S&P 400's own result sits next to it.
+        mid_note = ""
+        if merged:
+            mid_o = (screener_validation.load_universe_result(_common.MERGED_UNIVERSE) or {}).get("overall") or {}
+            if mid_o.get("mean_ic") is None:
+                mid_note = ('<p class="cp-note">That is the <b>S&P 500</b> result. The S&P 400 rows in '
+                            "the leaderboard below have not been validated yet.</p>")
+            else:
+                mid_sig = ("distinguishable from zero" if mid_o.get("significant")
+                           else "no measurable edge")
+                mid_note = (f'<p class="cp-note">That is the <b>S&P 500</b> result. On the S&P 400 '
+                            f'rows in the leaderboard below the IC is <b>{mid_o["mean_ic"]:+.3f}</b> '
+                            f'(t={mid_o.get("t_stat")}) — {mid_sig}.</p>')
         _theme.panel(
             "Signal confidence",
             f'<div class="ic"><b>{ic:+.3f}</b><span class="t">IC · t={o.get("t_stat")}{hit}</span></div>'
             f'<div class="cp-meter"><i style="width:{fill:.0f}%"></i></div>'
             f'<div class="cp-verdict">◆ Faint tilt — {sig}</div>'
             '<p class="cp-note">How well this screener has ranked stocks against each other. '
-            'The top of any list is where it is <b>most positive right now</b>, not a forecast.</p>',
+            'The top of any list is where it is <b>most positive right now</b>, not a forecast.</p>'
+            + mid_note,
             tag=f"{uni.get('n_tickers', '—')} names",
             extra_class="cp-conf",
         )
@@ -193,21 +228,6 @@ with right:
                      '<p class="cp-note">No validation run stored yet — run the S&P 500 validation '
                      "to see how predictive this screener's ranking has actually been.</p>")
 
-    # The leaderboard the screener bots trade — cheap cache reads. From the November
-    # 2026 switch that is the S&P 500 and S&P 400 merged (screener_common.MERGE_FROM),
-    # through the same merge the bots use.
-    from datetime import date as _date
-
-    from engine import screener as _screener  # lazy: keeps the screener stack off page import
-    from engine.bot.strategies import screener_common as _common
-
-    lb = _screener.load_leaderboard()
-    lb_title = "S&P 500 leaderboard"
-    if lb and _date.today() >= _common.MERGE_FROM:
-        mid = _screener.load_leaderboard(_common.MERGED_UNIVERSE)
-        if mid:
-            lb = dict(lb, rows=_screener.merge_leaderboards([("sp500", lb), (_common.MERGED_UNIVERSE, mid)]))
-            lb_title = "S&P 500 + S&P 400 leaderboard"
     if lb and lb.get("rows"):
         lb_rows = "".join(
             f'<tr><td class="co">{r["rank"]}</td>'

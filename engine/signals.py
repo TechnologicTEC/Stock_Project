@@ -7,7 +7,9 @@ Deliberately NOT a combined score or a prediction: it's a plain "3 of 4 signals
 positive" tally so consensus vs conflict is visible at a glance, with each read
 keeping its own honest framing. (Analyst consensus is intentionally omitted here
 because it's already one of the Screener's own factors — folding it in again
-would double-count it.)
+would double-count it.) News sentiment is NOT omitted, though the Screener also
+weights it (15%): it is the one read here with a page of its own, so the overlap
+is stated on the panel instead of hidden by dropping it.
 
 Heavy engines are imported inside each reader so importing this module is cheap.
 """
@@ -68,7 +70,12 @@ def _earnings_read(ticker: str) -> SignalRead:
         pct = quarter.get("eps_surprise_pct")
         by = f" by {abs(pct):.0f}%" if pct else ""
         stance = POSITIVE if quarter["beat"] else NEGATIVE
-        return SignalRead("Latest earnings", stance, f"{'Beat' if quarter['beat'] else 'Missed'} estimates{by}")
+        # Name the quarter: it is the newest one WITH an estimate, which is not
+        # always the newest one, so "Latest" alone could pass an old result off
+        # as this quarter's.
+        period = f" ({quarter['period']})" if quarter.get("period") else ""
+        return SignalRead("Latest earnings", stance,
+                          f"{'Beat' if quarter['beat'] else 'Missed'} estimates{by}{period}")
 
     # Finnhub's free-tier earnings calendar often returns no EPS actual/estimate,
     # so fall back to the sentiment of the 8-K earnings press release (the same

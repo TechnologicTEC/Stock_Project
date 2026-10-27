@@ -192,6 +192,26 @@ def test_page_renders_the_comparison_and_a_strategy_tab():
             "Days live"} <= set(_strip(at))
 
 
+def test_the_trade_count_comes_from_the_full_history_not_the_journal_window():
+    """The journal read is capped at JOURNAL_LIMIT rows; top_decile_long already
+    has more than that. One trade inside the window, seven in the history: the
+    table must count seven."""
+    from engine.bot import performance
+
+    history = [dict(_fills()[0], decided_at=datetime(2026, 8, 18 + i, 21, 45)) for i in range(7)]
+    with patch("engine.bot.performance.summarise", wraps=performance.summarise) as summarise:
+        at = _run(decisions=[_decision()], fills=history)
+    assert not at.exception
+    trades = [c.kwargs.get("trades") for c in summarise.call_args_list if "trades" in c.kwargs]
+    assert trades == [7]
+
+
+def test_the_journal_filter_offers_cancelled_orders():
+    at = _run()
+    picker = next(m for m in at.multiselect if m.label == "Result")
+    assert journal.CANCELLED in picker.options
+
+
 def test_empty_config_table_explains_how_to_seed_rather_than_erroring():
     at = _run(configs=[])
     assert not at.exception
@@ -596,7 +616,7 @@ def test_the_creator_panel_shows_each_holdings_clock_and_the_queue():
     held says where it stands in line."""
     mentions = [_creator_mention("NVTS", 3), _creator_mention("AMZN", 1)]
     view = _account_view(positions=[_held("NVTS")])
-    clock = ({"NVTS": datetime.now() - timedelta(days=5)}, {})
+    clock = ({"NVTS": _utc_now() - timedelta(days=5)}, {})
     at = _run(configs=[_config("creator_conviction", target_slots=8)],
               mentions=mentions, view=view, clock=clock)
     text = _page_text(at)
@@ -605,14 +625,44 @@ def test_the_creator_panel_shows_each_holdings_clock_and_the_queue():
     assert '<td class="num">25</td>' in text           # 30 from the buy, 5 days ago
 
 
+def _utc_now():
+    """Naive UTC, the journal's convention — and the day the clocks count in."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def test_the_creator_panels_days_left_counts_in_utc_not_the_local_date():
+    """The bot and the 'Why it's held' column count the clock in UTC days. On a
+    machine whose own date is a day ahead (NZ before 1pm), the panel used the
+    local date and showed one day fewer than the column beside it."""
+    import app._bot_panels as panels
+
+    class _Utc(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 28, 1, 0, tzinfo=timezone.utc)
+
+    class _LocalAhead(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 10, 29)
+
+    mentions = [_creator_mention("NVTS", 3)]
+    clock = ({"NVTS": datetime(2026, 10, 23, 22, 0)}, {})     # until 22 Nov
+    with patch.object(panels, "datetime", _Utc), patch.object(panels, "date", _LocalAhead):
+        at = _run(configs=[_config("creator_conviction", target_slots=8)], mentions=mentions,
+                  view=_account_view(positions=[_held("NVTS")]), clock=clock)
+    text = _page_text(at)
+    assert '<td class="num">25</td>' in text           # 22 Nov less 28 Oct, the UTC day
+
+
 def test_the_creator_panel_finds_the_holdings_without_broker_keys():
     """The deployed Space holds no bot keys. Reading 'held' from the broker
     alone would show nothing held and no clock at all there."""
     mentions = [_creator_mention("NVTS", 3)]
-    fills = [{"ticker": "NVTS", "decided_at": datetime.now() - timedelta(days=5),
+    fills = [{"ticker": "NVTS", "decided_at": _utc_now() - timedelta(days=5),
               "action": journal.BUY, "qty": None, "notional": 1_250.0,
               "reason": "entry", "status": journal.SUBMITTED}]
-    clock = ({"NVTS": datetime.now() - timedelta(days=5)}, {})
+    clock = ({"NVTS": _utc_now() - timedelta(days=5)}, {})
     at = _run(configs=[_config("creator_conviction", target_slots=8)],
               mentions=mentions, view=_account_view(available=False),
               fills=fills, clock=clock)

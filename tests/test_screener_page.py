@@ -181,6 +181,19 @@ def test_leaderboard_renders_ranking_with_the_measured_ic():
     assert "not a prediction" in blob.lower()     # ...with the honest framing
     # the ranking now renders as a terminal table, not a dataframe
     assert "AAA" in blob and "Highest-scoring right now" in blob
+    # The stored hit rate is a fraction; shown as a percentage like everywhere else.
+    assert "hit rate 69%" in blob and "hit rate 0.69" not in blob
+
+
+def test_the_page_does_not_call_its_thresholds_sector_agnostic():
+    """Valuation and margin ARE scored against industry thresholds (the
+    breakdown says so); the caption above the Run button used to deny it."""
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    captions = " ".join(c.value for c in at.caption)
+    assert "sector-agnostic" not in captions
+    assert "adjusted for the company's industry" in captions
 
 
 def _two_name_leaderboard():

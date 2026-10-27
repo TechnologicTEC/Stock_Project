@@ -24,7 +24,7 @@ scan job that has stopped.
 from __future__ import annotations
 
 import html
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -297,7 +297,10 @@ def _creator(cfg: dict, view: dict) -> None:
               tag="nothing scanned")
         return
 
-    today = date.today()
+    # The UTC date, as the runner and the "Why it's held" column use: the
+    # clocks run on UTC dates throughout. The machine's own date (NZ, locally)
+    # is a day ahead for half of every day and showed one day fewer left.
+    today = datetime.now(timezone.utc).date()
     newest = max((e["last_seen"] for e in board if e.get("last_seen")), default=None)
     silence = (today - newest.date()).days if newest else None
 

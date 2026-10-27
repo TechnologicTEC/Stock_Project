@@ -43,7 +43,7 @@ def test_all_positive_signals_tally_and_map_correctly():
                stance={"mentions": 3, "counts": {"bullish": 3, "bearish": 0, "neutral": 0}, "stance": "bullish"})
     assert (out["positive"], out["neutral"], out["negative"], out["counted"]) == (4, 0, 0, 4)
     assert _read(out, "Screener").detail == "Strong Buy · 80/100"
-    assert _read(out, "Latest earnings").detail == "Beat estimates by 12%"
+    assert _read(out, "Latest earnings").detail == "Beat estimates by 12% (2026-Q1)"
     assert _read(out, "Creator mentions").stance == "positive"
 
 
@@ -52,7 +52,7 @@ def test_negative_and_mixed_mapping():
                stance={"mentions": 2, "counts": {"bullish": 0, "bearish": 2, "neutral": 0}, "stance": "bearish"})
     assert (out["positive"], out["negative"], out["counted"]) == (0, 4, 4)
     assert _read(out, "News sentiment").stance == "negative"
-    assert _read(out, "Latest earnings").detail == "Missed estimates by 8%"
+    assert _read(out, "Latest earnings").detail == "Missed estimates by 8% (2026-Q1)"
 
 
 def test_hold_and_neutral_news_are_neutral_not_counted_as_lean():
@@ -77,7 +77,7 @@ def test_earnings_falls_back_to_press_release_sentiment_when_no_beat_data():
 def test_earnings_beat_data_wins_over_release_sentiment():
     out = _run(earn=_earn(beat=True, pct=10.0, release_score=-0.9))   # beat, but grim-sounding release
     assert _read(out, "Latest earnings").stance == "positive"         # the hard number wins
-    assert _read(out, "Latest earnings").detail == "Beat estimates by 10%"
+    assert _read(out, "Latest earnings").detail == "Beat estimates by 10% (2026-Q1)"
 
 
 def test_missing_data_is_na_and_excluded_from_the_count():

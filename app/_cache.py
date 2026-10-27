@@ -1,6 +1,6 @@
 """
 App-layer memoization (Streamlit). Streamlit reruns the whole script on every
-widget interaction; without caching, each rerun re-queries the (remote Tokyo) DB
+widget interaction; without caching, each rerun re-queries the (remote us-east-1) DB
 and recomputes. These `st.cache_data` wrappers keep heavy reads in-process for a
 few minutes so interactions are instant.
 

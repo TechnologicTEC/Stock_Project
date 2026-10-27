@@ -4,10 +4,12 @@ Composite rebalance: the top 15 by screener rank (the S&P 500, and from November
 refreshed once a month.
 
 **The one with evidence behind it.** The validation run measured this composite's
-cross-sectional IC at +0.046 (t = 2.17) on 3-month (91-day) forward returns,
-re-scored about every 30 days — which is why the cadence here is monthly rather
-than whatever the leaderboard's own refresh happens to be. Running it weekly would
-be trading a signal at a cadence nobody measured.
+cross-sectional IC on the S&P 500 at +0.046 to +0.051 (t = 2.15-2.17 across runs;
++0.051 in Oct 2026) on 3-month (91-day) forward returns, re-scored about every 30
+days — which is why the cadence here is monthly rather than whatever the
+leaderboard's own refresh happens to be. Running it weekly would be trading a
+signal at a cadence nobody measured. On the S&P 400 the same score showed no edge
+(+0.015, t = 0.72); the mid caps are traded from November regardless, as a test.
 
 Two design choices carry most of the behaviour:
 

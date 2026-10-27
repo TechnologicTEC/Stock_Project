@@ -77,6 +77,13 @@ def _leaderboard_view(names: tuple[str, ...]) -> tuple[list[dict], list[tuple[st
     return screener.merge_leaderboards(parts), parts
 
 
+def _hit(overall: dict) -> str:
+    """The hit rate as a percentage, the way the Validation page and dashboard
+    show it — the stored value is a fraction (0.69)."""
+    hit = (overall or {}).get("hit_rate")
+    return f"{hit:.0%}" if hit is not None else "—"
+
+
 def _age_days(generated) -> int | None:
     try:
         return (date.today() - date.fromisoformat(generated)).days if generated else None
@@ -172,7 +179,7 @@ def _render_leaderboard() -> None:
             st.warning(
                 f"**What this ranking is worth.** Across the S&P 500 this exact score has a cross-sectional "
                 f"information coefficient of **{ic:+.3f}** (t={o.get('t_stat')}, hit rate "
-                f"{o.get('hit_rate')}) — a *faint tilt*, {sig}. The top of the list is where the screener "
+                f"{_hit(o)}) — a *faint tilt*, {sig}. The top of the list is where the screener "
                 "is **most positive right now**, not a prediction these names will outperform. Not financial "
                 "advice.",
                 icon="📉",
@@ -201,7 +208,7 @@ def _render_leaderboard() -> None:
                     f"**On S&P 400 companies this score has shown no measurable edge.** Tested over five "
                     f"years on {mid.get('n_tickers', '—')} mid-sized companies, its information coefficient "
                     f"was **{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
-                    f"{mid_o.get('hit_rate')}) — indistinguishable from chance, where the S&P 500 shows a "
+                    f"{_hit(mid_o)}) — indistinguishable from chance, where the S&P 500 shows a "
                     "faint but real tilt. " + _bots_line(
                         "Treat these rows as a list to browse, not a signal; no bot buys from them.",
                         "The bots trade them anyway since 1 Nov 2026, as a live test of whether "
@@ -213,7 +220,7 @@ def _render_leaderboard() -> None:
                     f"**What this ranking is worth on the S&P 400.** Across {mid.get('n_tickers', '—')} "
                     f"mid-sized companies this score has an information coefficient of "
                     f"**{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
-                    f"{mid_o.get('hit_rate')}) — a faint tilt, not a prediction. " + _bots_line(
+                    f"{_hit(mid_o)}) — a faint tilt, not a prediction. " + _bots_line(
                         "No bot buys from these rows.", "The bots trade them since 1 Nov 2026."),
                     icon="🧪",
                 )
@@ -368,10 +375,10 @@ candidate_tickers = sorted(set(selected) | set(extra))
 st.caption(
     "Each score is based on fixed, documented thresholds for that metric (e.g. what generally "
     "counts as a cheap P/E or healthy revenue growth) — it doesn't depend on what else you screen "
-    "alongside it, and works fine for a single ticker. When you screen more than one together, "
-    "you'll also see how each one compares to the others as extra context, since these thresholds "
-    "are sector-agnostic rules of thumb, not sector-adjusted fair value — screening similar "
-    "businesses together makes that context more useful."
+    "alongside it, and works fine for a single ticker. Valuation and gross margin use thresholds "
+    "adjusted for the company's industry; growth, net margin, ROE and debt use one general set. "
+    "These are hand-picked rules of thumb, not a fair-value estimate — screening similar "
+    "businesses together gives the most useful side-by-side context."
 )
 
 if len(candidate_tickers) > 30:

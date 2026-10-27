@@ -1,6 +1,7 @@
 name: Trading bot
 
-# Runs each paper-trading strategy once per weekday, after the US close.
+# Runs each paper-trading strategy after each US close (Sun-Thu UTC) and again
+# before each open (the pre-market run, Mon-Fri UTC).
 #
 # Every strategy trades its OWN $10k Alpaca paper account, so Alpaca computes
 # each equity curve directly and no attribution logic of ours sits in between.
@@ -74,9 +75,9 @@ on:
     # It runs with --pre-market (see the `run` step), which trades normally but
     # writes no equity snapshot: no session has closed since the morning run
     # recorded one. Double-buying is already handled — an order from the
-    # morning run is still queued at this hour, and the PENDING_ORDER rail
-    # refuses to stack a second on top of it; creator_conviction compares its
-    # watermark with >= precisely so a mention cannot fall between two runs.
+    # morning run is still queued at this hour, the PENDING_ORDER rail refuses
+    # to stack a second on top of it, and the cash already promised to queued
+    # buys is not spent again (executor.committed_to_buys).
     #
     # KEEP IN STEP: the `run` step matches this exact string to detect the
     # pre-market run, app/pages/11_bot.py computes "next scheduled run" from
@@ -96,7 +97,7 @@ on:
         required: false
         default: true          # a manual run defaults to SAFE, not to trading
       strategy:
-        description: "Run only this strategy (blank = all six)"
+        description: "Run only this strategy (blank = all five)"
         required: false
         default: ""
       pre_market:
