@@ -36,6 +36,17 @@ on:
     #
     # Run it by hand from the Actions tab any time you want it sooner.
     - cron: "0 4 1 * *"
+    # 16:00 UTC on the 1st — the RESUME. A cold run takes 290-350 minutes against
+    # the 350-minute timeout, and GitHub kills the ones that run long: October's
+    # (started 10:47 UTC, six hours late) was cancelled at 5h51m and only
+    # finished when it was re-run by hand the next day, in 4 minutes, off the
+    # per-ticker cache. This second run does that automatically. It shares the
+    # concurrency group, so it waits for the first rather than overlapping it,
+    # and both use the same window (pinned to the ISO week, see
+    # screener_validation.pinned_window), so it resumes rather than restarts.
+    # When the first run finished, this one re-reads the cached points and
+    # re-saves the same result: minutes, and ~8 MB of reads.
+    - cron: "0 16 1 * *"
   workflow_dispatch:
     inputs:
       universe_every:

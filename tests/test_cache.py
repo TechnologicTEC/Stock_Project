@@ -313,3 +313,36 @@ def test_a_dry_run_prune_counts_without_deleting():
     assert cache.prune_news(keep_newest=40, keep_days=10, dry_run=True) == 5
     assert _count("DRY") == 45
     assert cache.prune_news(keep_newest=40, keep_days=10) == 5
+
+
+# --------------------------------------------------------------------------
+# Dated cache keys. `insider:<ticker>:<start date>` and
+# `pricefetch:<ticker>:<source>:<end date>` carry the day they were made in the
+# key itself, so tomorrow's read asks for a new key and yesterday's row is never
+# read again — 9,598 insider rows and 11,792 fetch markers by Oct 2026.
+# --------------------------------------------------------------------------
+
+def _aged(key, days):
+    from db.models import ApiCache
+    cache.set_value(key, {"x": 1})
+    with get_session() as session:
+        session.get(ApiCache, key).fetched_at = utcnow() - timedelta(days=days)
+
+
+def test_prune_dated_keys_removes_only_old_rows_of_the_named_prefixes():
+    _aged("insider:AAA:2026-04-01", 40)
+    _aged("insider:AAA:2026-10-01", 1)
+    _aged("pricefetch:AAA:alpaca:2026-09-01", 40)
+    _aged("leaderboard:sp500", 40)                      # another prefix: never touched
+    removed = cache.prune_dated_keys(("insider:", "pricefetch:"), older_than_days=30)
+    assert removed == 2
+    assert cache.get_value("insider:AAA:2026-04-01") is None
+    assert cache.get_value("pricefetch:AAA:alpaca:2026-09-01") is None
+    assert cache.get_value("insider:AAA:2026-10-01") is not None
+    assert cache.get_value("leaderboard:sp500") is not None
+
+
+def test_prune_dated_keys_dry_run_counts_without_deleting():
+    _aged("insider:BBB:2026-04-01", 40)
+    assert cache.prune_dated_keys(("insider:",), older_than_days=30, dry_run=True) >= 1
+    assert cache.get_value("insider:BBB:2026-04-01") is not None

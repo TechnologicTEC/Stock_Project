@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date as date_
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from db.session import init_db                                  # noqa: E402
 from engine.bot import accounts, executor, journal, risk        # noqa: E402
 from engine.bot import strategies                               # noqa: E402
+from engine.time_utils import CLOSE_UTC_HOUR, latest_closed_session  # noqa: E402,F401
 
 BENCHMARK_TICKER = "SPY"
 
@@ -53,45 +55,6 @@ def _status(dry_run: bool, live_status: str) -> str:
     creator_conviction's watermark.
     """
     return journal.DRY_RUN if dry_run else live_status
-
-
-# The latest UTC hour at which a US session can still be open. The bell is
-# 20:00 UTC in EDT and 21:00 in EST; using the later one means a run is only
-# ever treated as post-close once the market is shut year-round.
-CLOSE_UTC_HOUR = 21
-
-
-def latest_closed_session(now: datetime) -> date_:
-    """The most recent weekday whose US session has finished, as of `now` (UTC).
-
-    This is the date a run's equity snapshot describes, and it is NOT the
-    calendar date the run happens on. Two ways those came apart:
-
-    * **A run that crosses midnight.** Monday 14 Sep's run was scheduled 21:45
-      UTC and landed at 00:00 on the 15th. `date.today()` said Tuesday, so
-      Monday's close was saved as Tuesday's — and Tuesday's own run overwrote
-      it that night. Monday vanished from every equity curve. Runs routinely
-      land between 23:30 and 00:00, so this was a coin flip each night.
-    * **A run before the bell.** The pre-market run happens during the NZ
-      evening, on a US weekday whose session has not opened yet. The newest
-      close that can exist is the previous weekday's.
-
-    Both reduce to one rule: a weekday counts only once the clock is past its
-    close; otherwise walk back to the last weekday before today.
-
-    Unlike the helper deleted in 65c2388, this one carries real information.
-    That one only skipped weekends, which the weekday count already did — so
-    removing it changed no test. This one reads the TIME, which a date-only
-    count cannot see: at 08:30 UTC on a Tuesday, Tuesday is a weekday that has
-    not traded yet.
-    """
-    day = now.date()
-    if day.weekday() < 5 and now.hour >= CLOSE_UTC_HOUR:
-        return day
-    day -= timedelta(days=1)
-    while day.weekday() >= 5:            # 5 = Saturday, 6 = Sunday
-        day -= timedelta(days=1)
-    return day
 
 
 def sessions_behind(newest: date_, through: date_) -> int:
@@ -272,7 +235,51 @@ def _sync_official_equity(strategy: str, config: dict, client, now: datetime,
              f"session(s): {', '.join(f'{d:%d %b}' for d, _ in fixes)}")
 
 
-def _log_price_freshness(today: date_, now: datetime | None = None) -> None:
+# How long the morning run waits for warm-cache to finish. Warm-cache takes
+# 4-8 minutes once it starts, and the two jobs start within minutes of each
+# other (both are hours late), so 40 covers a slow run with room to spare.
+WARM_CACHE_WAIT_MINUTES = 40
+
+
+def _wait_for_warm_cache(session: date_, *, timeout_minutes: int = WARM_CACHE_WAIT_MINUTES,
+                         sleep=time.sleep) -> bool:
+    """Wait until warm-cache has marked `session` done. True once it has.
+
+    The bot is scheduled 15 minutes after warm-cache, but GitHub starts both
+    hours late and they do not wait for each other: on 30 Sep, 2 Oct, 13 Oct
+    and 23 Oct the bot started before warm-cache finished and decided on the
+    previous day's closes. This waits for the marker warm-cache writes as its
+    last step (cache.WARM_DONE_KEY), polling once a minute.
+
+    After the timeout it goes ahead anyway: a failed warm-cache costs fresh
+    closes, and _log_price_freshness then says so; it must not cost the day's
+    trading. Never raises.
+    """
+    from engine import cache
+
+    def _done() -> bool:
+        marker = cache.get_value(cache.WARM_DONE_KEY) or {}
+        return bool(marker.get("session")) and marker["session"] >= session.isoformat()
+
+    try:
+        for minute in range(timeout_minutes + 1):
+            if _done():
+                if minute:
+                    _log(f"  warm-cache finished {session} after {minute} min of waiting")
+                return True
+            if minute == 0:
+                _log(f"  waiting for warm-cache to finish {session} "
+                     f"(up to {timeout_minutes} min)")
+            if minute < timeout_minutes:
+                sleep(60)
+        _log(f"  warm-cache has not marked {session} done after {timeout_minutes} min — "
+             "going ahead on whatever prices are cached")
+    except Exception as exc:                 # noqa: BLE001 — never break a run over this
+        _log(f"  warm-cache marker unreadable ({type(exc).__name__}) — going ahead")
+    return False
+
+
+def _log_price_freshness(today: date_, now: datetime | None = None, *, wait: bool = False) -> None:
     """Say how old the newest cached price bar is, and complain if it is stale.
 
     "Stale" is measured against `latest_closed_session(now)`, not `today`: the
@@ -280,17 +287,17 @@ def _log_price_freshness(today: date_, now: datetime | None = None) -> None:
     that day as a missed close would print "warm-cache may not have run" on
     every single evening run.
 
-    The bot is scheduled 15 minutes after warm-cache so it reads the day's
-    closes. That ordering is an ASSUMPTION, not a guarantee: GitHub's scheduled
-    workflows are best-effort and have been observed running 23 minutes to
-    8 hours late, so warm-cache can easily land after this job rather than
-    before it. When that happens golden_cross computes its 50/200 cross from
-    yesterday's closes and nothing anywhere says so.
-
-    This cannot fix the ordering — it makes it visible, which is the difference
-    between a known limitation and a silent one. Never raises: a missing bar is
-    already handled by each strategy's own StrategyDataError.
+    With `wait`, it first waits for warm-cache to finish that session
+    (_wait_for_warm_cache): the morning run is scheduled 15 minutes after
+    warm-cache, but GitHub's start delays routinely put it first, and then
+    golden_cross computes its 50/200 cross from yesterday's closes. The check
+    below still runs, so a warm-cache that never finished stays visible. Never
+    raises: a missing bar is already handled by each strategy's own
+    StrategyDataError.
     """
+    if wait:
+        _wait_for_warm_cache(latest_closed_session(now or datetime.now(timezone.utc)))
+
     from engine import cache, price_history
 
     try:
@@ -396,7 +403,9 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     positions = executor.current_positions(trading_client)
     equity = account["equity"]
     _log(f"  equity ${equity:,.2f} · cash ${account['cash']:,.2f} · {len(positions)} positions")
-    _log_price_freshness(today, now)
+    # Only the live after-close run waits: the pre-market run lands hours after
+    # warm-cache, and a manual dry run must not sit for 40 minutes.
+    _log_price_freshness(today, now, wait=not (dry_run or pre_market))
     _sync_fills(strategy, trading_client, dry_run=dry_run)
     _check_unapplied_splits(strategy, run_id, config, today, dry_run=dry_run)
 

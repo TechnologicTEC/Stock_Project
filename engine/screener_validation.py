@@ -467,6 +467,29 @@ def ticker_points_cache_key(ticker: str, start: date, end: date, *, step_days: i
             f"{step_days}:{horizon_days}:{int(bool(include_news))}:{int(bool(include_analyst))}")
 
 
+def prune_ticker_points(start: date, end: date) -> int:
+    """Delete cached per-ticker points for every window except [start, end].
+    Returns how many rows went.
+
+    Each monthly run pins a new window (pinned_window), and the previous
+    windows' points are never read again — 503 rows a month (~8 MB of JSON,
+    ~2 MB on disk compressed; 1,509 dead rows by Oct 2026). Called only after a run has saved
+    its result, so a run that was killed half way keeps everything it needs to
+    resume.
+    """
+    from sqlalchemy import delete
+
+    from db.models import ApiCache
+    from db.session import get_session
+
+    keep = f":{start.isoformat()}:{end.isoformat()}:"
+    with get_session() as session:
+        result = session.execute(delete(ApiCache).where(
+            ApiCache.cache_key.like("wf_points:%"),
+            ~ApiCache.cache_key.contains(keep)))
+        return result.rowcount or 0
+
+
 def _cached_walk_forward(ticker: str, start: date, end: date, *, step_days: int,
                          horizon_days: int, include_news: bool, include_analyst: bool) -> list[dict]:
     """walk_forward, memoized in the shared cache. Dates round-trip as ISO strings

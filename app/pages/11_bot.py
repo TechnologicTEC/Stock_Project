@@ -48,7 +48,10 @@ init_db()
 gate("bot")          # restricted: not in GUEST_PAGES, so guests are stopped here
 
 BENCHMARK_LABEL = "SPY buy & hold"
-CRON_HOUR_UTC, CRON_MINUTE_UTC = 21, 45      # must match .github/workflows/trade-bot.yml
+# Both runs in .github/workflows/trade-bot.yml, as (hour, minute, weekdays) in
+# UTC with Monday = 0. Must match the two cron lines; a test checks they do.
+AFTER_CLOSE_RUN = (21, 45, (6, 0, 1, 2, 3))   # "45 21 * * 0-4": Sun-Thu
+PRE_MARKET_RUN = (4, 30, (0, 1, 2, 3, 4))     # "30 4 * * 1-5": Mon-Fri
 JOURNAL_LIMIT = 400                          # per strategy, for the trade count and reasons
 
 
@@ -119,15 +122,23 @@ def _sparkline(values: list[float], *, color: str, dashed: bool = False) -> str:
     )
 
 
-def _next_scheduled_run(now: datetime) -> datetime:
-    """The next weekday 21:45 UTC — the cron in trade-bot.yml, computed rather
-    than hardcoded as a sentence so it can't drift out of date on the page."""
-    target = now.replace(hour=CRON_HOUR_UTC, minute=CRON_MINUTE_UTC, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    while target.weekday() >= 5:                      # Sat/Sun roll to Monday
-        target += timedelta(days=1)
-    return target
+def _next_scheduled_run(now: datetime) -> tuple[datetime, str]:
+    """The next scheduled run after `now` and which one it is — computed from
+    the two crons in trade-bot.yml rather than written as a sentence, so it
+    can't drift out of date on the page. This used to assume one run on
+    weekdays; the after-close run is Sunday-Thursday (UTC) and there is a
+    pre-market run Monday-Friday."""
+    best = None
+    for (hour, minute, days), kind in ((AFTER_CLOSE_RUN, "after-close run"),
+                                       (PRE_MARKET_RUN, "pre-market run")):
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        while target.weekday() not in days:
+            target += timedelta(days=1)
+        if best is None or target < best[0]:
+            best = (target, kind)
+    return best
 
 
 _STATUS_BADGE = {
@@ -400,6 +411,7 @@ else:
     switch_note = (f"<code>{risk.TRADING_ENABLED_VAR}</code> is not <code>true</code> here, so no "
                    "order would be placed from this environment.")
 
+_next_run = _next_scheduled_run(now)
 killed = [r["label"] for r in rows if r["config"].get("killed")]
 disabled = [r["label"] for r in rows if not r["config"].get("enabled")]
 
@@ -413,8 +425,10 @@ _theme.panel(
     f'<tr><td class="dim">Last decision</td><td class="val">'
     f'{_esc(last_decided.strftime("%d %b %H:%M UTC")) if last_decided else "never"}</td></tr>'
     f'<tr><td class="dim">Next scheduled run</td><td class="val">'
-    f'{_next_scheduled_run(now).strftime("%d %b %H:%M UTC")} '
-    f'<span class="dim">· weekdays, 15 min after the warm-cache job</span></td></tr>'
+    f'{_next_run[0].strftime("%d %b %H:%M UTC")} '
+    f'<span class="dim">· the {_next_run[1]} · GitHub usually starts it 2–5 h late '
+    "(the pre-market one up to 10 h), and the after-close run waits for the nightly "
+    "price refresh</span></td></tr>"
     f'<tr><td class="dim">Global switch</td><td>{switch_html} '
     f'<span class="dim">{switch_note}</span></td></tr>'
     "</tbody></table>",
@@ -793,10 +807,11 @@ for tab, r in zip(tabs, tab_rows):
                     "the database and is unaffected.</p>"
                     + ('<p class="cp-foot"><b>Ordered</b> marks a buy from the latest run, which '
                        "no account snapshot has confirmed yet — the run writes its snapshot "
-                       "after submitting and before anything can fill. The bot places its "
-                       "orders after the close, so they normally sit until the next open. "
-                       "They are not counted as holdings above; the next run settles it."
-                       "</p>" if pending_rows else "")
+                       "after submitting and before anything can fill. An order from the "
+                       "after-close run waits for the next open; one from the pre-market run "
+                       "fills at the open, or straight away if GitHub started that run after "
+                       "the bell. They are not counted as holdings above; the next run "
+                       "settles it.</p>" if pending_rows else "")
                     + f'<p class="cp-foot">{_esc(view["error"])}</p>')
 
             _theme.panel("Open positions", _positions_table(enriched) + footer, tag=tag)
@@ -851,21 +866,28 @@ for tab, r in zip(tabs, tab_rows):
         # 250th day of reading the same tab. Gathered here so the tab is numbers
         # by default and an explanation on request.
         with st.expander("How this strategy works"):
+            # Counted, not written: "all six" outlived the retired SPY harness.
+            n_trading = sum(1 for c in configs if c.get("enabled"))
             st.markdown(
-                f"**Sizing.** Every position is `equity × min(1/{slots}, "
-                f"{(cfg.get('max_position_pct') or 1.0):.0%})`, so it grows with the account "
-                "instead of being pinned to a dollar figure. The same rule runs on all six "
-                "strategies on purpose — these curves are meant to test the *signals*, not six "
-                "different sizing schemes.\n\n"
-                f"**Unfilled slots stay in cash.** {held_now} of {slots} are working; the rest "
-                "isn't idle by accident, it's the strategy declining to buy something it doesn't "
-                "rate.\n\n"
+                f"**Sizing.** A new position is `equity × {1 - risk.CASH_CUSHION:.0%} × "
+                f"min(1/{slots}, {(cfg.get('max_position_pct') or 1.0):.0%})` — "
+                f"{_tidy_pct(risk.CASH_CUSHION)} of the account is kept as cash — so it grows "
+                "with the account instead of being pinned to a dollar figure. The same rule "
+                f"runs on all {n_trading} trading strategies on purpose — these curves are meant "
+                "to test the *signals*, not different sizing schemes.\n\n"
+                f"**Unfilled slots stay in cash.** {held_now} of {slots} are working. A slot "
+                "stays empty for one of two reasons, and the journal below says which: nothing "
+                "qualifies (the strategy declining to buy something it doesn't rate), or a name "
+                "qualifies but the cash for the whole position isn't there yet — it is never "
+                "bought in part, and waits for a sale to free the money.\n\n"
                 "**The chart.** Every tab uses the same y-axis convention — framed on the data, "
                 "not on zero — so flipping between tabs is a fair visual comparison. It answers a "
                 "different question from the chart at the top of the page: not *which is ahead* "
                 "but *how this one got here* — a steady grind or one lucky week, and where the "
                 "drawdown actually happened.\n\n"
-                "**Holdings.** Value, P&L and today's move come from the broker. The company "
+                "**Holdings.** Value, P&L and today's move come from the broker where its keys "
+                "are available; otherwise the book is rebuilt from the journal and priced at the "
+                "last cached close, and the panel says so. The company "
                 "name, score and rank come from the cached S&P ranking the bot trades off, so "
                 "the score you see is the one it will act on next run. *Held* counts from the "
                 "first buy of the current holding — a name bought, sold and bought again dates "

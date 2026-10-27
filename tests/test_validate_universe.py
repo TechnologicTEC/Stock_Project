@@ -62,3 +62,25 @@ def test_an_unknown_universe_stops_the_run(walked, monkeypatch):
     with pytest.raises(ValueError):
         validate_universe.main()
     assert walked == []
+
+
+
+def test_prune_ticker_points_keeps_only_the_current_window():
+    """Each monthly run pins a new five-year window, and the old windows' points
+    were never read again: 1,509 dead rows by Oct 2026, ~2 MB more each month."""
+    from datetime import date
+
+    from engine import cache
+    from engine import screener_validation as sv
+
+    old = sv.ticker_points_cache_key("AAA", date(2021, 4, 14), date(2026, 4, 13), step_days=30,
+                                     horizon_days=91, include_news=False, include_analyst=False)
+    new = sv.ticker_points_cache_key("AAA", date(2021, 6, 30), date(2026, 6, 29), step_days=30,
+                                     horizon_days=91, include_news=False, include_analyst=False)
+    cache.set_value(old, [])
+    cache.set_value(new, [])
+    cache.set_value("leaderboard:sp500", {"rows": []})
+    assert sv.prune_ticker_points(date(2021, 6, 30), date(2026, 6, 29)) == 1
+    assert cache.get_value(old) is None
+    assert cache.get_value(new) == []
+    assert cache.get_value("leaderboard:sp500") is not None

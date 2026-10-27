@@ -69,6 +69,19 @@ def _note(title: str, message: str, tag: str | None = None) -> None:
     _theme.panel(title, f'<p class="cp-note">{message}</p>', tag=tag)
 
 
+def _held(name: str, view: dict) -> set[str]:
+    """What the strategy holds: the broker's list where the keys are in the
+    environment, else the journal's. The deployed Space holds no bot keys, so
+    reading the broker alone left every panel there believing the book was
+    empty — the Strong Buy panel said all 30 slots were free and queued names
+    it already held."""
+    from engine.bot import positions as bot_positions
+
+    if view.get("available"):
+        return {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+    return set(bot_positions.book_from_fills(_cache.bot_fills(name)))
+
+
 def render(name: str, cfg: dict, view: dict) -> None:
     """Draw the panel for `name`, if it has one. Never raises."""
     fn = _PANELS.get(name)
@@ -186,7 +199,7 @@ def _composite(cfg: dict, view: dict) -> None:
         return
 
     ranked = sorted(rows, key=lambda r: r.get("rank") or 10 ** 9)
-    held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+    held = _held("composite_rebalance", view)
     slots = int(cfg.get("target_slots") or comp.TARGET_RANK)
 
     _theme.panel(
@@ -213,7 +226,7 @@ def _score_threshold(cfg: dict, view: dict) -> None:
         _note("Scores", _esc(error) if error else "No leaderboard cached.", tag="unavailable")
         return
 
-    held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+    held = _held("score_threshold", view)
     slots = int(cfg.get("target_slots") or 30)
     scored = [r for r in rows if r.get("score") is not None]
     above = sorted((r for r in scored if float(r["score"]) >= thr.ENTRY_SCORE),
@@ -274,7 +287,6 @@ _SKIP_LABEL = {
 
 def _creator(cfg: dict, view: dict) -> None:
     from engine.bot import liquidity, risk
-    from engine.bot import positions as bot_positions
     from engine.bot.strategies import creator_conviction as cc
 
     board = _cache.bot_creator_mentions()
@@ -289,13 +301,7 @@ def _creator(cfg: dict, view: dict) -> None:
     newest = max((e["last_seen"] for e in board if e.get("last_seen")), default=None)
     silence = (today - newest.date()).days if newest else None
 
-    # What's held: the broker's list where the keys are in the environment, else
-    # the journal's. The deployed Space holds no bot keys, so without the
-    # fallback nothing would ever show as held and no clock would be drawn.
-    if view.get("available"):
-        held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
-    else:
-        held = set(bot_positions.book_from_fills(_cache.bot_fills("creator_conviction")))
+    held = _held("creator_conviction", view)
 
     opened, history = _cache.bot_creator_clock_inputs()
     by_ticker = {(e.get("ticker") or "").upper(): e for e in board}

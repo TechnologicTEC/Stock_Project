@@ -636,6 +636,39 @@ def test_the_threshold_panel_shows_who_is_queued_above_the_entry():
     assert "waiting for a slot" in _page_text(at)
 
 
+def _keyless_fills(*tickers):
+    """Journal buys for a keyless environment (the deployed Space): the panels
+    must read what is held from these, since there is no broker list."""
+    return [{"ticker": t, "decided_at": datetime(2026, 9, 1, 21, 45), "action": journal.BUY,
+             "qty": None, "notional": 500.0, "filled_qty": 5.0, "filled_avg_price": 100.0,
+             "reason": "Score crossed the entry.", "status": journal.FILLED} for t in tickers]
+
+
+def test_the_threshold_panel_sees_holdings_without_broker_keys():
+    """On the Space the broker list is empty. Reading only it, the panel said all
+    20 slots were free and queued names the bot already held."""
+    at = _run(configs=[_config("score_threshold", target_slots=20)],
+              view=_account_view(available=False), fills=_keyless_fills("T01", "T02"))
+    text = _page_text(at)
+    assert "<b>18</b> of 20 slots free" in _body(at)
+    waiting = text.split("waiting for a slot", 1)[1].split("names clear", 1)[0]
+    assert "T01" not in waiting and "T03" in waiting
+
+
+def test_the_threshold_panel_shows_the_hold_band_without_broker_keys():
+    rows = _leaderboard()["rows"] + [{"ticker": "MID", "name": "Mid", "rank": 99, "score": 72.0}]
+    at = _run(configs=[_config("score_threshold", target_slots=20)],
+              view=_account_view(available=False), fills=_keyless_fills("MID"),
+              leaderboard={"rows": rows})
+    assert "In the hold band" in _page_text(at)
+
+
+def test_the_composite_panel_marks_holdings_without_broker_keys():
+    at = _run(configs=[_config("composite_rebalance", target_slots=15)],
+              view=_account_view(available=False), fills=_keyless_fills("T01"))
+    assert "held" in _body(at).split("T01", 1)[1][:120]
+
+
 def test_a_panel_that_cannot_load_its_data_does_not_break_the_tab():
     """These are illustrations. The numbers above them come from the database
     and must survive a cold cache or a stale ranking."""
@@ -877,3 +910,48 @@ def test_every_reason_the_screen_can_give_has_a_label():
     codes = {liquidity.PENNY, liquidity.ILLIQUID, liquidity.UNMEASURED,
              liquidity.THIN_HISTORY, liquidity.PARTICIPATION}
     assert codes <= set(_bot_panels._SKIP_LABEL)
+
+
+
+def _next_run(now):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bot_page_for_schedule", PAGE_PATH)
+    src = Path(PAGE_PATH).read_text(encoding="utf-8")
+    # Only the schedule helpers: executing the whole page would render it.
+    start = src.index("# Both runs in .github/workflows/trade-bot.yml")
+    end = src.index("_STATUS_BADGE = {")
+    head = src[start:end]
+    ns = {"datetime": datetime, "timedelta": timedelta}
+    exec(head[:head.index("def _sparkline")] + head[head.index("def _next_scheduled_run"):], ns)
+    return ns["_next_scheduled_run"](now)
+
+
+@pytest.mark.parametrize("now, expected, kind", [
+    # Friday after the pre-market run: no Friday after-close run, no Saturday
+    # runs; the next is SUNDAY 21:45 (the old code said Monday 21:45).
+    (datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc),
+     datetime(2026, 11, 1, 21, 45, tzinfo=timezone.utc), "after-close run"),
+    # Tuesday morning UTC: the pre-market run comes before the evening one.
+    (datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc),
+     datetime(2026, 10, 27, 4, 30, tzinfo=timezone.utc), "pre-market run"),
+    # Tuesday afternoon UTC: that evening's after-close run.
+    (datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc),
+     datetime(2026, 10, 27, 21, 45, tzinfo=timezone.utc), "after-close run"),
+    # Thursday night after 21:45: Friday's pre-market run.
+    (datetime(2026, 10, 29, 22, 0, tzinfo=timezone.utc),
+     datetime(2026, 10, 30, 4, 30, tzinfo=timezone.utc), "pre-market run"),
+])
+def test_next_scheduled_run_follows_both_crons(now, expected, kind):
+    assert _next_run(now) == (expected, kind)
+
+
+
+def test_how_it_works_states_the_cash_cushion_and_counts_trading_strategies():
+    """It said `equity x min(1/slots, cap)` — leaving out the 5% kept as cash —
+    and "all six strategies" after one was retired."""
+    at = _run(configs=[_config("score_threshold", target_slots=30, max_position_pct=0.2),
+                       _config("spy_harness", enabled=False)])
+    text = _page_text(at)
+    assert "equity × 95% × min(1/30, 20%)" in text
+    assert "all 1 trading strategies" in text or "all 1 trading" in text
+    assert "cash for the whole position" in text

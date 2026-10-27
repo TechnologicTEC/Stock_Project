@@ -339,6 +339,70 @@ def test_a_failing_freshness_check_never_breaks_the_run():
 
 
 # --------------------------------------------------------------------------
+# Waiting for warm-cache. On 30 Sep, 2 Oct, 13 Oct and 23 Oct the bot started
+# before warm-cache had finished (both are scheduled 15 minutes apart and GitHub
+# starts both hours late), and decided on the previous day's closes. The fix
+# waits for the marker warm-cache writes when it finishes — the value itself,
+# not the schedule that was meant to imply it.
+# --------------------------------------------------------------------------
+
+def _wait(marker_sessions, *, session=date(2026, 9, 1), timeout_minutes=3):
+    """Drive _wait_for_warm_cache with the marker read returning each item of
+    `marker_sessions` in turn (None = never written). Returns (waited, log, sleeps)."""
+    reads = iter(marker_sessions)
+    lines, sleeps = [], []
+
+    def _get(key, ttl_seconds=None):
+        value = next(reads, marker_sessions[-1] if marker_sessions else None)
+        return None if value is None else {"session": value.isoformat()}
+
+    with patch("engine.cache.get_value", _get), patch.object(run_bot, "_log", lines.append):
+        waited = run_bot._wait_for_warm_cache(session, timeout_minutes=timeout_minutes,
+                                              sleep=sleeps.append)
+    return waited, " ".join(lines), sleeps
+
+
+def test_no_wait_when_warm_cache_has_already_finished_the_session():
+    waited, out, sleeps = _wait([date(2026, 9, 1)])
+    assert waited is True and sleeps == []
+
+
+def test_it_waits_until_warm_cache_marks_the_session_done():
+    waited, out, sleeps = _wait([date(2026, 8, 31), date(2026, 8, 31), date(2026, 9, 1)])
+    assert waited is True and len(sleeps) == 2
+    assert "warm-cache finished" in out
+
+
+def test_it_goes_ahead_after_the_timeout_and_says_so():
+    """A failed warm-cache must not stop the bot trading — it only costs fresh closes."""
+    waited, out, sleeps = _wait([None], timeout_minutes=3)
+    assert waited is False and len(sleeps) == 3
+    assert "going ahead" in out
+
+
+def test_an_unreadable_marker_never_breaks_the_run():
+    lines = []
+    with patch("engine.cache.get_value", side_effect=RuntimeError("pooler down")),          patch.object(run_bot, "_log", lines.append):
+        assert run_bot._wait_for_warm_cache(date(2026, 9, 1), sleep=lambda s: None) is False
+
+
+@pytest.mark.parametrize("dry_run, pre_market, waits", [
+    (False, False, True),      # the morning run — the one that raced warm-cache
+    (False, True, False),      # pre-market: warm-cache finished hours earlier
+    (True, False, False),      # a manual rehearsal must not sit for 40 minutes
+])
+def test_only_the_live_after_close_run_waits(recorded, dry_run, pre_market, waits):
+    seen = []
+    with patch.object(run_bot, "_log_price_freshness",
+                      lambda *a, **k: seen.append(k.get("wait"))):
+        client = _Client()
+        with patch.object(run_bot.accounts, "clients_for", return_value=(client, None)),              patch.object(run_bot.accounts, "assert_paper", lambda _c: None),              patch.object(run_bot.strategies, "prepare", return_value={}),              patch.object(run_bot.strategies, "build", return_value=[]),              patch.object(run_bot.strategies, "notes", return_value=[]),              patch.object(run_bot, "_check_unapplied_splits", lambda *a, **k: None),              patch.object(run_bot, "_sync_official_equity", lambda *a, **k: None):
+            run_bot.run("spy_harness", dry_run=dry_run, pre_market=pre_market,
+                        now=_utc(date(2026, 9, 1), 22))
+    assert seen == [waits]
+
+
+# --------------------------------------------------------------------------
 # Freshness across the weekend.
 #
 # The schedule moved from Mon-Fri UTC to Sun-Thu, so the bot now runs on a day
@@ -852,3 +916,26 @@ def test_the_saturday_cron_is_the_one_that_screens_the_sp400():
     picked = re.search(r"github\.event\.schedule == '([^']+)' && 'sp400'", text).group(1)
     assert picked in crons and picked.split()[-1] == "6"
     assert len(crons) == 2 and picked != crons[0]
+
+
+
+def test_the_bot_page_schedule_matches_both_crons():
+    """The page computes "next scheduled run" from its own copy of the two
+    schedules; it used to assume Mon-Fri at 21:45 and missed the pre-market run."""
+    import importlib.util
+    import re
+
+    text = (Path(__file__).resolve().parent.parent
+            / ".github" / "workflows" / "trade-bot.yml").read_text(encoding="utf-8")
+    crons = set(re.findall(r'^\s*-\s*cron:\s*"([^"]+)"', text, re.MULTILINE))
+    page = (Path(__file__).resolve().parent.parent / "app" / "pages" / "11_bot.py").read_text(
+        encoding="utf-8")
+
+    def cron_of(name):
+        hour, minute, days = re.search(rf"{name} = \((\d+), (\d+), \(([^)]*)\)\)", page).groups()
+        cron_days = sorted((int(d) + 1) % 7 for d in days.split(","))   # Mon=0 -> cron Mon=1
+        lo, hi = cron_days[0], cron_days[-1]
+        assert cron_days == list(range(lo, hi + 1)), cron_days
+        return f"{int(minute)} {int(hour)} * * {lo}-{hi}"
+
+    assert {cron_of("AFTER_CLOSE_RUN"), cron_of("PRE_MARKET_RUN")} == crons

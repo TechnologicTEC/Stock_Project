@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -465,14 +466,16 @@ hr {{ border-color: var(--cp-line-soft); margin: 1.4rem 0; }}
 _RATING_CLASS = {"Strong Buy": "sb", "Buy": "b", "Hold": "h", "Sell": "s", "Strong Sell": "s"}
 
 
+_NEW_YORK = ZoneInfo("America/New_York")
+
+
 def _us_market_open(now: datetime | None = None) -> bool:
-    """Rough US regular-session check (weekday, ~13:30–20:00 UTC ≈ 9:30–16:00 ET).
-    Ignores holidays and DST edges — it drives a status dot, not a trade."""
-    now = now or datetime.now(timezone.utc)
-    if now.weekday() >= 5:
-        return False
-    minutes = now.hour * 60 + now.minute
-    return 13 * 60 + 30 <= minutes < 20 * 60
+    """US regular session: a weekday, 9:30-16:00 in New York. Read in New York
+    time so daylight saving moves it — it was fixed at 13:30-20:00 UTC, an hour
+    off for the five months of EST. Ignores holidays — it drives a status dot,
+    not a trade."""
+    local = (now or datetime.now(timezone.utc)).astimezone(_NEW_YORK)
+    return local.weekday() < 5 and time(9, 30) <= local.time() < time(16, 0)
 
 
 def top_bar(email: str | None = None, role: str | None = None) -> None:

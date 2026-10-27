@@ -15,8 +15,9 @@ across all five strategies, so it cannot distort the comparison between them —
 but it also gives every fill a reference price that is knowable in advance. This
 script checks the fills against it.
 
-One run breaks that, and it is not a bug in the fill: the 08:30 UTC pre-market
-run has been starting 4.5 to 6.75 hours late (GitHub queues scheduled jobs), so
+One run breaks that, and it is not a bug in the fill: the pre-market run (an
+08:30 UTC cron until 27 Oct 2026, 04:30 since) has started 4.5 to 10 hours late
+(GitHub queues scheduled jobs), so
 four of five morning runs in the week to 24 Sep landed AFTER the New York open
 and filled mid-session. AMD came in 3.16% above the open that way. Measured
 against the open those read as terrible fills; measured against the price when
@@ -154,7 +155,7 @@ def placed_in_session(decided_at: datetime | None, fill_day: date_) -> datetime 
     session it filled in — else None.
 
     The bot means to place orders outside the session so they queue for the
-    open. One placed after the bell is a late run (the 08:30 UTC run has
+    open. One placed after the bell is a late run (the pre-market run has
     landed hours late, after the open) or a manual daytime run, and filling
     mid-session is then exactly what should happen. Saying so on the line
     replaces checking the run's start time by hand.

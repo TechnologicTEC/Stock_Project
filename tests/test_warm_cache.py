@@ -168,3 +168,17 @@ def test_a_failing_prune_never_fails_the_job(capsys):
                                          side_effect=RuntimeError("locked")))
         warm_cache.main()                                   # must not raise
     assert "news prune FAILED: RuntimeError: locked" in capsys.readouterr().out
+
+
+def test_main_marks_the_session_done_when_it_finishes():
+    """The bot waits for this marker rather than trusting the 15 minutes the
+    schedule puts between the two jobs."""
+    from datetime import datetime, timezone
+
+    from engine.time_utils import latest_closed_session
+
+    with ExitStack() as stack:
+        _common(stack, news_warm=False)
+        warm_cache.main()
+    marker = warm_cache.cache.get_value(warm_cache.cache.WARM_DONE_KEY)
+    assert marker["session"] == latest_closed_session(datetime.now(timezone.utc)).isoformat()

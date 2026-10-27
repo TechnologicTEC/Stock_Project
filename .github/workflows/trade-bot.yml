@@ -44,26 +44,32 @@ on:
     # would have, with a better ranking and two fewer days in flight.
     #
     # In NZ (UTC+12/13) this reads as weekday mornings, Mon-Fri, instead of
-    # Tue-Sat. Runs land ~100-120 min late in practice, so ~11:30 NZ.
+    # Tue-Sat. GitHub starts it late: across 28 Sep-27 Oct it began between
+    # 23:34 and 02:50 UTC (2-5 hours late), so ~1-4pm NZ. Warm-cache is just as
+    # late and the two used to race; run_bot now waits for warm-cache's
+    # "done" marker (run_bot._wait_for_warm_cache) instead of trusting the
+    # 15 minutes between their schedules.
     - cron: "45 21 * * 0-4"
 
-    # 08:30 UTC, MONDAY THROUGH FRIDAY — the PRE-MARKET run, NZ evenings.
+    # 04:30 UTC, MONDAY THROUGH FRIDAY — the PRE-MARKET run, NZ evenings.
     #
-    # The morning run lands ~11:30 NZ, but creator videos are scanned later
-    # than that: across the last twenty, our scan processed them between 00:02
-    # and 08:12 UTC (12:00-20:12 NZ). So a mention found in the NZ afternoon
-    # waited for the NEXT morning's run, whose order filled at the open after
-    # that — two days from video to fill. This run sits between the two: after
-    # the latest scan we have seen land, and before the 13:30 UTC open (14:30
-    # in EST), so that mention fills at the next open instead.
+    # The morning run lands in the NZ afternoon, but creator videos are scanned
+    # later than that, so a mention found then waited for the NEXT morning's
+    # run, whose order filled at the open after that — two days from video to
+    # fill. This run sits between the two: after the scan that picks up the
+    # creator's usual ~00:00-02:00 UTC upload, and before the US open.
     #
-    # 08:30 rather than later because runs land ~2h late. Typical landing is
-    # ~10:30 UTC — three hours before the bell — and even a 5h delay still
-    # clears it. A worse one fills intraday, which check_fills already grades
-    # separately; no worse than not having this run.
+    # It was 08:30 UTC until 27 Oct 2026, chosen on the belief that runs land
+    # ~2h late. They don't: across 28 Sep-27 Oct the 08:30 run began between
+    # 13:25 and 18:06 UTC (5-10 hours late), AFTER the 13:30 UTC open on every
+    # day but one, so its orders filled mid-session rather than at the open.
+    # GitHub's delays here have run 2-10 hours, so 04:30 lands ~06:30-14:30 UTC:
+    # before the 14:30 UTC open in EST (from 2 Nov) even at the worst delay seen,
+    # and before the 13:30 EDT open on all but the worst. One that does land
+    # late fills intraday, which check_fills grades separately.
     #
     # Mon-Fri because each run precedes THAT day's US session. In NZ it is
-    # 20:30 NZST / 21:30 NZDT, landing ~22:30-23:30.
+    # 16:30 NZST / 17:30 NZDT, landing in the evening.
     #
     # It runs with --pre-market (see the `run` step), which trades normally but
     # writes no equity snapshot: no session has closed since the morning run
@@ -73,8 +79,9 @@ on:
     # watermark with >= precisely so a mention cannot fall between two runs.
     #
     # KEEP IN STEP: the `run` step matches this exact string to detect the
-    # pre-market run, and tests/test_bot_runner_journal.py checks the two agree.
-    - cron: "30 8 * * 1-5"
+    # pre-market run, app/pages/11_bot.py computes "next scheduled run" from
+    # both crons, and tests check all three agree.
+    - cron: "30 4 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -105,7 +112,7 @@ concurrency: trade-bot        # never overlap runs
 jobs:
   trade:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60      # up to 40 of it waiting for warm-cache (run_bot._wait_for_warm_cache)
     strategy:
       fail-fast: false        # one strategy's failure must not stop the others
       matrix:
@@ -156,4 +163,4 @@ jobs:
           python scripts/run_bot.py \
             --strategy ${{ matrix.strategy }} \
             ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
-            ${{ (github.event.schedule == '30 8 * * 1-5' || github.event.inputs.pre_market == 'true') && '--pre-market' || '' }}
+            ${{ (github.event.schedule == '30 4 * * 1-5' || github.event.inputs.pre_market == 'true') && '--pre-market' || '' }}

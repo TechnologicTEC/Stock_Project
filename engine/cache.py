@@ -27,7 +27,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any, Callable
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from db.models import ApiCache, FundamentalsCache, NewsCache, PriceCache
 from db.session import get_session
@@ -412,6 +412,33 @@ def prune_news(*, keep_newest: int, keep_days: int, dry_run: bool = False) -> in
         return result.rowcount or 0
 
 
+# api_cache keys that carry their own date (`insider:<ticker>:<start>`,
+# `pricefetch:<ticker>:<source>:<end>`): each day asks for a new key, so a row
+# is dead once its day has passed. Pruned nightly by scripts/warm_cache.py.
+DATED_KEY_PREFIXES = ("insider:", "pricefetch:")
+DATED_KEY_KEEP_DAYS = 30
+
+
+def prune_dated_keys(prefixes=DATED_KEY_PREFIXES, *, older_than_days: int = DATED_KEY_KEEP_DAYS,
+                     dry_run: bool = False) -> int:
+    """Delete api_cache rows under `prefixes` fetched more than `older_than_days`
+    ago. Returns how many were removed (or would be, with `dry_run`).
+
+    Only for keys whose name holds a date: no reader ever asks for an old one
+    again. 30 days is far past their TTLs (20 h for insider data, 6 h for a
+    fetch marker), so nothing live is touched. 9,598 insider rows and 11,792
+    fetch markers had built up by Oct 2026, ~1,000 more a week.
+    """
+    cutoff = _utcnow() - timedelta(days=older_than_days)
+    match = or_(*[ApiCache.cache_key.like(f"{p}%") for p in prefixes])
+    with get_session() as session:
+        if dry_run:
+            return session.execute(select(func.count()).select_from(ApiCache)
+                                   .where(match, ApiCache.fetched_at < cutoff)).scalar_one()
+        result = session.execute(delete(ApiCache).where(match, ApiCache.fetched_at < cutoff))
+        return result.rowcount or 0
+
+
 # --------------------------------------------------------------------------
 # Generic flags - for things like "is this endpoint gated on my current
 # API plan", where re-discovering the answer means wasting a call on
@@ -441,6 +468,14 @@ def set_flag(key: str, value: bool) -> None:
         else:
             row.value_json = payload
             row.fetched_at = _utcnow()
+
+
+# Written by scripts/warm_cache.py when it finishes: {"session": ISO date of the
+# latest closed US session it refreshed, "finished_at": ...}. The bot's morning
+# run waits for it (scripts/run_bot._wait_for_warm_cache) instead of trusting the
+# 15 minutes the schedule puts between the two jobs, which GitHub's start delays
+# routinely erase.
+WARM_DONE_KEY = "warm_cache:done"
 
 
 def get_value(key: str, ttl_seconds: int | None = None) -> Any | None:

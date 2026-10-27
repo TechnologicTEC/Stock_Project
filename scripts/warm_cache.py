@@ -141,6 +141,7 @@ def main() -> None:
 
     spun = adjust_spin_offs(start, end)
     prune_news()
+    mark_done()
 
     news_line = f", news {newsed}/{len(tickers)}" if WARM_NEWS else ""
     print(f"\ndone: prices {priced}/{len(tickers)}, fundamentals {funded}/{len(tickers)}"
@@ -148,17 +149,45 @@ def main() -> None:
           flush=True)
 
 
+def mark_done() -> None:
+    """Tell the bot this session's prices are in (see cache.WARM_DONE_KEY).
+
+    Written last, after every refresh, so "done" means done. Never fails the
+    job: without the marker the bot waits its full timeout and then trades on
+    whatever is cached — slower, not broken."""
+    from datetime import datetime, timezone
+
+    from engine.time_utils import latest_closed_session, utcnow
+
+    try:
+        session = latest_closed_session(datetime.now(timezone.utc))
+        cache.set_value(cache.WARM_DONE_KEY, {"session": session.isoformat(),
+                                              "finished_at": utcnow().isoformat()})
+        print(f"marked session {session} done for the bot", flush=True)
+    except Exception as exc:                 # noqa: BLE001 — never fail the job over this
+        print(f"could not mark the session done: {type(exc).__name__}: {exc}", flush=True)
+
+
 def prune_news() -> None:
-    """Keep news_cache bounded (engine/cache.prune_news). On the free-plan
-    database a table that only grows is a countdown to read-only. Never fails
-    the job: a missed night is caught the next."""
+    """Keep news_cache and the dated api_cache keys bounded (engine/cache.prune_news,
+    cache.prune_dated_keys). On the free-plan database a table that only grows
+    is a countdown to read-only. Never fails the job: a missed night is caught
+    the next."""
     try:
         removed = cache.prune_news(keep_newest=news.NEWS_DISPLAY_LIMIT,
                                    keep_days=NEWS_KEEP_DAYS)
     except Exception as exc:
         print(f"  news prune FAILED: {type(exc).__name__}: {exc}", flush=True)
+    else:
+        print(f"  news prune: {removed} old headline(s) removed", flush=True)
+    # Dated cache keys (insider data, fetch markers) are dead once their day has
+    # passed; see cache.prune_dated_keys.
+    try:
+        dated = cache.prune_dated_keys()
+    except Exception as exc:
+        print(f"  cache prune FAILED: {type(exc).__name__}: {exc}", flush=True)
         return
-    print(f"  news prune: {removed} old headline(s) removed", flush=True)
+    print(f"  cache prune: {dated} expired dated key(s) removed", flush=True)
 
 
 def adjust_spin_offs(start: date, end: date) -> int:

@@ -141,6 +141,9 @@ def main() -> None:
     summary["window_start"] = start.isoformat()
     summary["window_end"] = end.isoformat()
     validation.save_universe_result(summary)
+    # Only now: a killed run must keep the old points it may still resume from.
+    pruned = validation.prune_ticker_points(start, end)
+    print(f"pruned {pruned} cached point set(s) from older windows", flush=True)
 
     overall = summary["overall"]
     print(f"\n{'='*72}")
