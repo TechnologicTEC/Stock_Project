@@ -1159,8 +1159,9 @@ def get_score_history(ticker: str) -> list[dict]:
 # --------------------------------------------------------------------------
 
 def leaderboard_key(universe: str = "sp500") -> str:
-    """Where one universe's ranking lives. The S&P 400 has its own (Screener page
-    only), so its weekly run can never overwrite the ranking the bots trade from."""
+    """Where one universe's ranking lives. Each has its own, so the S&P 400's
+    weekly run can never overwrite the S&P 500 ranking (and the other way round);
+    the bots merge the two themselves (screener_common.load_leaderboard)."""
     from engine import universe as universes
 
     if universe not in universes.UNIVERSES:

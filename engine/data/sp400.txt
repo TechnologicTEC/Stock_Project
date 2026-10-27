@@ -1,6 +1,8 @@
 # S&P MidCap 400 constituents — a SECOND universe, screened into its own leaderboard
-# (`leaderboard:sp400`). Not traded: no bot reads it until the score is validated on
-# mid caps (the measured IC, +0.046–0.051, is for the S&P 500 only).
+# (`leaderboard:sp400`). From the November 2026 rebalance the three screener bots
+# trade it merged with the S&P 500 (engine/bot/strategies/screener_common.MERGE_FROM),
+# although its validation found no edge on mid caps (IC +0.015, t=0.72) against
+# +0.046–0.051 on the S&P 500.
 #
 # Snapshot fetched from Wikipedia's List_of_S&P_400_companies (raw wikitext) on
 # 2026-10-26 and COMMITTED deliberately, like engine/data/sp500.txt: a static list makes

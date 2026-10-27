@@ -23,7 +23,8 @@ not.
 `composite_rebalance` enters at rank 15 and only exits past rank 30, because
 without that band a name drifting two points of composite would round-trip. This
 strategy has no such band: the top decile is the book, and a name that leaves it
-at a rebalance is closed.
+at a rebalance is closed. (From the Nov 2026 merge the ranking is ~900 names and
+the book stays at 50 — Tane's call — so it is the top ~5.5%, inside decile 1.)
 
 That is a deliberate difference, not an oversight. The decile boundary *is* the
 experiment — "does the signal hold across the whole decile" is a question about
@@ -37,7 +38,7 @@ keeps that affordable — the churn happens twelve times a year, not daily.
 ## Sizing, and why the cash can go idle
 
 Fifty slots at 2% is $200 a name, and fractional shares make positions that
-small workable. If the leaderboard ever returns fewer than 500 names the decile
+small workable. If the leaderboard ever returns fewer than ~500 names the decile
 shrinks with it, the book gets smaller, and the difference sits in cash rather
 than being spread over the remaining names — the position size is a property of
 the slot count, not of how many names happened to qualify. That keeps the

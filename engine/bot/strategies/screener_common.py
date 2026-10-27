@@ -1,10 +1,10 @@
 """
-What the two screener strategies share: the leaderboard, and the run history.
+What the three screener strategies share: the leaderboard, and the run history.
 
 Composite rebalance, the Strong Buy threshold and top decile read the same cached
 ranking and differ in what they read from it — rank, score, or decile. From the
 first run of November 2026 that ranking is the S&P 500 and the S&P 400 merged by
-score (see MERGE_FROM). Everything up to that point is here, so the two strategy modules
+score (see MERGE_FROM). Everything up to that point is here, so the strategy modules
 contain only the rule that makes them different, and a change to how the
 leaderboard is loaded or aged can't drift between them.
 
@@ -27,9 +27,10 @@ MAX_LEADERBOARD_AGE_DAYS = 14
 # The S&P 400 (mid caps) joins the ranking the bots trade from this date: Tane's
 # call on 27 Oct 2026, to start at the November rebalance. Made knowing the
 # measurement: on the S&P 400 the composite score showed NO edge (IC +0.015,
-# t=0.72, 5 years, 399 names, vs +0.051 / t=2.15 on the S&P 500), and mid caps
-# score higher on average (median ~59 vs ~56), so they take roughly two-thirds of
-# each bot's picks. The paper accounts become the live test of whether that holds.
+# t=0.72, 5 years, 399 names, vs +0.051 / t=2.15 on the S&P 500). The medians are
+# alike (56.5 vs 56.2, first full S&P 400 run, 27 Oct 2026), but mid caps crowd the
+# TOP: 10 of the merged top 15, 29 of the top 50, 12 of the 19 names scoring 75+.
+# The paper accounts become the live test of whether that holds.
 #
 # Merging by score is honest because scoring is ABSOLUTE (fixed curves, never
 # relative to the other names), and the S&P 1500 indices share no names. A
@@ -58,7 +59,7 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     """The cached ranking, or `StrategyDataError` if it's missing or too old.
 
     Refusing is the whole point: an absent leaderboard means every held name
-    looks unrated, and both strategies would read that as "sell everything".
+    looks unrated, and the strategies would read that as "sell everything".
     Same principle as golden_cross — missing data is not a signal.
     """
     from engine import screener
@@ -76,7 +77,7 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     if (payload.get("universe") or "sp500") != "sp500":
         raise StrategyDataError(
             f"The leaderboard in the S&P 500 slot is labelled {payload.get('universe')!r}. "
-            "The bots trade the S&P 500 ranking only; refusing."
+            "That slot must hold the S&P 500 ranking; refusing."
         )
 
     generated = _as_date(payload.get("generated_at"))
@@ -189,7 +190,7 @@ def _as_date(value) -> date_ | None:
 
 
 def prepare(config: dict, today: date_, strategy: str) -> dict:
-    """Everything both strategies need: the ranking, plus their own run history.
+    """Everything the screener strategies need: the ranking, plus their own run history.
 
     The decision history is what makes the cadence and the minimum hold
     computable without any extra state table — the journal already records every

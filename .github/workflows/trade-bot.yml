@@ -35,7 +35,8 @@ on:
     #   Sunday 21:45 UTC   fills Mon open, 1 day  queued, leaderboard ~6h old
     #
     # The S&P 500 leaderboard is rebuilt weekly at Sunday 13:10 UTC and takes
-    # 1.5-3h, so a Sunday-evening run is the first one that can act on it. The
+    # 1.5-3h, so a Sunday-evening run is the first one that can act on it (the
+    # S&P 400 one, merged in from Nov 2026, is rebuilt the day before). The
     # old Friday run read a ranking from the PREVIOUS Sunday and was the
     # staleest of the week; now the freshest ranking feeds the run whose orders
     # open the trading week. Friday's closes are not skipped — they are still

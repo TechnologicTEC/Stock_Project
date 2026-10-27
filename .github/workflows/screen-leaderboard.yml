@@ -1,8 +1,9 @@
 name: S&P 500 + S&P 400 leaderboards (live screen, weekly)
 
-# Runs the LIVE screener across the whole S&P 500 and caches the ranked result,
-# so the Screener page can show "highest-scoring names right now" without a
-# 500-stock screen on a page request. All six factors, including FinBERT news
+# Runs the LIVE screener across the whole S&P 500 (Sundays) or S&P 400 (Saturdays)
+# and caches each ranked result, so the Screener page can show "highest-scoring
+# names right now" without a 500-stock screen on a page request, and the three
+# screener bots can trade them (merged from Nov 2026, screener_common.MERGE_FROM). All six factors, including FinBERT news
 # sentiment and Finnhub analyst consensus (both work from a datacenter — it's
 # only their HISTORICAL sources that are blocked, which is validate-universe's
 # problem, not this one). See scripts/screen_universe.py.
@@ -31,9 +32,9 @@ on:
     # the 4pm ET close is ~08:00 NZ, i.e. NZ morning. Verified against
     # Pacific/Auckland + America/New_York for both NZ offsets.
     - cron: "10 13 * * 0"
-    # The S&P 400 (mid caps), its own leaderboard for the Screener page only —
-    # no bot reads it. Saturday 13:10 UTC = Sunday 02:10 NZDT, on the same Friday
-    # close. Same concurrency group, so it never overlaps the S&P 500 run: the
+    # The S&P 400 (mid caps), its own leaderboard; the bots merge it with the
+    # S&P 500 from the Nov 2026 rebalance. Saturday 13:10 UTC = Sunday 02:10 NZDT,
+    # on the same Friday close, a day before the Sunday-evening bot run reads it. Same concurrency group, so it never overlaps the S&P 500 run: the
     # two would share Finnhub's 60 calls/min. The step below picks the universe
     # from github.event.schedule, never the clock (runs land hours late).
     - cron: "10 13 * * 6"
@@ -44,7 +45,7 @@ on:
         required: false
         default: "sp500"
       universe_every:
-        description: "Take every Nth name (1 = all ~500, 5 = a ~100-name sample for a quick test)"
+        description: "Take every Nth name (1 = the whole list, 5 = a fifth for a quick test; a sample is never merged into the bots' ranking)"
         required: false
         default: "1"
 

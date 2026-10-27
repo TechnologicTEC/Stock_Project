@@ -100,7 +100,8 @@ SEED: list[dict] = [
     {
         "strategy": "top_decile_long",
         "key_env_prefix": "ALPACA_TOP_DECILE_LONG",
-        # A decile of the 503-name leaderboard. Not a coincidence that it is
+        # A decile of the 503-name S&P 500 leaderboard; kept at 50 when the
+        # S&P 400 is merged in (Nov 2026), so then the top ~5.5%. Not a coincidence that it is
         # also the largest book of the five — the point of this strategy is
         # breadth, so the slot count IS the hypothesis.
         "target_slots": 50,

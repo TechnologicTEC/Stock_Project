@@ -149,7 +149,8 @@ def bot_account_view(key_env_prefix: str) -> dict:
 
 @st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def bot_leaderboard() -> dict:
-    """The cached S&P 500 ranking the screener strategies trade off.
+    """The ranking the screener strategies trade off (S&P 500, merged with the
+    S&P 400 from screener_common.MERGE_FROM).
 
     Read through the strategies' own loader rather than the screener's, so the
     page shows exactly what the bot would act on — including refusing a ranking

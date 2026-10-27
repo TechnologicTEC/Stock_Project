@@ -12,9 +12,10 @@ a validation run should be reproducible, and the batch job shouldn't depend on
 scraping Wikipedia at 3am.
 
 There is a second universe, the S&P MidCap 400 (engine/data/sp400.txt), screened
-into its own leaderboard for the Screener page. Nothing trades it: the bots read
-the S&P 500 leaderboard only, and the score has been validated on the S&P 500
-only. Every function here defaults to "sp500", so existing callers are unchanged.
+into its own leaderboard. From the November 2026 rebalance the screener bots trade
+it merged with the S&P 500 (screener_common.MERGE_FROM); the score's measured edge
+is on the S&P 500 only. Every function here defaults to "sp500", so existing
+callers are unchanged.
 
 Honest caveat, repeated from the data file because it matters: this is TODAY's
 index, so it carries **survivorship bias** — the companies that failed out of it

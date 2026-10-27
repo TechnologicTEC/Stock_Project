@@ -40,7 +40,7 @@ code · **649 tests** · 4 scheduled GitHub Actions
 | Page | What it's for |
 |---|---|
 | **Portfolio** | Holdings, valuation, allocation, cash, transactions, CSV import, value-over-time, USD/NZD |
-| **Screener** | Explainable 6-factor score (valuation, growth, profitability, momentum, sentiment, analyst) → Strong Buy…Strong Sell, with per-factor reasons and sector-adjusted thresholds — plus a weekly ranked **S&P 500 leaderboard** |
+| **Screener** | Explainable 6-factor score (valuation, growth, profitability, momentum, sentiment, analyst) → Strong Buy…Strong Sell, with per-factor reasons and sector-adjusted thresholds — plus weekly ranked **S&P 500 and S&P 400 leaderboards** (the S&P 400 merged into the screener bots from Nov 2026) |
 | **Validation** | Walk-forward backtest that reconstructs each past score point-in-time and measures its information coefficient — with error bars, effective sample size, and multiple-comparison correction |
 | **Health** | Beta, Sharpe, drawdown, concentration, rule-based flags |
 | **Projections** | Monte Carlo ranges — explicitly not forecasts |

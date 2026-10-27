@@ -60,8 +60,8 @@ def _bots_line(before: str, after: str) -> str:
     return after if _bots_trade_sp400() else before
 
 
-# Which leaderboards each view shows. The S&P 500 is the one the bots trade and
-# the one the score was validated on; the S&P 400 (mid caps) is shown here only.
+# Which leaderboards each view shows. The score's measured edge is on the S&P 500;
+# the bots trade both merged from screener_common.MERGE_FROM ("Both" is that merge).
 _LB_VIEWS = {"S&P 500": ("sp500",), "S&P 400": ("sp400",), "Both": ("sp500", "sp400")}
 
 

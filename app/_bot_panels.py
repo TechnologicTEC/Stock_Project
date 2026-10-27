@@ -195,7 +195,7 @@ def _composite(cfg: dict, view: dict) -> None:
         + f'<p class="cp-note">Names enter at rank {slots} or better and are only sold once '
           f'they fall past rank {comp.EXIT_RANK} — the dimmed rows are that buffer. Without it '
           "a name drifting a point or two of composite would round-trip every month. "
-          "Rebalanced monthly, matching the 30-day horizon the ranking's skill was measured at."
+          "Rebalanced monthly — the ranking's skill was measured on 3-month returns, re-scored about monthly."
           "</p>",
         tag=f"{len(ranked)} ranked",
     )

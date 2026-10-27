@@ -24,8 +24,9 @@ Run:
 
 Env knobs (optional): UNIVERSE_EVERY (every Nth name), UNIVERSE_SIZE (cap),
 SCREEN_UNIVERSE (`sp500`, the default, or `sp400`). The S&P 400 run is saved to
-its own leaderboard (`leaderboard:sp400`) for the Screener page; the bots read
-the S&P 500 one only, so this run can't change what they trade.
+its own leaderboard (`leaderboard:sp400`). From the Nov 2026 rebalance the bots
+merge it with the S&P 500 one — but only a COMPLETE run: a UNIVERSE_EVERY sample
+or an interrupted run is refused (screener_common.MIN_MERGE_COVERAGE).
 
 REPAIR MODE. `SCREEN_TICKERS=AAA,BBB` rescreens just those names and splices
 them into the EXISTING leaderboard instead of rebuilding it. Use it when a run
