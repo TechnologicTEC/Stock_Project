@@ -48,6 +48,18 @@ def _add_to_watchlist_button(column, ticker: str, watched: set[str], key: str) -
         st.rerun()
 
 
+def _bots_trade_sp400() -> bool:
+    """From the November 2026 rebalance the screener bots trade the S&P 500 and
+    S&P 400 merged (engine/bot/strategies/screener_common.MERGE_FROM)."""
+    from engine.bot.strategies import screener_common
+
+    return date.today() >= screener_common.MERGE_FROM
+
+
+def _bots_line(before: str, after: str) -> str:
+    return after if _bots_trade_sp400() else before
+
+
 # Which leaderboards each view shows. The S&P 500 is the one the bots trade and
 # the one the score was validated on; the S&P 400 (mid caps) is shown here only.
 _LB_VIEWS = {"S&P 500": ("sp500",), "S&P 400": ("sp400",), "Both": ("sp500", "sp400")}
@@ -81,8 +93,9 @@ def _age_days(generated) -> int | None:
 def _render_leaderboard() -> None:
     with st.expander("🏆 Leaderboard — highest-scoring names right now", expanded=False):
         choice = st.radio("Index", list(_LB_VIEWS), horizontal=True, key="lb_universe",
-                          help="The S&P 400 is US mid-sized companies. Only the S&P 500 "
-                               "ranking is used by the bots.")
+                          help="The S&P 400 is US mid-sized companies. " + _bots_line(
+                              "Only the S&P 500 ranking is used by the bots.",
+                              "Since 1 Nov 2026 the bots trade both, merged by score."))
         names = _LB_VIEWS[choice]
         rows, parts = _leaderboard_view(names)
         if not parts:
@@ -184,8 +197,9 @@ def _render_leaderboard() -> None:
                 st.warning(
                     "**The S&P 400 rows have not been validated.** Every measurement of this score so "
                     "far was made on S&P 500 companies. Whether it says anything about mid-sized "
-                    "companies hasn't been tested yet, so treat those rows as unproven — and no bot "
-                    "buys from them.",
+                    "companies hasn't been tested yet, so treat those rows as unproven" + _bots_line(
+                        " — and no bot buys from them.",
+                        ". The bots trade them anyway, as a live test."),
                     icon="🧪",
                 )
             elif not mid_o.get("significant"):
@@ -194,8 +208,10 @@ def _render_leaderboard() -> None:
                     f"years on {mid.get('n_tickers', '—')} mid-sized companies, its information coefficient "
                     f"was **{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
                     f"{mid_o.get('hit_rate')}) — indistinguishable from chance, where the S&P 500 shows a "
-                    "faint but real tilt. Treat these rows as a list to browse, not a signal; no bot buys "
-                    "from them.",
+                    "faint but real tilt. " + _bots_line(
+                        "Treat these rows as a list to browse, not a signal; no bot buys from them.",
+                        "The bots trade them anyway since 1 Nov 2026, as a live test of whether "
+                        "that holds — read their results with that in mind."),
                     icon="🧪",
                 )
             else:
@@ -203,8 +219,8 @@ def _render_leaderboard() -> None:
                     f"**What this ranking is worth on the S&P 400.** Across {mid.get('n_tickers', '—')} "
                     f"mid-sized companies this score has an information coefficient of "
                     f"**{mid_o['mean_ic']:+.3f}** (t={mid_o.get('t_stat')}, hit rate "
-                    f"{mid_o.get('hit_rate')}) — a faint tilt, not a prediction. No bot buys from these "
-                    "rows.",
+                    f"{mid_o.get('hit_rate')}) — a faint tilt, not a prediction. " + _bots_line(
+                        "No bot buys from these rows.", "The bots trade them since 1 Nov 2026."),
                     icon="🧪",
                 )
 

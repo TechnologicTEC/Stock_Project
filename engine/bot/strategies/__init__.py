@@ -151,6 +151,9 @@ STRATEGIES: dict[str, tuple[str, object, object]] = {
 # orders — things a strategy decided that produce no order and would otherwise
 # leave no trace. Kept out of the registry tuple so adding one to a strategy
 # doesn't change the shape every other strategy is read through.
+# The strategies that trade the screener leaderboard (screener_common).
+SCREENER_STRATEGIES = ("composite_rebalance", "score_threshold", "top_decile_long")
+
 NOTES: dict[str, object] = {
     "creator_conviction": _notes_creator_conviction,
     "top_decile_long": _notes_top_decile_long,
@@ -239,13 +242,22 @@ def notes(name: str, ctx: Context) -> list[dict]:
     """Observations worth journalling that aren't orders — a name a strategy
     wanted but declined. Never raises: a missing note is a gap in the record,
     not a reason to fail a run that otherwise traded correctly."""
+    out: list[dict] = []
     reporter = NOTES.get(name)
-    if reporter is None:
-        return []
-    try:
-        return list(reporter(ctx) or [])
-    except Exception:                    # noqa: BLE001 — see docstring
-        return []
+    if reporter is not None:
+        try:
+            out.extend(reporter(ctx) or [])
+        except Exception:                # noqa: BLE001 — see docstring
+            pass
+    # The three screener strategies also say when they traded the S&P 500 alone
+    # because the S&P 400 ranking was unusable (screener_common.leaderboard_notes).
+    if name in SCREENER_STRATEGIES:
+        try:
+            from engine.bot.strategies import screener_common
+            out.extend(screener_common.leaderboard_notes(ctx))
+        except Exception:                # noqa: BLE001 — see docstring
+            pass
+    return out
 
 
 def prepare_why_held(name: str, *, config: dict, today: date_) -> dict:

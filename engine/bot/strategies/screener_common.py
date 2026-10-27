@@ -1,9 +1,10 @@
 """
 What the two screener strategies share: the leaderboard, and the run history.
 
-Composite rebalance and the Strong Buy threshold read the same cached ranking of
-the S&P 500 and differ in exactly one thing — one reads **rank**, the other reads
-**score**. Everything up to that point is here, so the two strategy modules
+Composite rebalance, the Strong Buy threshold and top decile read the same cached
+ranking and differ in what they read from it — rank, score, or decile. From the
+first run of November 2026 that ranking is the S&P 500 and the S&P 400 merged by
+score (see MERGE_FROM). Everything up to that point is here, so the two strategy modules
 contain only the rule that makes them different, and a change to how the
 leaderboard is loaded or aged can't drift between them.
 
@@ -23,6 +24,20 @@ from datetime import datetime
 # absorbs one missed weekly run.
 MAX_LEADERBOARD_AGE_DAYS = 14
 
+# The S&P 400 (mid caps) joins the ranking the bots trade from this date: Tane's
+# call on 27 Oct 2026, to start at the November rebalance. Made knowing the
+# measurement: on the S&P 400 the composite score showed NO edge (IC +0.015,
+# t=0.72, 5 years, 399 names, vs +0.051 / t=2.15 on the S&P 500), and mid caps
+# score higher on average (median ~59 vs ~56), so they take roughly two-thirds of
+# each bot's picks. The paper accounts become the live test of whether that holds.
+#
+# Merging by score is honest because scoring is ABSOLUTE (fixed curves, never
+# relative to the other names), and the S&P 1500 indices share no names. A
+# `date` comparison against the runner's `today`, which is the UTC date — so the
+# Sunday 1 Nov 21:45 UTC run, the month's rebalance, is the first merged one.
+MERGE_FROM = date_(2026, 11, 1)
+MERGED_UNIVERSE = "sp400"
+
 # How much decision history a strategy needs to answer "have I already
 # rebalanced this month" and "how long have I held this". 400 rows covers months
 # of runs across a 20-name book.
@@ -39,8 +54,9 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     from engine import screener
     from engine.bot.strategies import StrategyDataError
 
-    # Named, not defaulted: the S&P 500 is the only universe the score was
-    # validated on. The S&P 400 ranking exists for the Screener page alone.
+    # Named, not defaulted. The S&P 500 ranking is REQUIRED; the S&P 400 one is
+    # merged in when it is usable (from MERGE_FROM) and skipped, with a journal
+    # note, when it is not — a failed mid-cap run must not stop trading.
     payload = screener.load_leaderboard("sp500")
     if not payload or not payload.get("rows"):
         raise StrategyDataError(
@@ -69,7 +85,65 @@ def load_leaderboard(today: date_, *, max_age_days: int = MAX_LEADERBOARD_AGE_DA
     payload = dict(payload)
     payload["generated_date"] = generated
     payload["age_days"] = age
+    payload["rows"] = [dict(r, universe="sp500") for r in payload["rows"]]
+    payload["universes"] = ["sp500"]
+    if today < MERGE_FROM:
+        return payload
+
+    extra, problem = _mergeable(MERGED_UNIVERSE, today, max_age_days)
+    if problem:
+        payload["merge_note"] = f"{problem} Traded on the S&P 500 alone this run."
+        return payload
+    # Concatenate (S&P 500 first) and stable-sort by score, so a tie keeps the
+    # S&P 500 name ahead; then renumber. Rank is a position, never stored data.
+    merged = payload["rows"] + [dict(r, universe=MERGED_UNIVERSE) for r in extra["rows"]]
+    merged.sort(key=lambda r: -(r.get("score") or 0))
+    for i, row in enumerate(merged, start=1):
+        row["rank"] = i
+    payload["rows"] = merged
+    payload["universes"] = ["sp500", MERGED_UNIVERSE]
+    payload["merged_generated"] = {MERGED_UNIVERSE: extra.get("generated_at")}
     return payload
+
+
+def _mergeable(universe: str, today: date_, max_age_days: int) -> tuple[dict | None, str | None]:
+    """(payload, None) when the ranking can be merged, else (None, why not).
+
+    Held to the same bar the S&P 500 ranking is: present, labelled for its own
+    universe, dated, and no older than `max_age_days`.
+    """
+    from engine import screener
+
+    name = {"sp400": "S&P 400"}.get(universe, universe)
+    lb = screener.load_leaderboard(universe)
+    if not lb or not lb.get("rows"):
+        return None, f"No {name} leaderboard in the shared cache."
+    if lb.get("universe") != universe:
+        return None, f"The {name} slot holds a leaderboard labelled {lb.get('universe')!r}."
+    generated = _as_date(lb.get("generated_at"))
+    if generated is None:
+        return None, f"The {name} leaderboard has an unreadable date ({lb.get('generated_at')!r})."
+    age = (today - generated).days
+    if age > max_age_days:
+        return None, (f"The {name} leaderboard is {age} days old (generated {generated}), over "
+                      f"the {max_age_days}-day limit.")
+    return lb, None
+
+
+def leaderboard_notes(ctx) -> list[dict]:
+    """A journal row when this run traded the S&P 500 alone after the switch date.
+
+    Shared by all three screener strategies. A HOLD/SKIPPED row placing no order:
+    it records that the mid caps were missing, which would otherwise be invisible
+    — the run would look like an ordinary merged one.
+    """
+    from engine.bot import journal
+
+    note = ((ctx.extras or {}).get("leaderboard") or {}).get("merge_note")
+    if not note:
+        return []
+    return [{"action": journal.HOLD, "status": journal.SKIPPED, "blocked_by": None,
+             "code": "sp400_fallback", "reason": note}]
 
 
 def _as_date(value) -> date_ | None:

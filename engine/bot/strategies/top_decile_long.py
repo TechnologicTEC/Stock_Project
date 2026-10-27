@@ -220,7 +220,14 @@ def notes(ctx) -> list[dict]:
     if not rows:
         return []
 
-    top, bottom = deciles(rows)
+    # The basket BOUGHT against the same number from the bottom. On the S&P 500
+    # alone that is exactly the top and bottom decile (~50 each). On the merged
+    # ranking (~900 names) the book stays at 50 — Tane's call — so a full decile
+    # (~90) would no longer be what "Top (bought)" says, and the two ends would
+    # stop being comparable with the snapshots before the merge.
+    top = book_rows(ctx, rows)
+    ranked = sorted(rows, key=lambda r: r.get("rank") or _UNRANKED)
+    bottom = ranked[-len(top):] if top else []
     payload = decile_spread.snapshot_payload(
         top, bottom, as_of=ctx.today, universe=len(rows))
     return [{

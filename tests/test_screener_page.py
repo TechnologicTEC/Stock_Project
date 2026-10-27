@@ -428,3 +428,22 @@ def test_the_sp400_view_shows_its_measured_result_once_one_exists():
     warnings = " ".join(getattr(w, "value", "") for w in at.warning)
     assert "+0.015" in warnings and "no measurable edge" in warnings
     assert "not been validated" not in warnings
+
+
+def test_from_the_switch_date_the_sp400_note_says_the_bots_trade_it(monkeypatch):
+    from engine.bot.strategies import screener_common
+
+    _save_both_universes()
+    screener_validation.save_universe_result({
+        "universe": "sp400", "n_tickers": 399, "horizon_days": 91, "factor_ic": {},
+        "overall": {"mean_ic": 0.015, "t_stat": 0.72, "hit_rate": 0.57, "significant": False},
+    })
+    for switch, expected, absent in ((date.today() + timedelta(days=1), "no bot buys", "trade them anyway"),
+                                     (date.today(), "trade them anyway", "no bot buys")):
+        monkeypatch.setattr(screener_common, "MERGE_FROM", switch)
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+        at.radio(key="lb_universe").set_value("S&P 400").run(timeout=30)
+        assert not at.exception
+        warnings = " ".join(getattr(w, "value", "") for w in at.warning)
+        assert expected in warnings and absent not in warnings

@@ -1,5 +1,6 @@
 """
-Composite rebalance: the top 15 of the S&P 500 by screener rank, equal-weighted,
+Composite rebalance: the top 15 by screener rank (the S&P 500, and from November
+2026 the S&P 500 + S&P 400 merged by score — screener_common.MERGE_FROM), equal-weighted,
 refreshed once a month.
 
 **The one with evidence behind it.** The validation run measured this composite's

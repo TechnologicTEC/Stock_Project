@@ -467,3 +467,23 @@ def test_why_held_between_rebalances_names_next_month():
     ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=3))])
     assert tdl.why_held(ctx)["T001"] == ("Rank 1 of 503: in the top 50, so it is kept "
                                          "at the October rebalance.")
+
+
+# --------------------------------------------------------------------------
+# The merged S&P 500 + S&P 400 ranking (~900 names, from 1 Nov 2026). Tane's
+# call: the book stays at 50 names — the top ~5.5% rather than a true decile.
+# The spread then compares what is BOUGHT with the same number from the bottom,
+# so "Top (bought)" stays true and the two baskets stay the same size.
+# --------------------------------------------------------------------------
+
+def test_on_a_merged_ranking_the_book_stays_at_fifty():
+    rows = _rows(900)
+    assert tdl.decile_size(rows) == 90
+    assert [r["ticker"] for r in tdl.book_rows(_ctx(rows), rows)] == [f"T{i:03d}" for i in range(1, 51)]
+
+
+def test_on_a_merged_ranking_the_snapshot_records_the_book_against_an_equal_bottom():
+    payload = tdl.notes(_ctx(_rows(900)))[0][decile_spread.SNAPSHOT_KEY]
+    assert payload["top"] == [f"T{i:03d}" for i in range(1, 51)]
+    assert payload["bottom"] == [f"T{i:03d}" for i in range(851, 901)]
+    assert payload["universe"] == 900

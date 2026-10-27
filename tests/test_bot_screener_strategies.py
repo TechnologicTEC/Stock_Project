@@ -499,7 +499,7 @@ def test_the_registry_never_raises_for_the_page():
 # score on mid caps, so no strategy may ever see those rows.
 # --------------------------------------------------------------------------
 
-def test_the_bots_read_only_the_sp500_leaderboard():
+def test_before_the_switch_the_real_loader_ignores_the_sp400():
     """Real save and load, both universes stored: the strategies' loader returns
     the S&P 500 rows and nothing else."""
     from engine import screener
@@ -512,7 +512,8 @@ def test_the_bots_read_only_the_sp500_leaderboard():
 
     screener.save_leaderboard(screener.build_leaderboard([result("BIG", 70.0)]))
     screener.save_leaderboard(screener.build_leaderboard([result("MID", 90.0)], universe="sp400"))
-    got = common.load_leaderboard(date.today())
+    # Before the November 2026 switch; from it the two are merged (tests below).
+    got = common.load_leaderboard(common.MERGE_FROM - timedelta(days=1))
     assert [r["ticker"] for r in got["rows"]] == ["BIG"]
 
 
@@ -521,3 +522,102 @@ def test_a_payload_labelled_as_another_universe_is_refused():
     with patch("engine.screener.load_leaderboard", return_value=payload):
         with pytest.raises(strategies.StrategyDataError, match="sp400"):
             common.load_leaderboard(TODAY)
+
+
+# --------------------------------------------------------------------------
+# From the November 2026 rebalance the three screener bots trade the S&P 500
+# and S&P 400 rankings MERGED by score (Tane, 27 Oct 2026). Scores are absolute,
+# so one list sorted by score is honest. If the S&P 400 ranking is missing,
+# stale or mislabelled, they trade the S&P 500 alone and journal that they did.
+# --------------------------------------------------------------------------
+
+def _store(universe, scored, generated):
+    """A leaderboard saved through the real cache path."""
+    from engine import screener
+
+    rows = [{"ticker": t, "name": t, "score": s, "recommendation": "Buy", "factor_scores": {}}
+            for t, s in scored]
+    for i, r in enumerate(sorted(rows, key=lambda r: -r["score"]), start=1):
+        r["rank"] = i
+    screener.save_leaderboard({"universe": universe, "generated_at": generated.isoformat(),
+                               "rows": sorted(rows, key=lambda r: r["rank"])})
+
+
+SWITCH = common.MERGE_FROM
+
+
+def test_the_switch_date_is_the_november_2026_rebalance():
+    assert SWITCH == date(2026, 11, 1)
+
+
+def test_before_the_switch_the_bots_read_the_sp500_only():
+    _store("sp500", [("BIG", 80.0), ("LOW", 60.0)], SWITCH - timedelta(days=2))
+    _store("sp400", [("MID", 70.0)], SWITCH - timedelta(days=3))
+    got = common.load_leaderboard(SWITCH - timedelta(days=1))
+    assert [r["ticker"] for r in got["rows"]] == ["BIG", "LOW"]
+    assert not got.get("merge_note")
+
+
+def test_from_the_switch_the_two_rankings_are_merged_by_score():
+    _store("sp500", [("BIG", 80.0), ("LOW", 60.0)], SWITCH)
+    _store("sp400", [("MID", 70.0)], SWITCH - timedelta(days=1))
+    got = common.load_leaderboard(SWITCH)
+    assert [r["ticker"] for r in got["rows"]] == ["BIG", "MID", "LOW"]
+    assert [r["rank"] for r in got["rows"]] == [1, 2, 3]
+    assert [r["universe"] for r in got["rows"]] == ["sp500", "sp400", "sp500"]
+    assert got["universes"] == ["sp500", "sp400"] and not got.get("merge_note")
+
+
+def test_a_missing_sp400_ranking_falls_back_to_the_sp500_and_says_so():
+    _store("sp500", [("BIG", 80.0)], SWITCH)
+    got = common.load_leaderboard(SWITCH)
+    assert [r["ticker"] for r in got["rows"]] == ["BIG"]
+    assert got["universes"] == ["sp500"]
+    assert "S&P 400" in got["merge_note"] and "S&P 500 alone" in got["merge_note"]
+
+
+def test_a_stale_sp400_ranking_falls_back_too():
+    _store("sp500", [("BIG", 80.0)], SWITCH)
+    _store("sp400", [("MID", 90.0)], SWITCH - timedelta(days=common.MAX_LEADERBOARD_AGE_DAYS + 1))
+    got = common.load_leaderboard(SWITCH)
+    assert [r["ticker"] for r in got["rows"]] == ["BIG"]
+    assert "days old" in got["merge_note"]
+
+
+def test_a_missing_sp500_ranking_still_refuses_even_with_the_sp400_present():
+    _store("sp400", [("MID", 90.0)], SWITCH)
+    with pytest.raises(strategies.StrategyDataError, match="S&P 500"):
+        common.load_leaderboard(SWITCH)
+
+
+def test_the_fallback_is_written_to_the_journal_as_a_note():
+    _store("sp500", [("BIG", 80.0)], SWITCH)
+    payload = common.load_leaderboard(SWITCH)
+    for name in ("score_threshold", "composite_rebalance"):
+        ctx = _ctx(payload["rows"], strategy=name)
+        ctx.extras["leaderboard"] = payload
+        notes = strategies.notes(name, ctx)
+        assert [n["code"] for n in notes] == ["sp400_fallback"]
+        assert notes[0]["status"] == journal.SKIPPED and notes[0]["blocked_by"] is None
+
+
+def test_a_merged_run_writes_no_fallback_note():
+    _store("sp500", [("BIG", 80.0)], SWITCH)
+    _store("sp400", [("MID", 70.0)], SWITCH)
+    payload = common.load_leaderboard(SWITCH)
+    ctx = _ctx(payload["rows"], strategy="score_threshold")
+    ctx.extras["leaderboard"] = payload
+    assert strategies.notes("score_threshold", ctx) == []
+
+
+def test_score_threshold_buys_a_mid_cap_through_the_real_prepare():
+    """The real prepare -> build chain, on real saved leaderboards: a mid cap over
+    75 is bought from the switch date, and not before it."""
+    _store("sp500", [("BIG", 76.0), ("LOW", 50.0)], SWITCH)
+    _store("sp400", [("MID", 80.0)], SWITCH)
+    config = {"target_slots": 20, "max_position_pct": 0.20}
+    for day, expected in ((SWITCH, {"MID", "BIG"}), (SWITCH - timedelta(days=1), {"BIG"})):
+        extras = strategies.prepare("score_threshold", config=config, today=day)
+        ctx = strategies.Context(strategy="score_threshold", equity=10_000.0, cash=10_000.0,
+                                 config=config, today=day, positions=(), extras=extras)
+        assert {t.ticker for t in strategies.build("score_threshold", ctx)} == expected
