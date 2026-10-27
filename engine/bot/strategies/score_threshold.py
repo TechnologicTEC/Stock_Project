@@ -53,10 +53,25 @@ by a score crossing a line — so re-levelling would have to happen on arbitrary
 days, and that is exactly the quiet-day churn the `resize` flag exists to stop.
 The consequence, stated plainly: a long-running winner can grow well past its
 original share of the account, and nothing here caps that.
+
+**The one exception: a one-off trim, 1-14 Nov 2026** (Tane's call, 27 Oct). The
+ten names held when slots went from 20 to 30 were bought at 1/20 of the account
+(~$470-570) and new ones at 1/30 (~$311). Kept at their old size they leave room
+for only ~24 of the 30 slots: 10 x $490 + 20 x $311 is ~$11,100 of stock against
+the $9,330 the 95% rule allows. So each position bought BEFORE the window is cut
+to the 30-slot size once, at the first run inside it (the 2 Nov rebalance), and
+the proceeds pay for that run's buys. Never a top-up: a position already below
+the new size is left alone. Each name is trimmed once — a trim that reached
+Alpaca is on the journal and is not repeated; one that was refused is retried at
+the next run. The window is short so it can be judged from recent journal rows
+alone (the strategy reads its newest DECISION_LOOKBACK of them), and after it the
+rule above holds again with no exceptions.
 """
 from __future__ import annotations
 
-from engine.bot import executor
+from datetime import date
+
+from engine.bot import executor, journal
 from engine.bot.executor import Target
 from engine.bot.strategies import screener_common as common
 
@@ -64,6 +79,12 @@ ENTRY_SCORE = 75.0      # "Strong Buy" — the top ~1.6% of the index
 EXIT_SCORE = 70.0       # decayed enough to release the slot (65 until 27 Oct 2026)
 HARD_EXIT_SCORE = 55.0  # the index median: leave immediately, minimum hold or not
 MIN_HOLD_RUNS = 2       # runs a position must survive before a soft exit applies
+
+# The one-off trim (see the module docstring). TRIM_FROM is a UTC date, like
+# screener_common.MERGE_FROM: the Sun 1 Nov 21:45 UTC run is the first inside it.
+TRIM_FROM = date(2026, 11, 1)
+TRIM_UNTIL = date(2026, 11, 14)
+TRIM_MARK = "One-off trim to the 30-slot size"
 
 
 def prepare(config: dict, today) -> dict:
@@ -81,9 +102,13 @@ def build(ctx) -> list[Target]:
 
     # 1. Decide what to keep. Anything dropped here simply isn't in the target
     #    book, and the planner closes it.
+    to_trim = _due_for_trim(ctx, notional)
     for ticker in sorted(held):
         keep, reason = _verdict(ctx, ticker, lookup.get(ticker))
-        if keep:
+        if keep and ticker in to_trim:
+            targets.append(Target(ticker=ticker, notional=notional, sizing=executor.LEVEL,
+                                  reason=f"{TRIM_MARK} (${notional:,.2f}). {reason}"))
+        elif keep:
             targets.append(Target(ticker=ticker, notional=notional,
                                   sizing=executor.HOLD, reason=reason))
 
@@ -106,6 +131,30 @@ def build(ctx) -> list[Target]:
         ))
 
     return targets
+
+
+def _due_for_trim(ctx, notional: float) -> set[str]:
+    """Held names the one-off trim still has to cut down to `notional`.
+
+    Inside the window only; bought before it (no real buy on record since
+    TRIM_FROM); larger than the new size (never a top-up); and not already
+    trimmed (no trim sell that reached Alpaca since TRIM_FROM).
+    """
+    if not (TRIM_FROM <= ctx.today <= TRIM_UNTIL):
+        return set()
+    done = set()
+    for d in (ctx.extras or {}).get("decisions") or []:
+        when = d.get("decided_at")
+        day = when.date() if hasattr(when, "date") else when
+        if day is None or day < TRIM_FROM:
+            continue
+        if d.get("status") not in (journal.SUBMITTED, journal.FILLED):
+            continue
+        if d.get("action") == journal.BUY or (
+                d.get("action") == journal.SELL and TRIM_MARK in (d.get("reason") or "")):
+            done.add((d.get("ticker") or "").upper())
+    return {p.ticker.upper() for p in ctx.positions
+            if p.market_value > notional and p.ticker.upper() not in done}
 
 
 def _verdict(ctx, ticker: str, row: dict | None) -> tuple[bool, str]:

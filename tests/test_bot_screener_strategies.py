@@ -11,6 +11,7 @@ book in order to do nothing. `executor.plan()` closes any held name absent from
 the targets, so "hold what I have" has to be written out explicitly; a strategy
 that returned [] between rebalances would liquidate the account every day.
 """
+import dataclasses
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -426,6 +427,95 @@ def test_score_threshold_sizes_a_brand_new_entry_normally():
     ctx = _ctx(rows, slots=20, strategy="score_threshold")
     fresh = [t for t in thr.build(ctx) if t.sizing == executor.LEVEL]
     assert fresh, "a new entry has to be sized somehow"
+
+
+# The one-off trim, 1-14 Nov 2026: positions bought at the 20-slot size are cut
+# to the 30-slot size once, so all 30 slots can be paid for.
+
+def _trim_ctx(values, *, today, decisions=(), score=80.0, slots=30, equity=10_000.0,
+              cash=1_000.0):
+    """Held names at the given market values, all scoring `score`."""
+    rows = [{"rank": i + 1, "ticker": t, "score": score, "name": "", "factor_scores": {}}
+            for i, t in enumerate(values)]
+    return strategies.Context(
+        strategy="score_threshold", equity=equity, cash=cash,
+        config={"target_slots": slots, "max_position_pct": 0.20}, today=today,
+        positions=tuple(Position(ticker=t, qty=1.0, market_value=v) for t, v in values.items()),
+        extras={"rows": rows, "decisions": list(decisions),
+                "leaderboard": {"rows": rows, "generated_date": today}},
+    )
+
+
+def _orders(ctx):
+    return executor.plan(thr.build(ctx), list(ctx.positions), equity=ctx.equity)
+
+
+def test_the_trim_cuts_an_old_position_to_the_30_slot_size():
+    ctx = _trim_ctx({"OLD": 480.0}, today=thr.TRIM_FROM)
+    target = risk.position_notional(10_000.0, 30, 0.20)               # $316.67
+    [order] = _orders(ctx)
+    assert (order.ticker, order.side) == ("OLD", "sell")
+    assert order.notional == pytest.approx(480.0 - target, abs=0.01)
+    assert thr.TRIM_MARK in order.reason
+
+
+def test_the_trim_never_tops_up_a_position_below_the_new_size():
+    ctx = _trim_ctx({"OLD": 250.0}, today=thr.TRIM_FROM)
+    assert _orders(ctx) == []
+
+
+def test_no_trim_before_the_window():
+    ctx = _trim_ctx({"OLD": 480.0}, today=thr.TRIM_FROM - timedelta(days=1))
+    assert _orders(ctx) == []
+
+
+def test_no_trim_after_the_window():
+    ctx = _trim_ctx({"OLD": 480.0}, today=thr.TRIM_UNTIL + timedelta(days=1))
+    assert _orders(ctx) == []
+
+
+def test_a_name_bought_inside_the_window_is_not_trimmed():
+    """It was bought at the 30-slot size already; a later rise is a winner running."""
+    bought = _decision(thr.TRIM_FROM, action=journal.BUY, status=journal.FILLED, ticker="NEW")
+    ctx = _trim_ctx({"NEW": 480.0}, today=thr.TRIM_FROM + timedelta(days=3), decisions=[bought])
+    assert _orders(ctx) == []
+
+
+def test_a_name_is_trimmed_only_once():
+    done = _decision(thr.TRIM_FROM, action=journal.SELL, status=journal.FILLED, ticker="OLD",
+                     reason=f"Trimming to target. {thr.TRIM_MARK} ...")
+    ctx = _trim_ctx({"OLD": 400.0}, today=thr.TRIM_FROM + timedelta(days=1), decisions=[done])
+    assert _orders(ctx) == []
+
+
+def test_a_failed_trim_is_retried():
+    """An order Alpaca rejected moved nothing, so the next run tries again."""
+    failed = _decision(thr.TRIM_FROM, action=journal.SELL, status=journal.ERROR, ticker="OLD",
+                       reason=f"Alpaca rejected the order: ... {thr.TRIM_MARK}")
+    ctx = _trim_ctx({"OLD": 480.0}, today=thr.TRIM_FROM + timedelta(days=1), decisions=[failed])
+    assert [o.side for o in _orders(ctx)] == ["sell"]
+
+
+def test_the_trim_does_not_save_a_name_the_rules_sell():
+    ctx = _trim_ctx({"OLD": 480.0}, today=thr.TRIM_FROM, score=50.0)
+    [order] = _orders(ctx)
+    assert order.side == "sell" and order.qty == 1.0                   # closed in full
+
+
+def test_trim_proceeds_pay_for_the_new_buys():
+    """The point of the trim: the freed cash funds buys that didn't fit. Ten old
+    names at $480 and $2,700 of cash, twelve new names at $316.67 each: without the
+    trim 8 of them fit; with it the $1,633 freed pays for all twelve."""
+    def funded_buys(today):
+        ctx = _trim_ctx({f"OLD{i}": 480.0 for i in range(10)}, today=today, cash=2_700.0)
+        rows = ctx.extras["rows"] + [{"rank": 20 + i, "ticker": f"NEW{i}", "score": 76.0,
+                                      "name": "", "factor_scores": {}} for i in range(12)]
+        ctx = dataclasses.replace(ctx, extras={**ctx.extras, "rows": rows})
+        funded, _short = executor.fund(_orders(ctx), list(ctx.positions), cash=ctx.cash)
+        return sum(o.side == "buy" for o in funded)
+
+    assert funded_buys(thr.TRIM_FROM - timedelta(days=1)) == 8
+    assert funded_buys(thr.TRIM_FROM) == 12
 
 
 def test_composite_rebuilds_a_half_filled_book_mid_month():
