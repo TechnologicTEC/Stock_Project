@@ -292,6 +292,33 @@ def _positions_table(rows: list[dict]) -> str:
             f'{"".join(head)}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
+def _open_orders_html(orders: list[dict]) -> str:
+    """The broker's open orders, under the live holdings. An after-close order
+    is not a position until the next open, so without this the live book shows
+    the account as if the run had done nothing. "" when there are none."""
+    if not orders:
+        return ""
+    rows = []
+    for o in sorted(orders, key=lambda o: (o.get("side") != "sell", o.get("ticker") or "")):
+        side = (o.get("side") or "").lower()
+        amount = (_money(o["notional"], 2) if o.get("notional") is not None
+                  else f'{_num(o.get("qty"), 4)} shares')
+        rows.append(f'<tr><td class="{"down" if side == "sell" else "up"}">{_esc(side.title())}</td>'
+                    f'<td><span class="tick">{_esc(o.get("ticker") or "")}</span></td>'
+                    f'<td class="num">{amount}</td></tr>')
+    return ('<p class="cp-foot" style="margin-top:12px"><b>Orders waiting to fill.</b> Placed at '
+            "the broker but not traded yet. Market orders only fill while the US market is "
+            "open, so these go through at the next open and the holdings above change then."
+            '</p><div class="cp-scroll"><table class="cp-table"><thead><tr><th>Order</th>'
+            '<th>Stock</th><th class="num">Amount</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>')
+
+
+def _orders_clause(orders: list[dict]) -> str:
+    n = len(orders or ())
+    return f" · {n} order{'s' if n != 1 else ''} waiting to fill" if n else ""
+
+
 def _last_run_summary(decisions: list[dict]) -> str:
     """What the newest run did, in one line — so a COLLAPSED journal still
     answers the daily question. Hiding the panel must not hide the fact that it
@@ -793,8 +820,10 @@ for tab, r in zip(tabs, tab_rows):
             invested = sum(p.get("market_value") or 0.0 for p in held_rows)
 
             if live_book:
-                tag = f"{len(enriched)} held · {_money(invested)} invested · live from Alpaca"
-                footer = ""
+                orders = view.get("open_orders") or []
+                tag = (f"{len(enriched)} held · {_money(invested)} invested · live from Alpaca"
+                       + _orders_clause(orders))
+                footer = _open_orders_html(orders)
             else:
                 priced = next((p.get("priced_at") for p in raw if p.get("priced_at")), None)
                 # Count what is HELD, so this agrees with the slots strip above
@@ -820,6 +849,11 @@ for tab, r in zip(tabs, tab_rows):
                     + f'<p class="cp-foot">{_esc(view["error"])}</p>')
 
             _theme.panel("Open positions", _positions_table(enriched) + footer, tag=tag)
+        elif view["available"] and view.get("open_orders"):
+            _theme.panel("Open positions",
+                         '<p class="cp-note">The account holds nothing yet.</p>'
+                         + _open_orders_html(view["open_orders"]),
+                         tag="live from Alpaca" + _orders_clause(view["open_orders"]))
         elif view["available"]:
             _theme.panel("Open positions",
                          '<p class="cp-note">The account holds nothing right now — all cash.</p>')

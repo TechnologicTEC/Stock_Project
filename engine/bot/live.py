@@ -37,6 +37,12 @@ def account_view(key_env_prefix: str) -> dict:
         "cash": None,
         "status": None,
         "positions": [],
+        # Orders still waiting at the broker. An after-close order is not a
+        # position until the next open, and without this the live book hid it
+        # for the whole NZ evening (28 Oct 2026: 8 creator orders queued, the
+        # page showed 4 untouched holdings and nothing else).
+        "open_orders": [],
+        "orders_error": None,
     }
 
     try:
@@ -57,8 +63,37 @@ def account_view(key_env_prefix: str) -> dict:
         view["available"] = True
     except Exception as exc:                              # noqa: BLE001
         view["error"] = f"Alpaca read failed: {type(exc).__name__}: {exc}"
+        return view
+
+    # Separate, so failing to read orders never costs the positions.
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=200)
+        view["open_orders"] = [_order(o) for o in client.get_orders(filter=req)]
+    except Exception as exc:                              # noqa: BLE001
+        view["orders_error"] = f"Alpaca order read failed: {type(exc).__name__}: {exc}"
 
     return view
+
+
+def _order(o) -> dict:
+    """One open order, flattened. Buys are sized in dollars (`notional`); a
+    full exit is sized in shares (`qty`). Whichever Alpaca didn't get is None."""
+    from engine.data_sources.alpaca_client import from_alpaca
+
+    def _f(value):
+        return float(value) if value not in (None, "") else None
+
+    return {
+        "ticker": from_alpaca(o.symbol),
+        "side": str(getattr(o.side, "value", o.side)),
+        "notional": _f(o.notional),
+        "qty": _f(o.qty),
+        "status": str(getattr(o.status, "value", o.status)),
+        "submitted_at": o.submitted_at,
+    }
 
 
 def _position(p) -> dict:

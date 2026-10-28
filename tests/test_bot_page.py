@@ -347,6 +347,38 @@ def test_a_long_buy_reason_is_shortened_with_the_full_text_as_a_tooltip():
     assert f'title="{reason}"' in body
 
 
+def _open_order(ticker, side, notional=None, qty=None):
+    return {"ticker": ticker, "side": side, "notional": notional, "qty": qty,
+            "status": "new", "submitted_at": datetime(2026, 10, 28, 8, 1, tzinfo=timezone.utc)}
+
+
+def test_live_orders_waiting_for_the_open_are_listed_under_the_holdings():
+    """With keys the book is the broker's position list, which an after-close
+    order is not on until the next open. 28 Oct 2026: eight creator orders
+    queued and the page showed four untouched holdings and nothing else."""
+    view = _account_view(open_orders=[_open_order("SPY", "sell", notional=1163.15),
+                                      _open_order("AMZN", "buy", notional=1125.0),
+                                      _open_order("FSLR", "sell", qty=2.41458)])
+    body = _body(_run(view=view))
+    assert "3 orders waiting to fill" in body
+    assert "Orders waiting to fill" in body
+    assert "AMZN" in body and "$1,125.00" in body and "$1,163.15" in body
+    assert "2.4146 shares" in body
+    assert "next open" in body
+
+
+def test_live_orders_show_even_when_the_account_holds_nothing():
+    view = _account_view(positions=[], open_orders=[_open_order("AMZN", "buy", notional=1125.0)])
+    body = _body(_run(view=view))
+    assert "AMZN" in body and "$1,125.00" in body
+    assert "all cash" not in body
+
+
+def test_no_open_orders_adds_nothing():
+    body = _body(_run(view=_account_view(open_orders=[])))
+    assert "waiting to fill" not in body
+
+
 def test_missing_alpaca_keys_costs_one_panel_not_the_page():
     """With no keys AND nothing journalled to rebuild from, the panel says so
     and the rest of the page is untouched."""
