@@ -374,6 +374,20 @@ def test_live_orders_show_even_when_the_account_holds_nothing():
     assert "all cash" not in body
 
 
+def test_a_failed_order_read_is_said_not_silently_dropped():
+    """Otherwise the page looks exactly like 'no orders', the confusion the
+    order list was added to end."""
+    body = _body(_run(view=_account_view(open_orders=[],
+                                         orders_error="Alpaca order read failed: timeout")))
+    assert "Alpaca order read failed: timeout" in body
+
+
+def test_a_partly_filled_order_says_so():
+    order = {**_open_order("AMZN", "buy", notional=1125.0), "status": "partially_filled"}
+    body = _body(_run(view=_account_view(open_orders=[order])))
+    assert "part filled" in body
+
+
 def test_no_open_orders_adds_nothing():
     body = _body(_run(view=_account_view(open_orders=[])))
     assert "waiting to fill" not in body
@@ -661,6 +675,31 @@ def test_the_creator_panel_shows_each_holdings_clock_and_the_queue():
     assert "1 held · 1 queued" in text
     assert "queued 1" in text
     assert '<td class="num">25</td>' in text           # 30 from the buy, 5 days ago
+
+
+def test_with_live_keys_an_unfilled_buy_counts_as_held_not_queued():
+    """The keyless Space read 'held' from the journal, which counts a submitted
+    buy as held. With the keys in, the broker's position list doesn't have it
+    until the open, so the creator panel put the bot's own new buys back in
+    the queue for the whole NZ evening."""
+    mentions = [_creator_mention("NVTS", 3), _creator_mention("AMZN", 3)]
+    view = _account_view(positions=[_held("NVTS")],
+                         open_orders=[_open_order("AMZN", "buy", notional=1125.0)])
+    clock = ({"NVTS": _utc_now() - timedelta(days=5), "AMZN": _utc_now()}, {})
+    at = _run(configs=[_config("creator_conviction", target_slots=8)],
+              mentions=mentions, view=view, clock=clock)
+    assert "2 held · 0 queued" in _page_text(at)
+
+
+def test_with_live_keys_an_exit_waiting_to_fill_is_no_longer_held_but_a_trim_is():
+    """Mirrors book_from_fills: a share-count sell is an exit, a dollar sell a trim."""
+    from app import _bot_panels
+
+    view = _account_view(
+        positions=[_held("NVTS"), _held("AMCR"), _held("AMD")],
+        open_orders=[_open_order("AMCR", "sell", qty=10.0),
+                     _open_order("AMD", "sell", notional=500.0)])
+    assert _bot_panels._held("creator_conviction", view) == {"NVTS", "AMD"}
 
 
 def _utc_now():

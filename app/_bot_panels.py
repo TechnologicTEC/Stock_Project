@@ -71,14 +71,26 @@ def _note(title: str, message: str, tag: str | None = None) -> None:
 
 def _held(name: str, view: dict) -> set[str]:
     """What the strategy holds: the broker's list where the keys are in the
-    environment, else the journal's. The deployed Space holds no bot keys, so
-    reading the broker alone left every panel there believing the book was
-    empty — the Strong Buy panel said all 30 slots were free and queued names
-    it already held."""
+    environment, else the journal's. Without keys, reading the broker alone
+    left every panel believing the book was empty — the Strong Buy panel said
+    all 30 slots were free and queued names it already held.
+
+    With keys, the broker's list is adjusted by its open orders the way the
+    journal replay is (book_from_fills): a buy waiting for the open is held, a
+    share-count sell waiting for the open is an exit, a dollar sell is a trim
+    and leaves the name held. Without that, the after-close run's own buys sat
+    in the creator queue all NZ evening (28 Oct 2026)."""
     from engine.bot import positions as bot_positions
 
     if view.get("available"):
-        return {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+        held = {(p["ticker"] or "").upper() for p in (view.get("positions") or [])}
+        for o in view.get("open_orders") or []:
+            ticker = (o.get("ticker") or "").upper()
+            if o.get("side") == "buy":
+                held.add(ticker)
+            elif o.get("side") == "sell" and o.get("notional") is None and o.get("qty"):
+                held.discard(ticker)
+        return held
     return set(bot_positions.book_from_fills(_cache.bot_fills(name)))
 
 

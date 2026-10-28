@@ -43,6 +43,7 @@ them **secret** (not public "variable"):
 | `EDGAR_USER_AGENT` | `Your Name your@email` | Screener Validation. |
 | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | your paper keys | Paper Trading **and** the historical price source (value-over-time chart, screener momentum, backtests, validation). With these set, price history auto-uses Alpaca everywhere — yfinance/Yahoo blocks datacenter IPs and hangs. |
 | `PRICE_HISTORY_SOURCE` | *(unset)* | Optional override of the price provider (`alpaca` or `yfinance`). Leave unset: the app auto-prefers Alpaca whenever the keys above are present, so local and the Space use the **same** provider and share the same cached series. (Replaces the old `PRICE_HISTORY_PREFER_ALPACA` flag, whose local/Space asymmetry made validations disagree.) |
+| `ALPACA_<STRATEGY>_KEY`, `ALPACA_<STRATEGY>_SECRET` (10 secrets: `GOLDEN_CROSS`, `COMPOSITE_REBALANCE`, `SCORE_THRESHOLD`, `CREATOR_CONVICTION`, `TOP_DECILE_LONG`) | the same values as the GitHub secrets and `.env` | Optional (added 28 Oct 2026). The Trading Bot page then shows each strategy's holdings and orders waiting to fill live from Alpaca, for the **owner only** (friends and guests never get these keys — `engine/credentials.py`). The page only reads; nothing on the Space can place an order. Without them it rebuilds the holdings from the journal. |
 | `GEMINI_API_KEY` | your Gemini key | Optional — Assistant's LLM mode. |
 | `OWNER_EMAILS` | your email | Harmless now; needed for Stage 2. |
 | `HF_TOKEN` | a free HF read token | Optional — quieter/faster FinBERT download. |

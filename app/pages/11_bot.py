@@ -18,10 +18,11 @@ Two things it deliberately refuses to do:
     scoreboard-in-progress, and the page says so in numbers rather than in a
     disclaimer.
   * **It won't fall over without Alpaca credentials.** Every column that matters
-    is read from the database, which the bot writes on each run. The deployed
-    Space holds no bot key pairs (only GitHub Actions does), so the live position
-    detail is additive — present locally, absent on the Space, and its absence
-    costs one panel rather than the page.
+    is read from the database, which the bot writes on each run. The live
+    position detail is additive: it needs the strategy's key pair in this
+    environment (GitHub Actions, .env locally, and the Space's secrets since
+    28 Oct 2026 — the owner only), and its absence costs one panel rather than
+    the page.
 """
 import html
 import sys
@@ -303,6 +304,9 @@ def _open_orders_html(orders: list[dict]) -> str:
         side = (o.get("side") or "").lower()
         amount = (_money(o["notional"], 2) if o.get("notional") is not None
                   else f'{_num(o.get("qty"), 4)} shares')
+        if o.get("status") == "partially_filled":
+            # The filled part is already in the holdings above; the amount is the whole order.
+            amount += ' <span class="sub">part filled</span>'
         rows.append(f'<tr><td class="{"down" if side == "sell" else "up"}">{_esc(side.title())}</td>'
                     f'<td><span class="tick">{_esc(o.get("ticker") or "")}</span></td>'
                     f'<td class="num">{amount}</td></tr>')
@@ -312,6 +316,13 @@ def _open_orders_html(orders: list[dict]) -> str:
             '</p><div class="cp-scroll"><table class="cp-table"><thead><tr><th>Order</th>'
             '<th>Stock</th><th class="num">Amount</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div>')
+
+
+def _orders_error_html(view: dict) -> str:
+    """Say when the order read failed — otherwise it looks exactly like 'no orders'."""
+    error = view.get("orders_error")
+    return (f'<p class="cp-foot">Orders waiting to fill could not be read: {_esc(error)}</p>'
+            if error else "")
 
 
 def _orders_clause(orders: list[dict]) -> str:
@@ -508,8 +519,8 @@ def _strategy_row(r: dict) -> tuple[float, str]:
     s, cfg, view = r["summary"], r["config"], r["view"]
     slots = cfg.get("target_slots") or 1
 
-    # Live where we can reach the broker, the last snapshot where we can't (the
-    # deployed Space holds no bot keys). Both halves from the SAME source, so
+    # Live where we can reach the broker, the last snapshot where we can't (no
+    # key pair here, e.g. a friend). Both halves from the SAME source, so
     # the cash percentage is never a live number divided by a stale one.
     if view.get("available"):
         held, cash_now, equity_now = len(view["positions"]), view["cash"], view["equity"]
@@ -784,8 +795,8 @@ for tab, r in zip(tabs, tab_rows):
         # ---- open positions ----
         # Two sources, one table. Live from the broker where the key pair is in
         # the environment; otherwise replayed from the journal and priced at the
-        # last cached close, which is what the deployed Space gets — it holds no
-        # bot keys, only GitHub Actions does. The reconstruction is weaker (it
+        # last cached close, which is what anyone without the key pair gets (a
+        # friend on the Space; everyone there before 28 Oct 2026). The reconstruction is weaker (it
         # assumes a submitted order filled, and a close is not "now") so it is
         # labelled as such rather than passed off as live.
         if view["available"]:
@@ -823,7 +834,7 @@ for tab, r in zip(tabs, tab_rows):
                 orders = view.get("open_orders") or []
                 tag = (f"{len(enriched)} held · {_money(invested)} invested · live from Alpaca"
                        + _orders_clause(orders))
-                footer = _open_orders_html(orders)
+                footer = _open_orders_html(orders) + _orders_error_html(view)
             else:
                 priced = next((p.get("priced_at") for p in raw if p.get("priced_at")), None)
                 # Count what is HELD, so this agrees with the slots strip above
@@ -856,7 +867,8 @@ for tab, r in zip(tabs, tab_rows):
                          tag="live from Alpaca" + _orders_clause(view["open_orders"]))
         elif view["available"]:
             _theme.panel("Open positions",
-                         '<p class="cp-note">The account holds nothing right now — all cash.</p>')
+                         '<p class="cp-note">The account holds nothing right now — all cash.</p>'
+                         + _orders_error_html(view))
         else:
             _theme.panel(
                 "Open positions",

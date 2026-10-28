@@ -14,9 +14,10 @@ Two properties the page depends on:
     the page renders the rest.
   * **It is optional.** Everything that matters — equity curves, returns,
     drawdown, the decision journal — is read from the database, which the bot
-    writes on every run. This module only adds the live position detail. That
-    matters because the deployed Space doesn't hold the five key pairs (only
-    GitHub Actions does), so the page has to be fully useful without them.
+    writes on every run. This module only adds the live position detail and the
+    orders waiting to fill. That matters because not every viewer can reach the
+    key pairs (the Space lends them to the owner only — engine/credentials), so
+    the page has to be fully useful without them.
 """
 from __future__ import annotations
 
