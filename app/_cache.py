@@ -137,11 +137,26 @@ def bot_decisions(strategy: str | None, limit: int) -> list[dict]:
     return journal.recent_decisions(strategy, limit)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def bot_account_view(key_env_prefix: str) -> dict:
     """Live Alpaca positions for one strategy. Shorter TTL than the DB reads —
     it's the only thing here that changes intraday — and it never raises, so a
-    missing key pair costs one panel rather than the page."""
+    missing key pair costs one panel rather than the page.
+
+    Whether the key pair resolves depends on who is asking (the owner may read
+    the Space's env secrets, a friend may not), so the cache is keyed on a
+    fingerprint of the pair this session sees — never the key itself."""
+    import hashlib
+
+    from engine import credentials
+
+    key = credentials.get(f"{key_env_prefix.strip().rstrip('_')}_KEY") or ""
+    access = hashlib.sha256(key.encode()).hexdigest()[:16] if key else ""
+    return _bot_account_view(key_env_prefix, access)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _bot_account_view(key_env_prefix: str, access: str) -> dict:
+    """`access` is only the cache key; account_view resolves the keys itself."""
     from engine.bot import live
 
     return live.account_view(key_env_prefix)
