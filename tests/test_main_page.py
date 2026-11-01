@@ -100,6 +100,8 @@ def test_dashboard_handles_missing_prices_and_no_creator_signals():
     assert not at.exception
     md = " ".join(m.value for m in at.markdown)
     assert "Nothing a creator has repeated" in md
+    assert "add channels" not in md                     # only the owner can; guests see this panel
+    assert "Leaderboards (weekly live" in md            # the workflow's name since 2 Nov 2026
     assert "Your holdings" in md and "NVDA" in md       # still listed, just without a move
 
 

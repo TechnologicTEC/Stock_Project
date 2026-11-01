@@ -12,6 +12,10 @@ def test_only_a_results_of_operations_8k_is_an_earnings_filing():
     assert edgar_client.is_earnings_filing({"items": "items 2.02 and 9.01"})
     assert not edgar_client.is_earnings_filing({"items": "items 1.01 and 9.01"})
     assert not edgar_client.is_earnings_filing({"items": "items 12.02"})
+    # EDGAR runs some lists together (ADI, Jul 2026: "items 1.01, 2.03and9.01").
+    assert edgar_client.is_earnings_filing({"items": "items 1.01, 2.02and9.01"})
+    assert edgar_client.is_earnings_filing({"items": "items 2.02, 8.01and9.01"})
+    assert not edgar_client.is_earnings_filing({"items": "items 1.01, 2.03and9.01"})
     assert edgar_client.is_earnings_filing({"items": None})          # EDGAR didn't list them
 
 

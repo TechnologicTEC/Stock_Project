@@ -248,8 +248,8 @@ with right:
         )
     else:
         _theme.panel("S&P 500 leaderboard",
-                     '<p class="cp-note">No leaderboard yet — run the S&P 500 leaderboard job and the '
-                     "highest-scoring names appear here.</p>")
+                     '<p class="cp-note">No leaderboard yet — the weekly <b>Leaderboards (weekly live '
+                     "screen)</b> job fills it, and the highest-scoring names appear here.</p>")
 
 # --------------------------------------------------------------------------
 # Creator signals + what's reporting
@@ -274,8 +274,8 @@ with c_left:
         )
     else:
         _theme.panel("Creator signals",
-                     '<p class="cp-note">Nothing a creator has repeated yet — add channels on the '
-                     "Creator Signals page.</p>")
+                     '<p class="cp-note">Nothing a creator has repeated yet — stocks appear here once '
+                     "a followed channel mentions one more than once.</p>")
 
 with c_right:
     upcoming = _cache.upcoming_earnings(tickers)

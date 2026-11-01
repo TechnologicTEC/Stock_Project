@@ -159,7 +159,7 @@ def _document_text(url: str) -> str:
 # 8-K Item 2.02 is "Results of Operations and Financial Condition" — the
 # earnings release. Any 8-K can carry an EX-99.1 (deals, executive changes):
 # ADI's newest, in Nov 2026, was an acquisition, shown as its earnings release.
-_EARNINGS_ITEM = re.compile(r"\b2\.02\b")
+_EARNINGS_ITEM = re.compile(r"(?<![\d.])2\.02(?!\d)")
 
 
 def is_earnings_filing(filing: dict) -> bool:

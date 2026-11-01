@@ -967,3 +967,40 @@ def test_the_migration_does_nothing_without_a_wallet_or_purchases():
     assert portfolio.backfill_purchase_funding() == 0
     portfolio.deposit_to_wallet(50.0)
     assert portfolio.backfill_purchase_funding() == 0
+
+
+# --------------------------------------------------------------------------
+# The ledger repairs run on every Holdings load (and on each guest's arrival).
+# Two loads at once could each see the old, unfunded ledger and each bank the
+# funding deposit. On Postgres they now take a per-user lock first.
+# --------------------------------------------------------------------------
+
+def test_the_ledger_repairs_take_a_per_user_lock_on_postgres():
+    from unittest.mock import MagicMock
+
+    from db import session as db_session
+
+    session = MagicMock()
+    session.get_bind.return_value.dialect.name = "postgresql"
+    with db_session.using_user(42):
+        portfolio._lock_ledger(session)
+    sql, params = session.execute.call_args[0]
+    assert "pg_advisory_xact_lock" in str(sql) and 42 in params.values()
+
+
+def test_the_ledger_lock_is_a_no_op_on_sqlite():
+    from unittest.mock import MagicMock
+
+    session = MagicMock()
+    session.get_bind.return_value.dialect.name = "sqlite"
+    portfolio._lock_ledger(session)
+    session.execute.assert_not_called()
+
+
+def test_each_ledger_repair_locks_before_it_reads(monkeypatch):
+    calls = []
+    monkeypatch.setattr(portfolio, "_lock_ledger", lambda session: calls.append("lock"))
+    portfolio.backfill_missing_transactions()
+    portfolio.backfill_wallet_cash_flows()
+    portfolio.backfill_purchase_funding()
+    assert calls == ["lock", "lock", "lock"]

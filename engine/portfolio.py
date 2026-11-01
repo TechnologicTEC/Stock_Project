@@ -13,10 +13,10 @@ from datetime import date, datetime
 from typing import IO
 
 import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from db.models import CashFlow, Holding, Transaction, Wallet
-from db.session import get_session
+from db.session import current_user_id, get_session
 from engine import cache, price_history
 from engine.data_sources import alpaca_client, finnhub_client
 from engine.time_utils import utcnow
@@ -232,6 +232,25 @@ def sell_holding(holding_id: int, shares_to_sell: float, price: float, sell_date
         }
 
 
+# Any fixed number: it only has to differ from other advisory locks the app takes.
+_LEDGER_LOCK = 61_011
+
+
+def _lock_ledger(session) -> None:
+    """Serialise the ledger repairs below for the current user.
+
+    They run on every Holdings load and on each guest's arrival, and each one
+    reads the ledger, decides, then writes. Two loads at once (two tabs, two
+    guests) could both see the unfunded ledger and both bank the funding
+    deposit. A transaction-scoped Postgres lock makes the second wait and then
+    read what the first wrote. SQLite (local, tests) has one writer anyway.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.execute(text("select pg_advisory_xact_lock(:space, :user_id)"),
+                    {"space": _LEDGER_LOCK, "user_id": int(current_user_id() or 0)})
+
+
 def backfill_purchase_funding() -> int:
     """One-off (safe-to-repeat) reconciliation for the day buys began debiting.
 
@@ -253,6 +272,7 @@ def backfill_purchase_funding() -> int:
     on every page load. Returns the number of rows created.
     """
     with get_session() as session:
+        _lock_ledger(session)
         wallet = session.execute(select(Wallet)).scalars().first()
         if wallet is None:
             return 0                     # nothing banked yet; nothing to reconcile
@@ -289,6 +309,7 @@ def backfill_missing_transactions() -> int:
     every page load — once a ticker has a transaction, it's never
     backfilled again. Returns the number of transactions created."""
     with get_session() as session:
+        _lock_ledger(session)
         tickers_with_transactions = {row[0] for row in session.execute(select(Transaction.ticker).distinct())}
         holdings = session.execute(select(Holding)).scalars().all()
 
@@ -383,6 +404,7 @@ def backfill_wallet_cash_flows() -> int:
     exists, that ledger is treated as authoritative and this never fires
     again (so it can't double-count). Returns the number of rows created."""
     with get_session() as session:
+        _lock_ledger(session)
         if session.execute(select(CashFlow.id).limit(1)).first() is not None:
             return 0
 
