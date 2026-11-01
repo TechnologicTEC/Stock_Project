@@ -4,6 +4,7 @@ login flow (owner/friend own accounts; guests share a seeded demo). Plus two
 page-level checks that the gate blocks a guest on a restricted page and lets
 them onto an allowed one.
 """
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,53 @@ def test_apply_login_guest_uses_shared_seeded_demo():
     assert {"AAPL", "MSFT", "KO"} <= {h["ticker"] for h in portfolio.list_holdings()}
     # a second guest shares the same demo account
     assert auth.apply_login("someone-else@x.com").user_id == identity.user_id
+
+
+def test_the_guest_demo_cannot_be_changed():
+    """The login screen promises a read-only demo; every visitor shares it."""
+    auth.apply_login("stranger@x.com")
+    for write in (lambda: portfolio.add_holding("TSLA", 1, 100.0, date(2026, 1, 2)),
+                  lambda: portfolio.deposit_to_wallet(50.0),
+                  portfolio.reset_portfolio):
+        with pytest.raises(db_session.ReadOnlyError):
+            write()
+    assert {h["ticker"] for h in portfolio.list_holdings()} == {"AAPL", "MSFT", "KO"}
+    assert portfolio.get_wallet_balance() == pytest.approx(1000.0)
+
+
+def test_the_guest_demo_is_seeded_with_its_purchases_funded():
+    """Buys debit the wallet; seeding the purchases alone left it at -$3,100."""
+    auth.apply_login("stranger@x.com")
+    assert portfolio.get_wallet_balance() == pytest.approx(1000.0)
+    flows = portfolio.list_cash_flows()
+    assert sum(f["amount"] for f in flows if f["type"] == "deposit") == pytest.approx(5100.0)
+
+
+def test_signing_in_after_a_guest_session_can_write_again(monkeypatch):
+    """Streamlit reuses the script thread, so the flag must be cleared, not just set."""
+    auth.apply_login("stranger@x.com")
+    monkeypatch.setenv("OWNER_EMAILS", "me@x.com")
+    auth.apply_login("me@x.com")
+    portfolio.add_holding("TSLA", 1, 100.0, date(2026, 1, 2))
+    assert [h["ticker"] for h in portfolio.list_holdings()] == ["TSLA"]
+
+
+def test_an_old_unfunded_demo_is_settled_on_the_next_guest_visit():
+    """The live demo was seeded before buys debited the wallet ($1,000 against
+    $4,100 of purchases); guests can't run the Holdings page's backfills."""
+    uid = auth.ensure_user(auth.GUEST_EMAIL, auth.GUEST)
+    with db_session.using_user(uid):
+        portfolio.deposit_to_wallet(1000.0, when=date(2026, 7, 5))
+        with db_session.get_session() as s:
+            from db.models import Holding, Transaction
+            for t, n, p in (("AAPL", 10, 150.0), ("MSFT", 5, 300.0), ("KO", 20, 55.0)):
+                s.add(Holding(ticker=t, shares=n, cost_basis=p, purchase_date=date(2024, 1, 2),
+                              asset_type="stock"))
+                s.add(Transaction(ticker=t, type="buy", shares=n, price=p, date=date(2024, 1, 2)))
+    auth.apply_login("stranger@x.com")
+    assert portfolio.get_wallet_balance() == pytest.approx(1000.0)
+    flows = portfolio.list_cash_flows()
+    assert sum(f["amount"] for f in flows if f["type"] == "deposit") == pytest.approx(5100.0)
 
 
 # --------------------------------------------------------------------------

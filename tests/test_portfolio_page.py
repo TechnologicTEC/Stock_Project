@@ -296,3 +296,22 @@ def test_portfolio_page_still_renders_after_selling_everything():
     # the "you've sold everything" note shows, not the "no holdings yet" one
     assert any("sold all your positions" in el.value for el in at.info)
     assert not any("haven't added any holdings yet" in el.value for el in at.info)
+
+
+def test_a_guest_sees_the_demo_without_any_control_that_changes_it(monkeypatch):
+    """Every anonymous visitor shares the demo; the login screen calls it read-only."""
+    monkeypatch.setenv("DEV_LOGIN_EMAIL", "stranger@x.com")      # not allowlisted -> guest
+    fake_bars = [{"date": date(2026, 1, 2), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}]
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)), \
+         patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("none")), \
+         patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=fake_bars):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+
+    assert not at.exception
+    labels = {e.label for e in at.expander}
+    for control in ("➕ Add a holding", "📄 Import holdings from CSV", "👛 Wallet", "💵 Sell a holding",
+                    "↩️ Undo / delete an entry", "⚠️ Reset everything", "🗑️ Remove a holding"):
+        assert control not in labels
+    assert any("shared demo portfolio" in el.value for el in at.info)
+    assert "Total value" in {m.label for m in at.metric}            # the demo itself still renders

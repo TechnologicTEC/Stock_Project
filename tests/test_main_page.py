@@ -37,6 +37,9 @@ def test_dashboard_shows_getting_started_when_no_holdings():
     md = " ".join(m.value for m in at.markdown)
     assert "add a holding" in md
     assert "coming in later phases" not in md          # the stale line is gone
+    # Named as the sidebar names them (app/_theme._NAV): there is no "Portfolio" page.
+    assert "open the **Holdings** page" in md and "**Portfolio**" not in md
+    assert "**Trading Bot**" in md and "**Settings**" in md
 
 
 def test_dashboard_shows_snapshot_movers_and_creator_signals():
@@ -79,6 +82,8 @@ def test_dashboard_shows_upcoming_earnings():
     body = " ".join(m.value for m in at.markdown)
     assert "Reporting soon" in body and "AAPL" in body
     assert "2d" in body                                 # days-until, terminal-style
+    # Beat/miss isn't withheld — it doesn't exist yet; past results are on News & Earnings.
+    assert "withholds" not in body and "News &amp; Earnings" in body
 
 
 def test_dashboard_handles_missing_prices_and_no_creator_signals():

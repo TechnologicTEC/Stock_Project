@@ -37,7 +37,8 @@ else:
     st.caption(
         "Personal, educational tool — not financial advice. I answer questions about **your own portfolio** "
         "from the app's cached data. I'm a **deterministic** assistant here (no LLM key set), so I stick to a "
-        "set of questions and never invent numbers. Add a free `GEMINI_API_KEY` to `.env` for free-form chat."
+        "set of questions and never invent numbers. A free Gemini key, added on the **Settings** page once "
+        "you're signed in, unlocks free-form chat."
     )
 
 with st.expander("💡 Things you can ask"):
@@ -55,8 +56,8 @@ with st.expander("💡 Things you can ask"):
         "- *How risky is my portfolio?* · *What's my biggest concentration risk?*"
     )
     if not chat_llm.is_available():
-        st.caption("No `GEMINI_API_KEY` set — I answer all of these from the built-in responder. "
-                   "A key just adds free-form, differently-worded questions.")
+        st.caption("No Gemini key for this account — I answer all of these from the built-in "
+                   "responder. A key just adds free-form, differently-worded questions.")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []

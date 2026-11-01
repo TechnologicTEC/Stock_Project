@@ -3,6 +3,7 @@ Settings — per-user API keys (Phase C). Each signed-in user brings their own
 keys (Finnhub, their own Alpaca paper account, Gemini, …); they're encrypted at
 rest and only ever used for that user. Guests are blocked (they use the demo).
 """
+import os
 import sys
 from pathlib import Path
 
@@ -31,10 +32,20 @@ st.caption(
 
 stored = credentials.stored_key_names(identity.user_id)
 
+
+def _status(name: str) -> str:
+    """The owner's keys usually come from the app's own settings (.env locally, the
+    Space's secrets online), not from this form — so "not set" was wrong for them."""
+    if name in stored:
+        return "✅ set"
+    if identity.role == auth.OWNER and os.environ.get(name):
+        return "✅ from the app's own settings"
+    return "— not set"
+
 with st.form("api_keys"):
     entries: dict[str, str] = {}
     for name, meta in credentials.MANAGED_KEYS.items():
-        status = "✅ set" if name in stored else "— not set"
+        status = _status(name)
         entries[name] = st.text_input(
             f"{meta['label']}  ·  {status}",
             type="password" if meta["secret"] else "default",

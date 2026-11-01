@@ -41,3 +41,11 @@ def test_chat_page_survives_a_tool_error():
 
     assert not at.exception
     assert any("hit a problem" in str(m.value) for m in at.markdown)
+
+
+def test_without_an_llm_key_the_page_points_at_settings_not_dotenv():
+    with patch("engine.chat_llm.is_available", return_value=False):
+        at = AppTest.from_file(PAGE_PATH)
+        at.run(timeout=30)
+    text = " ".join(c.value for c in at.caption)
+    assert "**Settings** page" in text and ".env" not in text

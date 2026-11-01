@@ -107,7 +107,7 @@ def _llm_unavailable_note(exc: Exception) -> str | None:
 
 def _no_holdings() -> ChatResponse:
     return ChatResponse(
-        "You don't have any holdings yet — add some on the **Portfolio** page and I'll have something to talk "
+        "You don't have any holdings yet — add some on the **Holdings** page and I'll have something to talk "
         "about. You can still ask *what's on my watchlist?* or *how much cash do I have?*",
         "no_holdings",
     )

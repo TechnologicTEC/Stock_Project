@@ -81,16 +81,24 @@ def ensure_user(email: str, role: str) -> int:
 
 def _seed_demo_if_empty(user_id: int) -> None:
     """Give the shared guest demo account a small sample portfolio the first
-    time, so guest pages aren't empty."""
+    time, so guest pages aren't empty, and keep its ledger settled.
+
+    Guests can't write (db.session read-only), so the Holdings page's own
+    backfills don't run for them; they run here instead, as the app. The
+    funding deposit comes first because buys debit the wallet: seeding the
+    purchases alone left the demo at -$3,100 of cash.
+    """
     from engine import portfolio  # local import: portfolio pulls heavier deps
 
-    with db_session.using_user(user_id):
-        if portfolio.list_holdings():
-            return
-        portfolio.add_holding("AAPL", 10, 150.0, date(2024, 1, 2))
-        portfolio.add_holding("MSFT", 5, 300.0, date(2024, 1, 2))
-        portfolio.add_holding("KO", 20, 55.0, date(2024, 1, 2))
-        portfolio.deposit_to_wallet(1000.0)
+    with db_session.using_user(user_id), db_session.writable():
+        if not portfolio.list_holdings():
+            portfolio.deposit_to_wallet(5100.0, when=date(2024, 1, 1))   # $4,100 of buys + $1,000 cash
+            portfolio.add_holding("AAPL", 10, 150.0, date(2024, 1, 2))
+            portfolio.add_holding("MSFT", 5, 300.0, date(2024, 1, 2))
+            portfolio.add_holding("KO", 20, 55.0, date(2024, 1, 2))
+        portfolio.backfill_missing_transactions()
+        portfolio.backfill_wallet_cash_flows()
+        portfolio.backfill_purchase_funding()
 
 
 def demo_user_id() -> int:
@@ -123,6 +131,9 @@ def credentials_fallback(role: str) -> str:
 
 def _activate(user_id: int, email: str, role: str) -> Identity:
     db_session.set_current_user(user_id)
+    # Set both ways: Streamlit reuses the script thread across reruns, so a
+    # guest's read-only flag would otherwise still be set after they sign in.
+    db_session.set_read_only(role == GUEST)
     # Load this user's own API keys into the request-scoped credentials context.
     # The owner falls back to the host .env; the guest demo may borrow the host's
     # read-only market-data keys; friends are confined to keys they entered.

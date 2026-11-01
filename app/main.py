@@ -50,15 +50,16 @@ if not holdings:
         """
 Welcome. Use the pages in the sidebar to get around:
 
-- **Portfolio** — your holdings, valuation, allocation, and per-holding Screener ratings
+- **Holdings** — your holdings, valuation, allocation, and per-holding Screener ratings
+- **Health & Projections** — concentration, beta, Sharpe ratio, drawdown, flags, and a projected range
 - **Screener** — explainable weighted-factor stock scoring (Buy → Sell)
-- **Health** — concentration, beta, Sharpe ratio, drawdown, and flags
-- **News** — headline + earnings-release sentiment, and a cross-signal summary per ticker
+- **Validation** — does the score actually predict returns? (information coefficient)
+- **News & Earnings** — headline + earnings-release sentiment, and a cross-signal summary per ticker
 - **Creator Signals** — stocks the creators you follow have been discussing
-- **Screener Validation** — does the score actually predict returns? (information coefficient)
-- **Backtest**, **Paper Trading**, and the **Assistant** chat
+- **Backtest**, **Paper Trading**, the **Trading Bot**, and the **Assistant** chat
+- **Settings** — your own API keys
 
-To begin, open the **Portfolio** page and add a holding (one at a time, or import a CSV).
+To begin, open the **Holdings** page and add a holding (one at a time, or import a CSV).
         """
     )
     st.stop()
@@ -292,8 +293,8 @@ with c_right:
             '<table class="cp-table"><thead><tr><th>Ticker</th><th>In</th><th>Date</th>'
             '<th>Est. EPS</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
-            '<div class="cp-foot">Estimates only — Finnhub\'s free tier withholds the actual '
-            "beat/miss.</div>",
+            '<div class="cp-foot">Estimates only — the result isn\'t known until the company '
+            "reports. Past beats and misses are on <b>News &amp; Earnings</b>.</div>",
             tag="next 3 weeks",
         )
     else:

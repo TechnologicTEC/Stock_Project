@@ -55,10 +55,12 @@ def isolated_test_db():
     db_session.configure("sqlite:///:memory:")
     db_session.init_db()
     db_session.set_current_user(None)  # start each test at the bootstrap-owner default
+    db_session.set_read_only(False)    # a guest test leaves its session read-only
     credentials.clear()                # start with env-fallback credentials (no user keys)
     st.cache_data.clear()              # app/_cache.py memoizes page reads process-globally
     yield
     db_session.set_current_user(None)  # don't leak a set current-user into the next test
+    db_session.set_read_only(False)
     credentials.clear()                # don't leak a set credentials context into the next test
     st.cache_data.clear()              # don't leak a cached page result into the next test
     db_session.get_engine().dispose()

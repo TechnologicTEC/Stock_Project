@@ -89,3 +89,11 @@ def test_without_keys_there_are_no_orders_either():
     view = live.account_view("ALPACA_NOT_A_REAL_PREFIX")
     assert view["available"] is False
     assert view["open_orders"] == []
+    assert view["missing_keys"] is True          # the page words this for the reader
+
+
+def test_a_broken_account_is_not_reported_as_missing_keys():
+    with patch("engine.bot.accounts.clients_for",
+               side_effect=__import__("engine.bot.accounts", fromlist=["x"]).BotAccountError("bad endpoint")):
+        view = live.account_view("ALPACA_CREATOR_CONVICTION")
+    assert view["missing_keys"] is False and view["error"] == "bad endpoint"

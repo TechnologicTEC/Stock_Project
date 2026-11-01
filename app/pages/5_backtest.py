@@ -17,7 +17,7 @@ import streamlit as st
 
 from app import _theme
 from app._auth import gate
-from db.session import init_db
+from db.session import init_db, is_read_only
 from engine import backtest, portfolio, watchlist
 
 st.set_page_config(page_title="Backtest — Investment Co-Pilot", page_icon="📊", layout="wide")
@@ -151,7 +151,7 @@ if result is not None and not result.error:
                           legend=dict(orientation="h", yanchor="top", y=-0.12, x=0))
         st.plotly_chart(fig, width="stretch", key="backtest_equity_chart", theme=None)
 
-    if st.button("💾 Save this run"):
+    if not is_read_only() and st.button("💾 Save this run"):   # the guest demo can't save
         backtest.save_backtest_run(result)
         st.success("Saved.")
         st.rerun()

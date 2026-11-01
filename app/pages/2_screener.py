@@ -108,10 +108,10 @@ def _render_leaderboard() -> None:
                 )
             else:
                 st.info(
-                    "No leaderboard yet. Run the **S&P 500 leaderboard** GitHub Action (or "
+                    "No leaderboard yet. Run the **Leaderboards (weekly live screen)** GitHub Action (or "
                     "`python scripts/screen_universe.py`) and the ranking appears here. It live-screens all "
                     "~500 names — including news sentiment and analyst consensus, which the historical "
-                    "validation can't reconstruct — so it takes ~an hour and runs as a scheduled job."
+                    "validation can't reconstruct — so it takes 1–3 hours and runs as a scheduled job."
                 )
             return
 

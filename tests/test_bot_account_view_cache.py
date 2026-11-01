@@ -79,3 +79,39 @@ def test_the_same_access_is_still_served_from_the_cache(owner_env):
         _cache.bot_account_view(PREFIX)
 
     assert calls["n"] == 1, "two owner loads inside the TTL should hit Alpaca once"
+
+
+# --------------------------------------------------------------------------
+# The same rule for the shared market-data readers.
+# --------------------------------------------------------------------------
+
+def test_a_friend_without_data_keys_does_not_set_what_the_owner_sees(monkeypatch):
+    """A friend reads only their own keys; with none, every lookup fails. That
+    result was cached for everyone, so the owner saw it until the TTL ran out."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("FINNHUB_API_KEY", "owner-key")
+
+    def screen(tickers):
+        has_key = bool(credentials.get("FINNHUB_API_KEY"))
+        return [SimpleNamespace(ticker=t, overall_score=70.0 if has_key else None,
+                                recommendation="Buy" if has_key else "Insufficient data")
+                for t in tickers]
+
+    with patch("engine.screener.screen_tickers", side_effect=screen):
+        with credentials.using_keys({}, fallback=credentials.FALLBACK_NONE):
+            friend = _cache.screener_ratings(("AAPL",))
+        with credentials.using_keys({}, fallback=credentials.FALLBACK_ALL):
+            owner = _cache.screener_ratings(("AAPL",))
+
+    assert friend["AAPL"]["score"] is None
+    assert owner["AAPL"]["score"] == 70.0
+
+
+def test_the_same_access_still_shares_one_cached_result(monkeypatch):
+    monkeypatch.setenv("FINNHUB_API_KEY", "owner-key")
+    with patch("engine.news.analyze_ticker", return_value="analysis") as analyse, \
+         credentials.using_keys({}, fallback=credentials.FALLBACK_ALL):
+        _cache.news_analysis("AAPL")
+        _cache.news_analysis("AAPL")
+    assert analyse.call_count == 1

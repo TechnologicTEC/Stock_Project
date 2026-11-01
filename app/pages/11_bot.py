@@ -39,6 +39,7 @@ import streamlit as st
 from app import _bot_panels, _cache, _theme
 from app._auth import gate
 from db.session import init_db
+from engine import auth
 from engine.bot import journal, performance, risk
 from engine.bot import positions as bot_positions
 from engine.bot import strategies as bot_strategies
@@ -46,7 +47,10 @@ from engine.bot import strategies as bot_strategies
 st.set_page_config(page_title="Trading Bot — Investment Co-Pilot", page_icon="📊", layout="wide")
 _theme.apply()
 init_db()
-gate("bot")          # restricted: not in GUEST_PAGES, so guests are stopped here
+identity = gate("bot")   # restricted: not in GUEST_PAGES, so guests are stopped here
+# Friends may watch; only the owner may stop or resume a strategy. They are
+# the owner's paper accounts, and Resume arms an autonomous trader.
+can_control = identity.role == auth.OWNER
 
 BENCHMARK_LABEL = "SPY buy & hold"
 # Both runs in .github/workflows/trade-bot.yml, as (hour, minute, weekdays) in
@@ -318,6 +322,16 @@ def _open_orders_html(orders: list[dict]) -> str:
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
+def _view_error(view: dict) -> str:
+    """Why the live view is missing, for the reader. The runner's message says
+    "add them as GitHub secrets", which is right for the bot and wrong here: the
+    keys are in place, they just aren't lent to this sign-in (only the owner's)."""
+    if view.get("missing_keys"):
+        return ("Live positions need this strategy's Alpaca key pair, and only the owner's "
+                "sign-in can read it here — so this is the journal's version.")
+    return view.get("error") or ""
+
+
 def _orders_error_html(view: dict) -> str:
     """Say when the order read failed — otherwise it looks exactly like 'no orders'."""
     error = view.get("orders_error")
@@ -367,7 +381,8 @@ _theme.page_header(
 st.caption(
     "Personal, educational tool — not financial advice. Every account here is **paper money** "
     "(Alpaca's paper endpoint, asserted before each order). This page is read-only apart from the "
-    "per-strategy **Stop**; the bot itself runs on a GitHub Actions schedule, not from this browser."
+    "owner's per-strategy **Stop**; the bot itself runs on a GitHub Actions schedule, not from this "
+    "browser."
 )
 
 configs = _cache.bot_configs()
@@ -857,7 +872,7 @@ for tab, r in zip(tabs, tab_rows):
                        "fills at the open, or straight away if GitHub started that run after "
                        "the bell. They are not counted as holdings above; the next run "
                        "settles it.</p>" if pending_rows else "")
-                    + f'<p class="cp-foot">{_esc(view["error"])}</p>')
+                    + f'<p class="cp-foot">{_esc(_view_error(view))}</p>')
 
             _theme.panel("Open positions", _positions_table(enriched) + footer, tag=tag)
         elif view["available"] and view.get("open_orders"):
@@ -875,7 +890,7 @@ for tab, r in zip(tabs, tab_rows):
                 '<p class="cp-note">No Alpaca key pair for this strategy here, and the journal '
                 "has no filled orders to rebuild a book from — so this strategy has not bought "
                 "anything yet. Everything above is read from the database and is unaffected."
-                f'</p><p class="cp-foot">{_esc(view["error"])}</p>',
+                f'</p><p class="cp-foot">{_esc(_view_error(view))}</p>',
                 tag="nothing to show",
             )
 
@@ -953,7 +968,9 @@ for tab, r in zip(tabs, tab_rows):
                 f"max {(cfg.get('max_position_pct') or 0):.0%} per position · "
                 f"started at {_money(cfg.get('starting_equity'), 2)}"
             )
-            if cfg.get("killed"):
+            if not can_control:
+                st.caption("Only the owner can stop or resume a strategy.")
+            elif cfg.get("killed"):
                 # Resuming ARMS an autonomous trader, so it takes two deliberate
                 # actions; stopping takes one. The asymmetry is the same
                 # fail-safe principle as BOT_TRADING_ENABLED in risk.py — the

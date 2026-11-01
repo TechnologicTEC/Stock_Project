@@ -33,6 +33,11 @@ class BotAccountError(RuntimeError):
     """Missing or unusable credentials for a strategy's account."""
 
 
+class MissingKeysError(BotAccountError):
+    """The strategy's key pair isn't in this environment — normal for anyone but
+    the owner on the website, so the page words it for them (engine/bot/live)."""
+
+
 def keys_for(key_env_prefix: str) -> tuple[str, str]:
     """Resolve `<PREFIX>_KEY` / `<PREFIX>_SECRET` for one strategy.
 
@@ -49,7 +54,7 @@ def keys_for(key_env_prefix: str) -> tuple[str, str]:
     secret = credentials.get(f"{prefix}_SECRET")
     if not key or not secret:
         missing = [n for n, v in ((f"{prefix}_KEY", key), (f"{prefix}_SECRET", secret)) if not v]
-        raise BotAccountError(
+        raise MissingKeysError(
             f"Missing Alpaca credentials for this strategy: {', '.join(missing)}. "
             "Add them as GitHub repository secrets (and to .env for local runs)."
         )

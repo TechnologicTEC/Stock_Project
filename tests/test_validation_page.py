@@ -179,3 +179,29 @@ def test_validation_page_handles_empty_result():
 
     assert not at.exception
     assert any("Couldn't reconstruct any scored dates" in w.value for w in at.warning)
+
+
+def test_a_significant_score_with_no_significant_factor_is_no_reweighting_basis():
+    """With the overall result past the bar, the "not a reweighting mandate"
+    warning stopped showing — while every factor still failed its own test."""
+    from engine import screener_validation
+
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+    screener_validation.save_universe_result(_universe_result())
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not at.exception
+    assert any("no single factor does" in i.value for i in at.info)
+    assert not any("justify reweighting" in e.label for e in at.expander)
+
+
+def test_the_note_is_absent_when_a_factor_clears_the_bar():
+    from engine import screener_validation
+
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+    strong = {"label": "Momentum", "mean_ic": 0.06, "t_stat": 3.1, "ic_ir": 0.6,
+              "hit_rate": 0.7, "significant": True, "n_dates": 61}
+    screener_validation.save_universe_result(_universe_result(factor_ic={"momentum": strong}))
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    assert not any("no single factor does" in i.value for i in at.info)

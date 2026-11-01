@@ -248,6 +248,17 @@ def compute_concentration() -> list[ConcentrationResult]:
 # Risk-free rate
 # --------------------------------------------------------------------------
 
+def _trading_days(start: date, end: date) -> list[date]:
+    """The days SPY has a bar for in [start, end] — the market's own calendar.
+    Empty when that can't be read, and the caller then keeps every weekday."""
+    try:
+        price_history.ensure_cached(BENCHMARK_TICKER, start, end)
+        bars = cache.get_price_history(BENCHMARK_TICKER, price_history.canonical_source(), start, end)
+        return sorted({b["date"] for b in bars})
+    except Exception:
+        return []
+
+
 def _get_risk_free_rate_annual() -> tuple[float, str]:
     try:
         series = cache.get_or_fetch(
@@ -313,7 +324,7 @@ def _generate_flags(
     if not flags:
         flags.append(HealthFlag(
             "good",
-            "None of the checks below were triggered. That doesn't guarantee safety — only that these "
+            "None of this page's checks were triggered. That doesn't guarantee safety — only that these "
             "specific, simple threshold checks didn't fire for this lookback window.",
         ))
 
@@ -346,12 +357,20 @@ def get_health_report(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> HealthRepor
         except Exception as exc:
             errors.append(f"portfolio return history: {exc}")
 
+    # Weekdays are not trading days: ~9 a year are market holidays, and today has
+    # no bar until the close. Left in as flat days they made a year look 3.5%
+    # longer to the 252-day annualisation (+10% read as +9.6%) and fed Sharpe and
+    # beta returns that never happened. SPY's own bars say which days traded.
+    trading_days = _trading_days(start, end) if not value_series.empty else []
+    if trading_days:
+        value_series = value_series[value_series.index.isin(trading_days)]
+
     trimmed_values = _trim_leading_zeros(value_series)
     portfolio_returns = _daily_returns(value_series)
 
     beta, beta_n = None, 0
     try:
-        business_days = pd.bdate_range(start=start, end=end).date
+        business_days = trading_days or pd.bdate_range(start=start, end=end).date
         benchmark_prices = price_history.price_series(BENCHMARK_TICKER, start, end, business_days)
         benchmark_returns = _daily_returns(benchmark_prices)
         beta, beta_n = compute_beta(portfolio_returns, benchmark_returns)

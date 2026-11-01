@@ -258,7 +258,8 @@ def gate(page_key: str) -> auth.Identity:
 
     if not auth.can_access(identity.role, page_key):
         st.error("This page isn't available on your account — it's limited to the owner and invited friends.")
-        st.info("As a guest you can use **Portfolio**, **Health**, **Backtest**, and the **Assistant** "
+        st.info("As a guest you can use the **Dashboard**, **Holdings**, **Health & Projections**, "
+                "**Backtest** and the **Assistant**, "
                 "with a demo portfolio.")
         st.stop()
     return identity

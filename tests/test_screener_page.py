@@ -155,6 +155,8 @@ def test_leaderboard_shows_empty_prompt_when_no_run_stored():
     at.run(timeout=30)
     assert not at.exception
     assert any("No leaderboard yet" in el.value for el in at.info)
+    # The workflow was renamed on 2 Nov 2026; the prompt named the old one.
+    assert any("**Leaderboards (weekly live screen)**" in el.value for el in at.info)
 
 
 def test_leaderboard_renders_ranking_with_the_measured_ic():

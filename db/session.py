@@ -68,6 +68,38 @@ def set_current_user(user_id: int | None) -> None:
     _current_user_id.set(user_id)
 
 
+# The shared guest demo is one account every anonymous visitor uses, and the
+# login screen promises it is read-only. Hiding the buttons is not that promise:
+# this refuses, at the flush, any write to a user-owned row while the session
+# is read-only (_refuse_read_only_writes below). Shared caches stay writable.
+READ_ONLY_MESSAGE = "This is the shared demo portfolio, so it can't be changed. Sign in to keep your own."
+
+
+class ReadOnlyError(ValueError):
+    """A write to user-owned data while the current session is read-only."""
+
+
+_read_only: contextvars.ContextVar[bool] = contextvars.ContextVar("read_only", default=False)
+
+
+def set_read_only(flag: bool) -> None:
+    _read_only.set(bool(flag))
+
+
+def is_read_only() -> bool:
+    return _read_only.get()
+
+
+@contextmanager
+def writable() -> Iterator[None]:
+    """Lift read-only for a block — the app preparing the demo, never a visitor."""
+    token = _read_only.set(False)
+    try:
+        yield
+    finally:
+        _read_only.reset(token)
+
+
 @contextmanager
 def using_user(user_id: int | None) -> Iterator[None]:
     """Scope a block of work to a specific user (e.g. a page run, or a test)."""
@@ -377,6 +409,15 @@ def _scope_selects_to_user(orm_execute_state) -> None:
         orm_execute_state.statement = orm_execute_state.statement.options(
             with_loader_criteria(model, model.user_id == uid, include_aliases=True)
         )
+
+
+@event.listens_for(Session, "before_flush")
+def _refuse_read_only_writes(session: Session, flush_context, instances) -> None:
+    if not _read_only.get():
+        return
+    if any(isinstance(obj, _USER_SCOPED_MODELS)
+           for obj in (*session.new, *session.dirty, *session.deleted)):
+        raise ReadOnlyError(READ_ONLY_MESSAGE)
 
 
 @event.listens_for(Session, "before_flush")

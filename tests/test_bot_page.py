@@ -1082,3 +1082,24 @@ def test_how_it_works_states_the_cash_cushion_and_counts_trading_strategies():
     assert "equity × 95% × min(1/30, 20%)" in text
     assert "all 1 trading strategies" in text or "all 1 trading" in text
     assert "cash for the whole position" in text
+
+
+def test_a_friend_can_watch_but_not_stop_or_resume():
+    """They are the owner's paper accounts, and Resume arms an autonomous trader."""
+    env = {"DEV_LOGIN_EMAIL": "friend@x.com", "FRIEND_EMAILS": "friend@x.com"}
+    for cfg in (_config(), _config(killed=True)):
+        at = _run(configs=[cfg], env=env)
+        assert not at.exception
+        keys = {b.key for b in at.button}
+        assert "bot_stop_spy_harness" not in keys and "bot_resume_spy_harness" not in keys
+        assert any("Only the owner can stop or resume" in c.value for c in at.caption)
+
+
+def test_missing_keys_are_explained_to_the_reader_not_the_runner():
+    """The runner's message says to add GitHub secrets — already done. On the
+    website the keys just aren't lent to a friend's sign-in."""
+    view = _account_view(available=False, missing_keys=True,
+                         error="Missing Alpaca credentials ... Add them as GitHub repository secrets.")
+    body = _body(_run(view=view, fills=[], rebuilt=[]))
+    assert "sign-in can read it here" in body
+    assert "GitHub repository secrets" not in body

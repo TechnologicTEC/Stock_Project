@@ -46,10 +46,30 @@ def live_valuation(user_id: int | None):
     return portfolio.get_live_valuation()
 
 
-@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+# Shared market data still depends on WHO asks: a friend reads only their own data
+# keys (engine/credentials), so one with none would cache a result in which every
+# lookup failed, and the owner would be shown it until the TTL ran out. These are
+# keyed on a fingerprint of the keys this session can use — never the keys.
+_MARKET_DATA_KEYS = ("FINNHUB_API_KEY", "ALPACA_API_KEY")
+
+
+def _data_access() -> str:
+    import hashlib
+
+    from engine import credentials
+
+    seen = "|".join(credentials.get(name) or "" for name in _MARKET_DATA_KEYS)
+    return hashlib.sha256(seen.encode()).hexdigest()[:16]
+
+
 def upcoming_earnings(tickers: tuple[str, ...], within_days: int = 21) -> list[dict]:
     """Which of `tickers` report earnings within `within_days`, soonest first —
     shared market data, keyed by the ticker set. Dates are source-cached (24h)."""
+    return _upcoming_earnings(tickers, within_days, _data_access())
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def _upcoming_earnings(tickers: tuple[str, ...], within_days: int, access: str) -> list[dict]:
     from engine import earnings
 
     out = []
@@ -60,18 +80,26 @@ def upcoming_earnings(tickers: tuple[str, ...], within_days: int = 21) -> list[d
     return sorted(out, key=lambda e: e["days_until"])
 
 
-@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def news_analysis(ticker: str):
     """News + sentiment for a ticker — shared market data, keyed by ticker."""
+    return _news_analysis(ticker, _data_access())
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def _news_analysis(ticker: str, access: str):
     return news.analyze_ticker(ticker)
 
 
-@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def screener_ratings(tickers: tuple[str, ...]) -> dict:
     """{ticker: {"score", "recommendation"}} from the Investment Screener — shared
     market data, keyed by the ticker set. Heavy (per-ticker analyst calls), so
-    it's opt-in on the Portfolio page and cached here. Imported lazily to keep
-    the screener's stack off every page's import."""
+    it's opt-in on the Holdings page and cached here."""
+    return _screener_ratings(tickers, _data_access())
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def _screener_ratings(tickers: tuple[str, ...], access: str) -> dict:
+    # Imported lazily to keep the screener's stack off every page's import.
     from engine import screener
 
     return {r.ticker: {"score": r.overall_score, "recommendation": r.recommendation}
@@ -95,10 +123,14 @@ def watchlist_performance(user_id: int | None,
         [{"ticker": t, "added_at": added} for t, added in items])
 
 
-@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
 def signal_summary(ticker: str) -> dict:
     """Cross-signal agreement for a ticker — shared market data, keyed by ticker.
     Runs the Screener, so it's opt-in on the page and cached here."""
+    return _signal_summary(ticker, _data_access())
+
+
+@st.cache_data(ttl=_TTL_SECONDS, show_spinner=False)
+def _signal_summary(ticker: str, access: str) -> dict:
     from engine import signals
 
     return signals.aggregate_signals(ticker)

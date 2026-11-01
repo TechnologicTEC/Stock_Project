@@ -132,7 +132,7 @@ if st.button("▶️ Run validation", type="primary"):
 # page only ever reads the stored result.
 # --------------------------------------------------------------------------
 st.divider()
-with st.expander("🌍 Validate across the S&P 500 — the read that could justify reweighting", expanded=False):
+with st.expander("🌍 Validate across the S&P 500 — does the score rank stocks?", expanded=False):
     uni = validation.load_universe_result()
     if not uni:
         st.info(
@@ -178,6 +178,15 @@ with st.expander("🌍 Validate across the S&P 500 — the read that could justi
                 "longer look-back (or a shorter horizon) buys more independent periods. Not a reweighting "
                 "mandate yet.",
                 icon="📉",
+            )
+        elif not any(f.get("significant") for f in uni["factor_ic"].values()):
+            # The combined score clearing the bar says nothing about which factor
+            # earns it — and that is the question reweighting needs answered.
+            st.info(
+                "**The combined score clears the bar; no single factor does.** That supports using "
+                "the score as a whole as a faint tilt. It is not a basis for reweighting the factors: "
+                "none of them, on its own, beats zero at the multiple-test bar in the table below.",
+                icon="⚖️",
             )
 
         def _verdict_badge(f):

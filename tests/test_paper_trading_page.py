@@ -52,6 +52,8 @@ def test_page_prompts_when_not_configured():
         at.run(timeout=30)
     assert not at.exception
     assert any("Alpaca isn't connected" in el.value for el in at.info)
+    # On the website a friend can't reach `.env`; their keys go in through Settings.
+    assert any("**Settings** page" in el.value for el in at.info)
 
 
 def test_page_renders_account_and_positions():

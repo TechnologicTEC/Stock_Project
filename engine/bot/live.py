@@ -44,12 +44,14 @@ def account_view(key_env_prefix: str) -> dict:
         # page showed 4 untouched holdings and nothing else).
         "open_orders": [],
         "orders_error": None,
+        "missing_keys": False,
     }
 
     try:
         client, _data = accounts.clients_for(key_env_prefix)
     except accounts.BotAccountError as exc:
         view["error"] = str(exc)
+        view["missing_keys"] = isinstance(exc, accounts.MissingKeysError)
         return view
     except Exception as exc:                              # noqa: BLE001
         view["error"] = f"{type(exc).__name__}: {exc}"

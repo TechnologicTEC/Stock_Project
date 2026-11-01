@@ -269,6 +269,8 @@ def test_generate_flags_includes_good_status_when_nothing_triggers():
     flags = health._generate_flags([], beta=1.0, sharpe=1.5, max_drawdown=-5.0)
     assert len(flags) == 1
     assert flags[0].severity == "good"
+    # The checks sit above and below this message on the page, not only below it.
+    assert "below" not in flags[0].message
 
 
 def test_generate_flags_high_beta_triggers_warning():
@@ -396,6 +398,30 @@ def test_get_health_report_a_mid_window_purchase_is_not_read_as_a_return():
 
     assert report.expected_return_annualized_pct is not None
     assert 5.0 < report.expected_return_annualized_pct < 15.0   # was > 200 before
+
+
+def test_market_holidays_are_not_counted_as_trading_days():
+    """The index runs on weekdays (~261 a year); the market trades ~252. Counted
+    as flat days, the 9 holidays made a year look 3.5% longer to the 252-day
+    annualisation, so a true +10% year read as about +9.6%."""
+    today = date.today()
+    weekdays = [today - timedelta(days=d) for d in range(400, -1, -1)
+                if (today - timedelta(days=d)).weekday() < 5]
+    window = [d for d in weekdays if d >= today - timedelta(days=365)]
+    holidays = set(window[10::28][:9])                     # nine closed weekdays inside the year
+    trading = [d for d in weekdays if d not in holidays]
+    in_year = [d for d in trading if d >= today - timedelta(days=365)]
+    grow = {d: 100.0 * 1.10 ** (i / (len(in_year) - 1)) for i, d in enumerate(in_year)}
+    bars = [{"date": d, "open": grow.get(d, 100.0), "high": grow.get(d, 100.0), "low": grow.get(d, 100.0),
+             "close": grow.get(d, 100.0), "volume": 1000} for d in trading]
+    portfolio.add_holding("AAPL", 10, 100.0, today - timedelta(days=400))
+
+    with patch("engine.portfolio.finnhub_client.get_quote", side_effect=lambda t: _fake_quote(t)),          patch("engine.portfolio.finnhub_client.get_company_profile", side_effect=RuntimeError("none")),          patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=bars),          patch("engine.health.fred_client.get_series", return_value=[{"date": "2026-01-01", "value": 4.0}]):
+        report = health.get_health_report(lookback_days=365)
+
+    expected = 1.10 ** (health.TRADING_DAYS_PER_YEAR / len(in_year)) - 1
+    assert report.expected_return_annualized_pct == pytest.approx(expected * 100, abs=0.15)
+    assert report.sharpe_data_points == len(in_year) - 1
 
 
 # --------------------------------------------------------------------------

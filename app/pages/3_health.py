@@ -31,7 +31,7 @@ st.caption(
 )
 
 if not portfolio.list_holdings():
-    st.info("You haven't added any holdings yet. Add some on the **Portfolio** page first, then come back here.")
+    st.info("You haven't added any holdings yet. Add some on the **Holdings** page first, then come back here.")
     st.stop()
 
 lookback_label = st.radio(

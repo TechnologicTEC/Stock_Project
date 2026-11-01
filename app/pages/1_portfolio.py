@@ -21,24 +21,31 @@ import streamlit as st
 from app import _cache
 from app import _theme
 from app._auth import gate
-from db.session import current_user_id, init_db
+from db.session import READ_ONLY_MESSAGE, current_user_id, init_db, is_read_only
 from engine import currency, portfolio
 
 st.set_page_config(page_title="Portfolio — Investment Co-Pilot", page_icon="📊", layout="wide")
 _theme.apply()
 init_db()  # safe to call every run - no-op if the schema's already current
 gate("portfolio")  # resolve the signed-in user and scope the DB to them (Phase B)
-portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
-portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
-portfolio.backfill_purchase_funding()      # ...and the purchases that predate buys debiting the wallet
-# Order matters: the two above must settle the ledger first, because this one
-# reconciles the wallet AGAINST that ledger and would otherwise bank a deposit
-# for buys backfill_missing_transactions has not written yet.
+# The shared guest demo: every control that changes it is hidden, and the
+# database refuses the write anyway (db.session.ReadOnlyError). Its ledger is
+# settled by engine/auth when a guest arrives, not by the backfills below.
+read_only = is_read_only()
+if not read_only:
+    portfolio.backfill_missing_transactions()  # Section 6.10 - safe/idempotent, cheap to run every load
+    portfolio.backfill_wallet_cash_flows()     # reconciles pre-dating wallet balances into the cash ledger
+    portfolio.backfill_purchase_funding()      # ...and the purchases that predate buys debiting the wallet
+    # Order matters: the two above must settle the ledger first, because this one
+    # reconciles the wallet AGAINST that ledger and would otherwise bank a deposit
+    # for buys backfill_missing_transactions has not written yet.
 
 _theme.page_header("Holdings", eyebrow="Portfolio")
 st.caption(
     "Personal, educational tool — not financial advice. Free-tier data can be delayed or incomplete."
 )
+if read_only:
+    st.info(READ_ONLY_MESSAGE, icon="👀")
 
 # --------------------------------------------------------------------------
 # Display currency (USD default; NZD via the ECB's daily USD/NZD fixing, FRED as
@@ -172,80 +179,82 @@ def event_marker_traces(markers: list[dict]) -> list[go.Scatter]:
 # Add a holding
 # --------------------------------------------------------------------------
 
-with st.expander("➕ Add a holding", expanded=False):
-    with st.form("add_holding_form", clear_on_submit=True):
-        cols = st.columns([1, 1, 1, 1, 1])
-        ticker = cols[0].text_input("Ticker").strip().upper()
-        shares = cols[1].number_input("Shares", min_value=0.0, step=1.0, format="%.4f")
-        cost_basis = cols[2].number_input("Cost basis / share ($)", min_value=0.0, step=1.0, format="%.2f")
-        purchase_date = cols[3].date_input("Purchase date", value=date.today(), max_value=date.today())
-        asset_type = cols[4].selectbox("Asset type", sorted(portfolio.VALID_ASSET_TYPES))
-        submitted = st.form_submit_button("Add holding")
+if not read_only:
+    with st.expander("➕ Add a holding", expanded=False):
+        with st.form("add_holding_form", clear_on_submit=True):
+            cols = st.columns([1, 1, 1, 1, 1])
+            ticker = cols[0].text_input("Ticker").strip().upper()
+            shares = cols[1].number_input("Shares", min_value=0.0, step=1.0, format="%.4f")
+            cost_basis = cols[2].number_input("Cost basis / share ($)", min_value=0.0, step=1.0, format="%.2f")
+            purchase_date = cols[3].date_input("Purchase date", value=date.today(), max_value=date.today())
+            asset_type = cols[4].selectbox("Asset type", sorted(portfolio.VALID_ASSET_TYPES))
+            submitted = st.form_submit_button("Add holding")
 
-    if submitted:
-        if not ticker:
-            st.error("Ticker is required.")
-        else:
-            try:
-                portfolio.add_holding(ticker, shares, cost_basis, purchase_date, asset_type)
-                st.success(f"Added {ticker}.")
+        if submitted:
+            if not ticker:
+                st.error("Ticker is required.")
+            else:
+                try:
+                    portfolio.add_holding(ticker, shares, cost_basis, purchase_date, asset_type)
+                    st.success(f"Added {ticker}.")
+                    _cache.clear()
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+    with st.expander("📄 Import holdings from CSV", expanded=False):
+        st.caption("Required columns: `ticker, shares, cost_basis, purchase_date`. Optional: `asset_type`.")
+        template = "ticker,shares,cost_basis,purchase_date,asset_type\nAAPL,10,150.00,2025-06-01,stock\n"
+        st.download_button("Download a template", template, file_name="holdings_template.csv", mime="text/csv")
+
+        uploaded = st.file_uploader("Choose a CSV file", type="csv")
+        if uploaded is not None and st.button("Import"):
+            result = portfolio.import_holdings_from_csv(uploaded)
+            if result.added:
+                st.success(f"Added {result.added} holding(s).")
+            if result.errors:
+                st.warning("Some rows were skipped:\n\n" + "\n".join(f"- {e}" for e in result.errors))
+            if result.added:
                 _cache.clear()
                 st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
-with st.expander("📄 Import holdings from CSV", expanded=False):
-    st.caption("Required columns: `ticker, shares, cost_basis, purchase_date`. Optional: `asset_type`.")
-    template = "ticker,shares,cost_basis,purchase_date,asset_type\nAAPL,10,150.00,2025-06-01,stock\n"
-    st.download_button("Download a template", template, file_name="holdings_template.csv", mime="text/csv")
-
-    uploaded = st.file_uploader("Choose a CSV file", type="csv")
-    if uploaded is not None and st.button("Import"):
-        result = portfolio.import_holdings_from_csv(uploaded)
-        if result.added:
-            st.success(f"Added {result.added} holding(s).")
-        if result.errors:
-            st.warning("Some rows were skipped:\n\n" + "\n".join(f"- {e}" for e in result.errors))
-        if result.added:
-            _cache.clear()
-            st.rerun()
 
 # --------------------------------------------------------------------------
 # Wallet (Section 6.10) — independent of holdings, so it's usable even
 # before you've added a single position.
 # --------------------------------------------------------------------------
 
-with st.expander("👛 Wallet", expanded=False):
-    wallet_balance = portfolio.get_wallet_balance()
-    st.metric("Cash balance", money(wallet_balance))
+if not read_only:
+    with st.expander("👛 Wallet", expanded=False):
+        wallet_balance = portfolio.get_wallet_balance()
+        st.metric("Cash balance", money(wallet_balance))
 
-    w1, w2 = st.columns(2)
-    with w1:
-        with st.form("deposit_form", clear_on_submit=True):
-            deposit_amount = st.number_input("Deposit ($)", min_value=0.0, step=10.0, format="%.2f")
-            if st.form_submit_button("Deposit"):
-                try:
-                    portfolio.deposit_to_wallet(deposit_amount)
-                    st.success(f"Deposited ${deposit_amount:,.2f}.")
-                    _cache.clear()
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
-    with w2:
-        with st.form("withdraw_form", clear_on_submit=True):
-            withdraw_amount = st.number_input("Withdraw ($)", min_value=0.0, step=10.0, format="%.2f")
-            if st.form_submit_button("Withdraw"):
-                try:
-                    portfolio.withdraw_from_wallet(withdraw_amount)
-                    st.success(f"Withdrew ${withdraw_amount:,.2f}.")
-                    _cache.clear()
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
+        w1, w2 = st.columns(2)
+        with w1:
+            with st.form("deposit_form", clear_on_submit=True):
+                deposit_amount = st.number_input("Deposit ($)", min_value=0.0, step=10.0, format="%.2f")
+                if st.form_submit_button("Deposit"):
+                    try:
+                        portfolio.deposit_to_wallet(deposit_amount)
+                        st.success(f"Deposited ${deposit_amount:,.2f}.")
+                        _cache.clear()
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+        with w2:
+            with st.form("withdraw_form", clear_on_submit=True):
+                withdraw_amount = st.number_input("Withdraw ($)", min_value=0.0, step=10.0, format="%.2f")
+                if st.form_submit_button("Withdraw"):
+                    try:
+                        portfolio.withdraw_from_wallet(withdraw_amount)
+                        st.success(f"Withdrew ${withdraw_amount:,.2f}.")
+                        _cache.clear()
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
 
 holdings = portfolio.list_holdings()
 
-if holdings:
+if holdings and not read_only:
     with st.expander("💵 Sell a holding", expanded=False):
         sell_options = {f"{h['ticker']}  ·  {h['shares']} shares  (id {h['id']})": h for h in holdings}
         sell_choice_label = st.selectbox("Holding to sell", list(sell_options.keys()), key="sell_holding_select")
@@ -436,36 +445,37 @@ with _theme.section("Transaction history", tag="every buy, sell and cash move"):
         )
         st.dataframe(activity_df, width="stretch", hide_index=True)
 
-        with st.expander("↩️ Undo / delete an entry"):
-            def _entry_label(e):
-                if e["kind"] == "transaction":
-                    base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ {money(e['price'])}"
-                else:
-                    base = f"{e['date']} · {e['action']} {money(e['amount'])}"
-                return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
+        if not read_only:
+            with st.expander("↩️ Undo / delete an entry"):
+                def _entry_label(e):
+                    if e["kind"] == "transaction":
+                        base = f"{e['date']} · {e['action']} {e['shares']:g} {e['ticker']} @ {money(e['price'])}"
+                    else:
+                        base = f"{e['date']} · {e['action']} {money(e['amount'])}"
+                    return f"{base}   (id {e['kind'][0]}{e['id']})"  # kind-prefixed id keeps labels unique
 
-            entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
-            entry_choice = st.selectbox("Entry to remove", list(entry_options.keys()), key="activity_delete_select")
-            if st.button("Delete entry", type="secondary", key="activity_delete_btn"):
-                try:
-                    portfolio.delete_activity(*entry_options[entry_choice])
-                    st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+                entry_options = {_entry_label(e): (e["kind"], e["id"]) for e in activity}
+                entry_choice = st.selectbox("Entry to remove", list(entry_options.keys()), key="activity_delete_select")
+                if st.button("Delete entry", type="secondary", key="activity_delete_btn"):
+                    try:
+                        portfolio.delete_activity(*entry_options[entry_choice])
+                        st.success("Entry removed — your holdings, wallet, and chart have been restored.")
+                        _cache.clear()
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+
+            with st.expander("⚠️ Reset everything"):
+                st.caption(
+                    "Permanently delete **all** holdings, transactions, deposits/withdrawals, and reset "
+                    "the wallet to $0. This can't be undone."
+                )
+                reset_confirmed = st.checkbox("Yes, clear everything.", key="reset_confirm")
+                if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
+                    portfolio.reset_portfolio()
+                    st.success("Portfolio reset to an empty slate.")
                     _cache.clear()
                     st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
-
-        with st.expander("⚠️ Reset everything"):
-            st.caption(
-                "Permanently delete **all** holdings, transactions, deposits/withdrawals, and reset "
-                "the wallet to $0. This can't be undone."
-            )
-            reset_confirmed = st.checkbox("Yes, clear everything.", key="reset_confirm")
-            if st.button("Reset portfolio", type="secondary", disabled=not reset_confirmed, key="reset_btn"):
-                portfolio.reset_portfolio()
-                st.success("Portfolio reset to an empty slate.")
-                _cache.clear()
-                st.rerun()
 
     if not holdings:
         st.info("You've sold all your positions — your proceeds are sitting in the wallet. Add a holding to start investing again.")
@@ -616,14 +626,15 @@ if rate_holdings:
     st.caption("**Screener** = Buy/Hold/Sell rating · score out of 100. An explainable weighted-factor score "
                "from free data — educational, not financial advice.")
 
-with st.expander("🗑️ Remove a holding"):
-    st.caption("Erases the position and its entire transaction history — use this for an entry added by mistake. To undo just one buy/sell, use **Transaction history** above instead.")
-    options = {f"{h['ticker']}  ·  {h['shares']} shares": h["ticker"] for h in holdings}
-    choice = st.selectbox("Holding", list(options.keys()))
-    if st.button("Delete", type="secondary"):
-        try:
-            portfolio.delete_position(options[choice])
-            _cache.clear()
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+if not read_only:
+    with st.expander("🗑️ Remove a holding"):
+        st.caption("Erases the position and its entire transaction history — use this for an entry added by mistake. To undo just one buy/sell, use **Transaction history** above instead.")
+        options = {f"{h['ticker']}  ·  {h['shares']} shares": h["ticker"] for h in holdings}
+        choice = st.selectbox("Holding", list(options.keys()))
+        if st.button("Delete", type="secondary"):
+            try:
+                portfolio.delete_position(options[choice])
+                _cache.clear()
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))

@@ -38,11 +38,14 @@ if "pt_flash" in st.session_state:
     {"success": st.success, "error": st.error}.get(kind, st.info)(msg)
 
 if not paper_trading.is_configured():
+    # Most readers of this are on the website, where `.env` is out of reach: a
+    # friend's own keys go in through Settings (engine/credentials).
     st.info(
-        "**Alpaca isn't connected yet.** Create a free **paper** account at [alpaca.markets]"
-        "(https://alpaca.markets), then add your paper keys to the project's `.env`:\n\n"
-        "```\nALPACA_API_KEY=your_key\nALPACA_SECRET_KEY=your_secret\n```\n\n"
-        "Reload once they're set — nothing here can touch a real-money account (the client runs paper-only)."
+        "**Alpaca isn't connected for your account.** Create a free **paper** account at "
+        "[alpaca.markets](https://alpaca.markets), then add its paper API key and secret on the "
+        "**Settings** page. (Running the app on your own computer, `ALPACA_API_KEY` and "
+        "`ALPACA_SECRET_KEY` in `.env` work too.)\n\n"
+        "Nothing here can touch a real-money account — the client runs paper-only."
     )
     st.stop()
 

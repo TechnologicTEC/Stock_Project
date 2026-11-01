@@ -105,3 +105,23 @@ def test_manage_creators_add_button_calls_add_creator():
         at.text_input[0].set_value("@ZipTrader").run()
         [b for b in at.button if b.label == "Add creator"][0].click().run()
     add.assert_called_once_with("@ZipTrader")
+
+
+def test_only_the_owner_can_add_or_switch_off_a_creator(monkeypatch):
+    """The scanner reads every active channel and the creator bot trades what they
+    say, so a friend adding one would change what the owner's account buys."""
+    monkeypatch.setenv("DEV_LOGIN_EMAIL", "friend@x.com")
+    monkeypatch.setenv("FRIEND_EMAILS", "friend@x.com")
+    at = AppTest.from_file(PAGE)
+    with patch("engine.creator_signals.recent_signals", return_value=[]):
+        at.run(timeout=30)
+    assert not at.exception
+    assert "⚙️ Manage creators" not in {e.label for e in at.expander}
+    assert not any(b.label == "Add creator" for b in at.button)
+
+
+def test_the_owner_still_manages_creators():
+    at = AppTest.from_file(PAGE)
+    with patch("engine.creator_signals.recent_signals", return_value=[]):
+        at.run(timeout=30)
+    assert "⚙️ Manage creators" in {e.label for e in at.expander}
