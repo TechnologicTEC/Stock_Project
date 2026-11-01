@@ -1,4 +1,11 @@
-name: S&P 500 + S&P 400 leaderboards (live screen, weekly)
+name: Leaderboards (weekly live screen)
+# Each run is titled after the list it screens, so the Actions list says which
+# one it was. Same rule as SCREEN_UNIVERSE below (a test keeps the two agreeing).
+run-name: >-
+  ${{ (github.event.schedule == '10 13 * * 6' || inputs.universe == 'sp400')
+  && 'S&P 400 leaderboard (mid caps)' || 'S&P 500 leaderboard' }}${{
+  (inputs.universe_every != '' && inputs.universe_every != '1')
+  && format(' - sample, every {0}th name', inputs.universe_every) || '' }}
 
 # Runs the LIVE screener across the whole S&P 500 (Sundays) or S&P 400 (Saturdays)
 # and caches each ranked result, so the Screener page can show "highest-scoring

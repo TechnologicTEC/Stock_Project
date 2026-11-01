@@ -918,6 +918,20 @@ def test_the_saturday_cron_is_the_one_that_screens_the_sp400():
     assert len(crons) == 2 and picked != crons[0]
 
 
+def test_the_leaderboard_runs_are_titled_after_the_list_they_screen():
+    """The run title is how the Actions list says which index a run screened.
+    It has to pick the S&P 400 on the same cron line SCREEN_UNIVERSE does."""
+    import re
+    text = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
+            / "screen-leaderboard.yml").read_text(encoding="utf-8")
+    title = re.search(r"^run-name: >-\n((?:  .*\n)+)", text, re.MULTILINE).group(1)
+    titled = re.search(r"github\.event\.schedule == '([^']+)'", title).group(1)
+    screened = re.search(r"github\.event\.schedule == '([^']+)' && 'sp400'", text).group(1)
+    assert titled == screened
+    assert "inputs.universe == 'sp400'" in title
+    assert "'S&P 400 leaderboard" in title and "'S&P 500 leaderboard'" in title
+
+
 
 def test_the_bot_page_schedule_matches_both_crons():
     """The page computes "next scheduled run" from its own copy of the two
