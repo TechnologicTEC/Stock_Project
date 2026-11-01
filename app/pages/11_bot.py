@@ -237,7 +237,7 @@ def _positions_table(rows: list[dict]) -> str:
 
     head = ['<th>Holding</th>', '<th class="num">Value</th>', '<th class="num">P&amp;L</th>']
     if has_today:
-        head.append('<th class="num">Today</th>')
+        head.append(f'<th class="num">{_theme.move_label()}</th>')
     head.append('<th class="num">Weight</th>')
     head.append('<th class="num">Shares</th>')
     head.append('<th class="num">Entry &rarr; now</th>')
@@ -397,6 +397,9 @@ if not configs:
     )
     st.stop()
 
+_NO_VIEW = {"available": False, "error": None, "missing_keys": False, "equity": None, "cash": None,
+            "status": None, "positions": [], "open_orders": [], "orders_error": None}
+
 rows = []
 for cfg in configs:
     name = cfg["strategy"]
@@ -420,7 +423,11 @@ for cfg in configs:
         # fill: after the close they queue until the next open, and on an
         # intraday run they are still filling. Reading it as "slots filled now"
         # showed 9 of 15 while the account actually held all 15.
-        "view": _cache.bot_account_view(cfg.get("key_env_prefix") or ""),
+        # A disabled strategy has no account of its own to read: the retired SPY
+        # harness shares golden cross's key pair, so its tab showed golden
+        # cross's live position as its own.
+        "view": (_cache.bot_account_view(cfg.get("key_env_prefix") or "") if cfg.get("enabled")
+                 else dict(_NO_VIEW)),
         "summary": performance.summarise(
             curve, starting_equity=cfg.get("starting_equity"), trades=trades),
     })
@@ -574,7 +581,11 @@ def _strategy_row(r: dict) -> tuple[float, str]:
     return (s["total_return"] if s["total_return"] is not None else -9e9), html_row
 
 
-ranked = [_strategy_row(r) for r in rows]
+# Disabled strategies are named in Run status; a row of the old account would
+# read as a strategy that is still running.
+ranked = [_strategy_row(r) for r in rows if r["config"].get("enabled")]
+_latest_snapshot = max((r["summary"]["last_date"] for r in rows
+                        if r["config"].get("enabled") and r["summary"]["last_date"]), default=None)
 
 if bench_summary:
     ranked.append((
@@ -604,8 +615,12 @@ _theme.panel(
     "book in cash after a deep drawdown is a different result from the same return earned fully "
     "invested, and a return column alone hides that. <b>vs SPY</b> is percentage points of return "
     "against SPY bought on that strategy's own first day. Each <b>Sharpe</b> carries its standard "
-    "error, and goes dim where that error is larger than the estimate itself.</p>",
-    tag=f"{len(rows)} strategies · SPY pinned in rank order",
+    "error, and goes dim where that error is larger than the estimate itself. <b>Equity</b>, "
+    "return, Sharpe and drawdown are at the last close the bot recorded"
+    + (f" ({_latest_snapshot:%d %b})" if _latest_snapshot else "")
+    + "; <b>slots</b> and <b>cash</b> are read live from the broker where it can be, so the "
+    "two can differ by a session until the next run records it.</p>",
+    tag=f"{len(ranked) - (1 if bench_summary else 0)} strategies · SPY pinned in rank order",
 )
 
 
@@ -614,7 +629,7 @@ _theme.panel(
 # different days at different equities share one axis.
 # --------------------------------------------------------------------------
 
-plottable = [r for r in rows if len(r["curve"]) >= 2]
+plottable = [r for r in rows if len(r["curve"]) >= 2 and r["config"].get("enabled")]
 
 if plottable:
     with _theme.section("Account value since inception", tag="rebased to 100 at each start"):
@@ -673,7 +688,9 @@ for tab, r in zip(tabs, tab_rows):
                        "orders until it's resumed. Existing positions are left untouched — a stop "
                        "stops trading, it doesn't liquidate.")
         elif not cfg.get("enabled"):
-            st.info(f"**{r['label']} is disabled** in `bot_config` and won't run.")
+            st.info(f"**{r['label']} is disabled** in `bot_config` and won't run. It has no "
+                    "account of its own to show, so its tab stops here.")
+            continue
 
         # ---- quick numbers ----
         # Six st.metric cards became one strip. Same six figures, 66px instead
@@ -689,7 +706,9 @@ for tab, r in zip(tabs, tab_rows):
             sharpe_se = f"±{se:.1f}" if se is not None else None
 
         _strip(
-            _stat("Equity", _money(s["equity"], 0)),
+            # The last recorded close, not now — the holdings below are live.
+            _stat("Equity", _money(s["equity"], 0),
+                  se=f'at {s["last_date"]:%d %b}' if s["last_date"] else None),
             _stat("Return", _signed_pct(s["total_return"]), cls=_cls(s["total_return"])),
             _stat("vs SPY", _signed_pct(s["excess_return"]), cls=_cls(s["excess_return"])),
             _stat("Sharpe", sharpe_html, cls=sharpe_cls, se=sharpe_se),

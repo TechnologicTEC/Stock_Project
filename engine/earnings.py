@@ -22,6 +22,8 @@ from datetime import date, timedelta
 from engine import cache, news, sentiment
 from engine.data_sources import edgar_client, finnhub_client
 
+NO_PAST_RESULTS = (" Past results (reported EPS against the estimate, beat or miss) aren't "
+                   "available on the free data plan.")
 EARNINGS_TTL_SECONDS = 24 * 60 * 60      # earnings data only changes quarterly; a daily refresh is ample
 _SURPRISE_LOOKBACK_DAYS = 450            # ~5 quarters, enough to show a short history
 
@@ -255,6 +257,10 @@ def analyze_ticker(ticker: str) -> EarningsAnalysis:
     else:
         summary = (_describe_surprise(latest) + _describe_release(release)).strip() or \
             f"Earnings data for {ticker}."
+    if not surprises:
+        # Not "none found": Finnhub's free plan returns no past actuals at all
+        # (none were cached for any ticker by Nov 2026), so say why it's empty.
+        summary += NO_PAST_RESULTS
 
     return EarningsAnalysis(
         ticker=ticker,

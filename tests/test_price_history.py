@@ -66,9 +66,9 @@ def test_canonical_source_explicit_env_wins(monkeypatch):
 
 def test_canonical_source_prefers_alpaca_when_configured(monkeypatch):
     monkeypatch.delenv("PRICE_HISTORY_SOURCE", raising=False)  # conftest sets it; clear for this test
-    with patch("engine.data_sources.alpaca_client.is_configured", return_value=True):
+    with patch("engine.data_sources.alpaca_client.is_market_data_configured", return_value=True):
         assert price_history.canonical_source() == "alpaca"
-    with patch("engine.data_sources.alpaca_client.is_configured", return_value=False):
+    with patch("engine.data_sources.alpaca_client.is_market_data_configured", return_value=False):
         assert price_history.canonical_source() == "yfinance"
 
 
@@ -131,3 +131,66 @@ def test_trading_days_are_the_days_spy_has_a_bar():
             for d in (2, 5, 6, 7, 8)]                                      # no bar on the 1st (a holiday)
     with _patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=bars):
         assert ph.trading_days(_d(2026, 1, 1), _d(2026, 1, 8)) == [_d(2026, 1, d) for d in (2, 5, 6, 7, 8)]
+
+
+
+def test_a_guest_reads_the_same_price_source_as_everyone_else(monkeypatch):
+    """Guests have no Alpaca pair of their own, so they used to switch to Yahoo and
+    write a second series for the demo's stocks (AAPL, KO, MSFT, SPY, 27 Oct)."""
+    from engine import credentials
+    from engine import price_history as ph
+
+    monkeypatch.delenv("PRICE_HISTORY_SOURCE", raising=False)
+    monkeypatch.setenv("ALPACA_API_KEY", "app")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "app-secret")
+    with credentials.using_keys({}, fallback=credentials.FALLBACK_SHARED):
+        assert ph.canonical_source() == "alpaca"
+
+
+# --------------------------------------------------------------------------
+# Older history: a gap at the START of the window was never fetched.
+# --------------------------------------------------------------------------
+
+def _range_bars(start, end):
+    from datetime import timedelta
+    out, d = [], start
+    while d <= end:
+        if d.weekday() < 5:
+            out.append({"date": d, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1})
+        d += timedelta(days=1)
+    return out
+
+
+def test_an_older_window_than_the_cache_holds_is_fetched():
+    """SPY was stored from 18 Jul 2025 only: once a ticker had recent bars, a
+    request reaching further back saw "newest is current" and never fetched the
+    start, so a 2-year backtest compared 2 years of a stock with 15 months of SPY."""
+    recent_start, end = date(2026, 6, 1), date(2026, 6, 30)
+    cache.save_price_bars("SPY", "yfinance", _range_bars(recent_start, end))
+
+    def source(ticker, start, stop):
+        return _range_bars(start, stop)
+
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", side_effect=source) as fetch:
+        price_history.ensure_cached("SPY", date(2026, 1, 5), end)
+    assert fetch.called
+    got = {h["date"] for h in cache.get_price_history("SPY", "yfinance", date(2026, 1, 5), end)}
+    assert min(got) == date(2026, 1, 5)
+
+
+def test_history_that_does_not_exist_is_not_asked_for_again():
+    """A company listed after `start` has no older bars; ask once, then remember."""
+    end = date(2026, 6, 30)
+    cache.save_price_bars("NEWCO", "yfinance", _range_bars(date(2026, 6, 1), end))
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=[]) as fetch:
+        price_history.ensure_cached("NEWCO", date(2026, 1, 5), end)
+        price_history.ensure_cached("NEWCO", date(2026, 1, 6), end)
+        price_history.ensure_cached("NEWCO", date(2025, 6, 1), end)
+    assert fetch.call_count == 1
+
+
+def test_trading_days_fall_back_when_spy_does_not_cover_the_window():
+    """A calendar that starts months late would silently shorten the window."""
+    cache.save_price_bars("SPY", "yfinance", _range_bars(date(2026, 6, 1), date(2026, 6, 30)))
+    with patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=[]):
+        assert price_history.trading_days(date(2026, 1, 5), date(2026, 6, 30)) == []

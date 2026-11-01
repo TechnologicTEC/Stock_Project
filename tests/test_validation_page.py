@@ -205,3 +205,18 @@ def test_the_note_is_absent_when_a_factor_clears_the_bar():
     at = AppTest.from_file(PAGE_PATH)
     at.run(timeout=30)
     assert not any("no single factor does" in i.value for i in at.info)
+
+
+def test_a_factor_that_was_switched_off_reads_not_tested():
+    """Analyst and sentiment were off for the run (0 dates); "NO" read as tested and failed."""
+    from engine import screener_validation
+
+    portfolio.add_holding("AAPL", 10, 150.0, date(2022, 1, 1))
+    off = {"label": "Sentiment", "mean_ic": None, "t_stat": None, "ic_ir": None,
+           "hit_rate": None, "significant": False, "n_dates": 0}
+    screener_validation.save_universe_result(_universe_result(
+        factor_ic={"valuation": _universe_result()["factor_ic"]["valuation"], "sentiment": off}))
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    body = " ".join(m.value for m in at.markdown)
+    assert "NOT TESTED" in body

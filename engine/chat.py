@@ -82,7 +82,7 @@ HELP_TEXT = (
     "- *What's my biggest holding?* · *How much of my portfolio is in AAPL?*\n"
     "- *Why is my portfolio down today?* · *Any news on ASML?*\n"
     "- *Is the whole market down today?* · *How does the screener rate PLTR?*\n"
-    "- *How did NVDA's last earnings go?*\n"
+    "- *What did NVDA's last earnings release say?*\n"
     "- *Am I beating the S&P this month?* · *What's my 1-year projected range?*\n"
     "- *How much cash do I have?* · *What's on my watchlist?* · *How risky is my portfolio?*\n\n"
     "I answer these from the app's own data (no AI key needed) and never make up numbers."

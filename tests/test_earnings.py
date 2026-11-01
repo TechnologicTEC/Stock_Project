@@ -188,3 +188,15 @@ def test_next_earnings_none_when_no_upcoming():
         assert earnings.next_earnings("AAPL") is None
     with patch("engine.earnings.finnhub_client.get_earnings_calendar", side_effect=RuntimeError("403")):
         assert earnings.next_earnings("AAPL") is None
+
+
+def test_a_report_without_past_results_says_why():
+    """Finnhub's free plan never returns past actuals; an empty report read like "none found"."""
+    from unittest.mock import patch
+
+    from engine import earnings
+
+    with patch("engine.earnings.get_surprises", return_value=[]), \
+         patch("engine.earnings.get_press_release", return_value=None):
+        report = earnings.analyze_ticker("ADI")
+    assert "free data plan" in report.summary

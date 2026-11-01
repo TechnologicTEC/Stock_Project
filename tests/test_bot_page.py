@@ -438,14 +438,14 @@ def test_a_reconstructed_book_never_claims_an_intraday_move():
                   "unrealized_pl": 398.0, "unrealized_plpc": 0.0398,
                   "change_today_pct": None, "priced_at": date(2026, 9, 1)}],
     )
-    assert "<th class=\"num\">Today</th>" not in _body(at)
+    assert not re.search(r'<th class="num">(Today|Last session)</th>', _body(at))
 
 
 def test_holdings_carry_the_company_name_and_todays_move():
     at = _run()
     body = _body(at)
     assert "SPDR S&amp;P 500 ETF Trust" in body or "SPDR S&P 500 ETF Trust" in body
-    assert "<th class=\"num\">Today</th>" in body
+    assert re.search(r'<th class="num">(Today|Last session)</th>', body)   # by market hours
     assert "+0.7%" in body                             # change_today_pct, 0.0072
 
 
@@ -1103,3 +1103,25 @@ def test_missing_keys_are_explained_to_the_reader_not_the_runner():
     body = _body(_run(view=view, fills=[], rebuilt=[]))
     assert "sign-in can read it here" in body
     assert "GitHub repository secrets" not in body
+
+
+def test_a_disabled_strategy_shows_a_note_not_another_strategys_account():
+    """The retired SPY harness shares golden cross's key pair: its tab showed
+    golden cross's live position as its own, and its SMA panel collided with
+    golden cross's on a duplicate key."""
+    with patch("app._cache.bot_account_view") as view:
+        at = _run(configs=[_config("spy_harness", enabled=False)])
+    assert not at.exception
+    view.assert_not_called()
+    body = _body(at)
+    assert "is disabled" in body or any("is disabled" in i.value for i in at.info)
+    assert "live from Alpaca" not in body
+    assert '<span class="tick">SPY harness' not in body          # no row in the comparison table
+
+
+def test_equity_says_which_close_it_is_from():
+    """The holdings are live; the equity figure is the last recorded close."""
+    body = _body(_run())
+    last = _curve()[-1]["date"]
+    assert f"at {last:%d %b}" in body
+    assert f"({last:%d %b})" in body

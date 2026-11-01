@@ -349,7 +349,9 @@ m4.metric(
     f"{summary['total_gain_loss_pct']:.2f}%" if summary["total_gain_loss_pct"] is not None else None,
     help="Holdings value minus cost basis.",
 )
-m5.metric("Today's change", day_change_str, help="Change in your holdings' value since the previous close.")
+_move = _theme.move_label()   # "Last session" while the US market is shut
+m5.metric(f"{_move}'s change", day_change_str,
+          help="Change in your holdings' value over the latest session, against the close before it.")
 m6.metric("Wallet (cash)", wallet_str)
 
 st.divider()
@@ -588,7 +590,7 @@ table_df = pd.DataFrame(valuation)[
     columns={
         "ticker": "Ticker", "asset_type": "Type", "shares": "Shares", "cost_basis": "Cost/share",
         "current_price": "Price", "market_value": "Market value", "gain_loss_pct": "Gain/loss %",
-        "day_change_pct": "Today %",
+        "day_change_pct": f"{_move} %",
     }
 )
 
@@ -611,13 +613,13 @@ for col in money_columns:
     table_df[col] = pd.to_numeric(table_df[col], errors="coerce") * fx_rate
 
 money_fmt = currency.symbol(active_currency) + "{:,.2f}"
-styled = table_df.style.map(_pct_color, subset=["Gain/loss %", "Today %"])
+styled = table_df.style.map(_pct_color, subset=["Gain/loss %", f"{_move} %"])
 if rate_holdings:
     styled = styled.map(_reco_color, subset=["Screener"])
 styled = styled.format(
     {
         "Cost/share": money_fmt, "Price": money_fmt, "Market value": money_fmt,
-        "Gain/loss %": "{:+.2f}%", "Today %": "{:+.2f}%", "Shares": "{:,.4f}",
+        "Gain/loss %": "{:+.2f}%", f"{_move} %": "{:+.2f}%", "Shares": "{:,.4f}",
     },
     na_rep="—",
 )

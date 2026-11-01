@@ -45,7 +45,7 @@ def _alpaca_bars(ticker: str, start: date, end: date) -> list[dict]:
     here and handed back, so every later window agrees with it."""
     try:
         from engine.data_sources import alpaca_client
-        if not alpaca_client.is_configured():
+        if not alpaca_client.is_market_data_configured():
             return []
         remembered = cache.get_value(_price_mode_key(ticker))
         bars, used = alpaca_client.get_bars_and_mode(ticker, start, end, mode=remembered)
@@ -80,7 +80,10 @@ def canonical_source() -> str:
         return chosen if chosen in _VALID_SOURCES else DEFAULT_SOURCE
     try:
         from engine.data_sources import alpaca_client
-        if alpaca_client.is_configured():
+        # Market-data access, not the user's own keys: a guest or a friend reads
+        # prices with the app's pair (alpaca_client._market_data_keys), so every
+        # visitor reads the same series rather than guests switching to Yahoo.
+        if alpaca_client.is_market_data_configured():
             return "alpaca"
     except Exception:
         pass
@@ -112,6 +115,8 @@ def ensure_cached(ticker: str, start: date, end: date, source: str | None = None
     cached_dates = cache.get_cached_price_dates(ticker, source, start, end)
     if not (set(pd.bdate_range(start=start, end=end).date) - cached_dates):
         return
+    if cached_dates:
+        _fill_older(ticker, start, min(cached_dates), source)
     newest = max(cached_dates) if cached_dates else None
     if newest is not None and (end - newest).days <= _STALE_TOLERANCE_DAYS:
         return  # cache is current within a few days; the gap is holidays/weekend/today
@@ -122,6 +127,33 @@ def ensure_cached(ticker: str, start: date, end: date, source: str | None = None
     bars = _fetch_bars(ticker, start, end, source)
     if bars:
         cache.save_price_bars(ticker, source, bars)
+
+
+# How long "there is nothing older than this" is believed. A source that failed
+# looks the same as one with no older data (both return []), so this expires.
+_FLOOR_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+def _fill_older(ticker: str, start: date, earliest: date, source: str) -> None:
+    """Fetch the part of [start, …] that is OLDER than the cache holds.
+
+    The freshness check below only looks at the newest bar, so once a ticker
+    had recent bars a window reaching further back was never fetched: SPY was
+    stored from 18 Jul 2025 only, and a 2-year backtest compared two years of a
+    stock with fifteen months of SPY. A ticker listed after `start` has nothing
+    older; that is remembered (pricefloor:) so it isn't asked for on every load.
+    """
+    if (earliest - start).days <= _STALE_TOLERANCE_DAYS:
+        return
+    floor_key = f"pricefloor:{ticker}:{source}"
+    floor = cache.get_value(floor_key, ttl_seconds=_FLOOR_TTL_SECONDS)
+    if floor and date.fromisoformat(floor) >= earliest:
+        return                                   # already asked: nothing older exists
+    bars = _fetch_bars(ticker, start, earliest - timedelta(days=1), source)
+    if bars:
+        cache.save_price_bars(ticker, source, bars)
+    if not bars or min(b["date"] for b in bars) - start > timedelta(days=_STALE_TOLERANCE_DAYS):
+        cache.set_value(floor_key, min([earliest] + [b["date"] for b in bars]).isoformat())
 
 
 def refresh(ticker: str, start: date, end: date, source: str | None = None) -> int:
@@ -195,10 +227,14 @@ def trading_days(start: date, end: date, source: str | None = None) -> list[date
     try:
         source = source or canonical_source()
         ensure_cached(MARKET_CALENDAR_TICKER, start, end, source)
-        bars = cache.get_price_history(MARKET_CALENDAR_TICKER, source, start, end)
-        return sorted({b["date"] for b in bars})
+        days = sorted({b["date"] for b in cache.get_price_history(MARKET_CALENDAR_TICKER, source, start, end)})
     except Exception:
         return []
+    # A calendar that starts or stops well inside the window would quietly
+    # shorten it — a 2Y Health view measured over 15 months. Weekdays instead.
+    if not days or (days[0] - start).days > 7 or (end - days[-1]).days > 7:
+        return []
+    return days
 
 
 def price_series(ticker: str, start: date, end: date, business_days, source: str | None = None) -> pd.Series:

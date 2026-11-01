@@ -194,6 +194,10 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
             multiple-comparison bar is called MARGINAL in the faint amber style —
             that's precisely what a false positive looks like, so it must not read
             like a win."""
+            if f.get("mean_ic") is None or not f.get("n_dates"):
+                # Switched off for this run (analyst, sentiment): never measured,
+                # which "NO" read as measured and failed.
+                return _theme.badge_html("NOT TESTED", "h")
             if f["significant"]:
                 return _theme.badge_html("YES", "sb")
             if f.get("significant_uncorrected"):

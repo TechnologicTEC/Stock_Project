@@ -71,6 +71,34 @@ def is_configured() -> bool:
     return bool(credentials.get("ALPACA_API_KEY") and credentials.get("ALPACA_SECRET_KEY"))
 
 
+def is_market_data_configured() -> bool:
+    """Whether price data can be read: this user's own pair, else the app's."""
+    try:
+        _market_data_keys()
+        return True
+    except AlpacaConfigError:
+        return False
+
+
+def _market_data_keys() -> tuple[str, str]:
+    """The pair to read MARKET DATA with: the user's own, else the app's (env).
+
+    Prices are shared — every page reads the same cached series — so a visitor
+    without their own Alpaca keys (a guest, a friend) must read them from the
+    same source as everyone else. They used to fall back to Yahoo, writing a
+    second, different series for the demo's stocks. This pair only ever builds a
+    StockHistoricalDataClient: the trading client takes `_require_keys()`, the
+    user's own, so no one can trade on the app's account this way.
+    """
+    api_key, secret_key = credentials.get("ALPACA_API_KEY"), credentials.get("ALPACA_SECRET_KEY")
+    if api_key and secret_key:
+        return api_key, secret_key
+    api_key, secret_key = os.environ.get("ALPACA_API_KEY"), os.environ.get("ALPACA_SECRET_KEY")
+    if api_key and secret_key:
+        return api_key, secret_key
+    return _require_keys()          # raises, with the setup message
+
+
 def _require_keys() -> tuple[str, str]:
     api_key = credentials.get("ALPACA_API_KEY")
     secret_key = credentials.get("ALPACA_SECRET_KEY")
@@ -82,9 +110,17 @@ def _require_keys() -> tuple[str, str]:
     return api_key, secret_key
 
 
-@lru_cache(maxsize=1)
+# Clients are cached PER KEY PAIR. They were `lru_cache(maxsize=1)` with no
+# arguments — one client per process, built with whichever user's keys called
+# first — so on the shared website the first visitor's account became everyone's
+# (Paper Trading would show, and trade, someone else's paper account).
 def _data_client() -> StockHistoricalDataClient:
-    return StockHistoricalDataClient(*_require_keys())
+    return _data_client_for(*_market_data_keys())
+
+
+@lru_cache(maxsize=16)
+def _data_client_for(api_key: str, secret_key: str) -> StockHistoricalDataClient:
+    return StockHistoricalDataClient(api_key, secret_key)
 
 
 # The only endpoint the trading half may ever talk to. Verified at runtime
@@ -118,11 +154,16 @@ def _assert_paper(client: TradingClient) -> TradingClient:
     return client
 
 
-@lru_cache(maxsize=1)
 def _trading_client() -> TradingClient:
+    """The signed-in user's OWN paper account — never the app's (see _data_client)."""
+    return _trading_client_for(*_require_keys())
+
+
+@lru_cache(maxsize=16)
+def _trading_client_for(api_key: str, secret_key: str) -> TradingClient:
     # paper=True: this client can only ever hit the paper endpoint — and
     # _assert_paper verifies that rather than trusting the flag.
-    return _assert_paper(TradingClient(*_require_keys(), paper=True))
+    return _assert_paper(TradingClient(api_key, secret_key, paper=True))
 
 
 def get_latest_quote(ticker: str, feed: str = "delayed_sip") -> dict:

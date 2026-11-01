@@ -51,7 +51,7 @@ with st.expander("💡 Things you can ask"):
         "- *Why is my portfolio down today?* — the biggest movers **and the news around them**\n"
         "- *Any news on ASML?* · *Is the whole market down today?*\n\n"
         "**Deeper reads**\n"
-        "- *How does the screener rate PLTR?* · *How did NVDA's last earnings go?*\n"
+        "- *How does the screener rate PLTR?* · *What did NVDA's last earnings release say?*\n"
         "- *Am I beating the S&P this month?* · *What's my 1-year projected range?*\n"
         "- *How risky is my portfolio?* · *What's my biggest concentration risk?*"
     )

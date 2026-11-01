@@ -90,6 +90,11 @@ def test_screener_page_watchlist_add_remove_round_trip():
     assert watchlist.list_watchlist() == []
 
 
+def _pick(at):
+    """The screening selector, by label: the watchlist's "Remove" box comes first."""
+    return next(m for m in at.multiselect if m.label == "From your holdings + watchlist")
+
+
 def test_screener_page_full_run_and_save():
     watchlist.add_to_watchlist("AAPL")
     watchlist.add_to_watchlist("MSFT")
@@ -100,7 +105,7 @@ def test_screener_page_full_run_and_save():
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=30)
 
-        at.multiselect[0].set_value(["AAPL", "MSFT"])
+        _pick(at).set_value(["AAPL", "MSFT"])
         at.run(timeout=30)
 
         run_button = next(b for b in at.button if "Run screener" in b.label)
@@ -127,7 +132,7 @@ def test_screener_page_shows_validation_track_record_when_available():
     with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=30)
-        at.multiselect[0].set_value(["AAPL"])
+        _pick(at).set_value(["AAPL"])
         at.run(timeout=30)
         next(b for b in at.button if "Run screener" in b.label).click()
         at.run(timeout=30)
@@ -143,7 +148,7 @@ def test_screener_page_shows_validation_track_record_when_available():
     with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
         at2 = AppTest.from_file(PAGE_PATH)
         at2.run(timeout=30)
-        at2.multiselect[0].set_value(["MSFT"])
+        _pick(at2).set_value(["MSFT"])
         at2.run(timeout=30)
         next(b for b in at2.button if "Run screener" in b.label).click()
         at2.run(timeout=30)
@@ -342,7 +347,7 @@ def test_screener_page_shows_known_limitations_banner():
     with patch("engine.screener._gather_raw_data", side_effect=lambda t: raw[t]):
         at = AppTest.from_file(PAGE_PATH)
         at.run(timeout=30)
-        at.multiselect[0].set_value(["AAPL"])
+        _pick(at).set_value(["AAPL"])
         at.run(timeout=30)
         run_button = next(b for b in at.button if "Run screener" in b.label)
         run_button.click()
@@ -357,6 +362,8 @@ def test_screener_page_warns_on_large_candidate_lists():
         watchlist.add_to_watchlist(f"T{i}")
 
     at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    _pick(at).set_value([f"T{i}" for i in range(31)])
     at.run(timeout=30)
 
     assert not at.exception
@@ -478,3 +485,18 @@ def test_the_both_view_uses_the_shared_merge_and_shows_a_ticker_once():
     at.radio(key="lb_universe").set_value("Both").run(timeout=30)
     assert not at.exception
     assert _lb_tickers(at) == ["TWLO", "MID"]
+
+
+def test_the_screen_starts_with_your_holdings_not_the_whole_watchlist():
+    """Ticking every holding and watchlist name set off the page's own
+    "that's a lot of calls" warning before anything was chosen."""
+    from datetime import date as _date
+
+    from engine import portfolio as _portfolio, watchlist as _watchlist
+
+    _portfolio.add_holding("AAPL", 1, 100.0, _date(2025, 1, 2))
+    _watchlist.add_to_watchlist("MSFT")
+    at = AppTest.from_file(PAGE_PATH)
+    at.run(timeout=30)
+    pick = next(m for m in at.multiselect if m.label == "From your holdings + watchlist")
+    assert pick.value == ["AAPL"] and "MSFT" in pick.options

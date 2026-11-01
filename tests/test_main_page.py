@@ -82,8 +82,9 @@ def test_dashboard_shows_upcoming_earnings():
     body = " ".join(m.value for m in at.markdown)
     assert "Reporting soon" in body and "AAPL" in body
     assert "2d" in body                                 # days-until, terminal-style
-    # Beat/miss isn't withheld — it doesn't exist yet; past results are on News & Earnings.
-    assert "withholds" not in body and "News &amp; Earnings" in body
+    # The free data plan has no past results at all (none cached for any ticker, Nov
+    # 2026), so the note must not send anyone to look for beats and misses elsewhere.
+    assert "isn't shown anywhere in the app" in body or "isn&#x27;t shown anywhere" in body
 
 
 def test_dashboard_handles_missing_prices_and_no_creator_signals():

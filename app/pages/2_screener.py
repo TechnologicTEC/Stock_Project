@@ -363,8 +363,10 @@ known_tickers = sorted(set(holdings_tickers) | set(watchlist_tickers))
 
 c1, c2 = st.columns([2, 2])
 with c1:
+    # Holdings ticked, the watchlist offered: ticking everything (32 names on the
+    # owner's account) set off the "that's a lot of calls" warning on arrival.
     selected = st.multiselect(
-        "From your holdings + watchlist", options=known_tickers, default=known_tickers,
+        "From your holdings + watchlist", options=known_tickers, default=holdings_tickers,
     )
 with c2:
     extra_raw = st.text_input("Add other tickers (comma-separated)", placeholder="e.g. NVDA, AMD")

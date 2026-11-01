@@ -256,10 +256,10 @@ def test_a_window_entirely_inside_the_delay_returns_nothing_rather_than_erroring
 def test_the_real_trading_client_resolves_to_the_paper_endpoint(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    alpaca_client._trading_client.cache_clear()
+    alpaca_client._trading_client_for.cache_clear()
     client = alpaca_client._trading_client()
     assert alpaca_client.PAPER_HOST in str(getattr(client._base_url, "value", client._base_url))
-    alpaca_client._trading_client.cache_clear()
+    alpaca_client._trading_client_for.cache_clear()
 
 
 def test_a_client_pointed_at_live_money_is_refused():
@@ -467,3 +467,49 @@ def test_paper_trading_positions_and_orders_come_back_in_our_spelling():
         placed = alpaca_client.submit_market_order("BRK-B", 1, "buy")
     assert tc.submit_order.call_args.args[0].symbol == "BRK.B"
     assert placed["symbol"] == "BRK-B"
+
+
+
+# --------------------------------------------------------------------------
+# One client per key pair, and market data for visitors without their own pair.
+# --------------------------------------------------------------------------
+
+def test_each_user_gets_a_client_for_their_own_paper_account(monkeypatch):
+    """The client was one per process, built with whichever user's keys came
+    first — on the shared website the first visitor's account became everyone's."""
+    from engine import credentials
+
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    alpaca_client._trading_client_for.cache_clear()
+    with credentials.using_keys({"ALPACA_API_KEY": "friend", "ALPACA_SECRET_KEY": "fs"},
+                                fallback=credentials.FALLBACK_NONE):
+        friend = alpaca_client._trading_client()
+    with credentials.using_keys({"ALPACA_API_KEY": "owner", "ALPACA_SECRET_KEY": "os"},
+                                fallback=credentials.FALLBACK_NONE):
+        owner = alpaca_client._trading_client()
+    alpaca_client._trading_client_for.cache_clear()
+    assert friend is not owner
+
+
+def test_a_visitor_without_keys_reads_prices_with_the_apps_pair_but_cannot_trade(monkeypatch):
+    from engine import credentials
+
+    monkeypatch.setenv("ALPACA_API_KEY", "app")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "app-secret")
+    with credentials.using_keys({}, fallback=credentials.FALLBACK_SHARED):     # a guest
+        assert alpaca_client.is_market_data_configured()
+        assert alpaca_client._market_data_keys() == ("app", "app-secret")
+        assert not alpaca_client.is_configured()
+        with pytest.raises(alpaca_client.AlpacaConfigError):
+            alpaca_client._trading_client()
+
+
+def test_a_user_with_their_own_pair_reads_with_it(monkeypatch):
+    from engine import credentials
+
+    monkeypatch.setenv("ALPACA_API_KEY", "app")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "app-secret")
+    with credentials.using_keys({"ALPACA_API_KEY": "mine", "ALPACA_SECRET_KEY": "ms"},
+                                fallback=credentials.FALLBACK_NONE):
+        assert alpaca_client._market_data_keys() == ("mine", "ms")

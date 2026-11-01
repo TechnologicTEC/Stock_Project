@@ -95,7 +95,7 @@ day_pct = (day_change / prior * 100) if prior else None
 k1, k2, k3, k4 = st.columns(4)
 k1.metric(
     "Holdings value", _money(holdings_value),
-    f"{day_pct:+.2f}% today" if day_pct is not None else None,
+    f"{day_pct:+.2f}% {_theme.move_label().lower()}" if day_pct is not None else None,
 )
 with k2:
     # FX can fail (free-tier endpoint); fall back to a dash rather than crashing
@@ -156,7 +156,7 @@ with left:
         _theme.panel(
             "Your holdings",
             '<table class="cp-table"><thead><tr><th>Ticker</th><th>Value</th>'
-            '<th>Weight</th><th>Today</th><th>Screener</th></tr></thead>'
+            f'<th>Weight</th><th>{_theme.move_label()}</th><th>Screener</th></tr></thead>'
             f"<tbody>{''.join(rows)}</tbody></table>"
             + ("" if ratings else
                '<div class="cp-foot">Screener column is blank until you press '
@@ -240,7 +240,7 @@ with right:
         )
         _theme.panel(
             lb_title,
-            '<table class="cp-table"><thead><tr><th>#</th><th>Name</th>'
+            '<table class="cp-table"><thead><tr><th>#</th><th>Ticker</th>'
             '<th>Score</th><th>Rating</th></tr></thead>'
             f"<tbody>{lb_rows}</tbody></table>"
             '<div class="cp-foot"><b>Ranking, not a buy list.</b> Highest-scoring right now.</div>',
@@ -294,8 +294,8 @@ with c_right:
             '<table class="cp-table"><thead><tr><th>Ticker</th><th>In</th><th>Date</th>'
             '<th>Est. EPS</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
-            '<div class="cp-foot">Estimates only — the result isn\'t known until the company '
-            "reports. Past beats and misses are on <b>News &amp; Earnings</b>.</div>",
+            '<div class="cp-foot">Estimates only. Whether a company beat or missed isn\'t '
+            "shown anywhere in the app: the free data plan doesn't provide past results.</div>",
             tag="next 3 weeks",
         )
     else:

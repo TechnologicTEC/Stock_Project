@@ -12,6 +12,7 @@ and returns its plain text.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import requests
@@ -74,7 +75,8 @@ def get_company_filings(cik: str, form_type: str | None = None, limit: int = 20)
     """
     Recent filings for a company. form_type e.g. '8-K', '4' (insider),
     '13F-HR' (institutional holdings) — leave as None for all types.
-    Returns [{"title", "filing_date", "form_type", "href"}, ...].
+    Returns [{"title", "filing_date", "form_type", "href", "items"}, ...], where
+    `items` is EDGAR's item list for an 8-K ("items 2.02 and 9.01") or None.
     """
     resp = _throttled_get(
         f"{_BASE}/cgi-bin/browse-edgar",
@@ -97,6 +99,7 @@ def get_company_filings(cik: str, form_type: str | None = None, limit: int = 20)
                 "filing_date": _text_or_none(entry, "filing-date"),
                 "form_type": _text_or_none(entry, "filing-type"),
                 "href": _text_or_none(entry, "filing-href"),
+                "items": _text_or_none(entry, "items-desc"),
             }
         )
     return filings
@@ -153,7 +156,20 @@ def _document_text(url: str) -> str:
     return text[:_MAX_RELEASE_CHARS]
 
 
-def get_8k_press_release(cik: str, max_filings: int = 6) -> dict | None:
+# 8-K Item 2.02 is "Results of Operations and Financial Condition" — the
+# earnings release. Any 8-K can carry an EX-99.1 (deals, executive changes):
+# ADI's newest, in Nov 2026, was an acquisition, shown as its earnings release.
+_EARNINGS_ITEM = re.compile(r"\b2\.02\b")
+
+
+def is_earnings_filing(filing: dict) -> bool:
+    """True for an Item 2.02 8-K. A filing whose items EDGAR didn't list is let
+    through: better an unlabelled release than none for companies it omits."""
+    items = filing.get("items")
+    return items is None or bool(_EARNINGS_ITEM.search(items))
+
+
+def get_8k_press_release(cik: str, max_filings: int = 12) -> dict | None:
     """The most recent 8-K earnings press release for a company.
 
     Walks the last few 8-K filings (newest first) and returns the first one
@@ -164,7 +180,7 @@ def get_8k_press_release(cik: str, max_filings: int = 6) -> dict | None:
     older, readable release."""
     for filing in get_company_filings(cik, "8-K", limit=max_filings):
         index_url = filing.get("href")
-        if not index_url:
+        if not index_url or not is_earnings_filing(filing):
             continue
         try:
             doc_url = _find_ex99_document_url(index_url)

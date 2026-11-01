@@ -478,6 +478,13 @@ def _us_market_open(now: datetime | None = None) -> bool:
     return local.weekday() < 5 and time(9, 30) <= local.time() < time(16, 0)
 
 
+def move_label(now: datetime | None = None) -> str:
+    """What a quote's day change covers: "Today" while the US session is open,
+    else "Last session" — over a weekend or the NZ day it is Friday's (or the
+    previous session's) move, which "today" misstated."""
+    return "Today" if _us_market_open(now) else "Last session"
+
+
 def top_bar(email: str | None = None, role: str | None = None) -> None:
     """The fixed status bar. Rendered by `_auth.gate()` rather than by apply(),
     because only gate() knows who's signed in — and since the bar is
