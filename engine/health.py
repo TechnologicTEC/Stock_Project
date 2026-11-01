@@ -248,17 +248,6 @@ def compute_concentration() -> list[ConcentrationResult]:
 # Risk-free rate
 # --------------------------------------------------------------------------
 
-def _trading_days(start: date, end: date) -> list[date]:
-    """The days SPY has a bar for in [start, end] — the market's own calendar.
-    Empty when that can't be read, and the caller then keeps every weekday."""
-    try:
-        price_history.ensure_cached(BENCHMARK_TICKER, start, end)
-        bars = cache.get_price_history(BENCHMARK_TICKER, price_history.canonical_source(), start, end)
-        return sorted({b["date"] for b in bars})
-    except Exception:
-        return []
-
-
 def _get_risk_free_rate_annual() -> tuple[float, str]:
     try:
         series = cache.get_or_fetch(
@@ -361,7 +350,7 @@ def get_health_report(lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> HealthRepor
     # no bar until the close. Left in as flat days they made a year look 3.5%
     # longer to the 252-day annualisation (+10% read as +9.6%) and fed Sharpe and
     # beta returns that never happened. SPY's own bars say which days traded.
-    trading_days = _trading_days(start, end) if not value_series.empty else []
+    trading_days = price_history.trading_days(start, end) if not value_series.empty else []
     if trading_days:
         value_series = value_series[value_series.index.isin(trading_days)]
 

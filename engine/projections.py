@@ -403,7 +403,11 @@ def project_portfolio(
     if not holdings:
         return None
 
-    business_days = pd.bdate_range(start=start, end=as_of).date
+    # The market's days, not weekdays: valued on a holiday, the book repeats the
+    # day before, and ~9 of those flat days a year shrank the volatility estimate
+    # by about 2% (price_history.trading_days). Weekdays only if SPY can't be read.
+    business_days = (price_history.trading_days(start, as_of)
+                     or list(pd.bdate_range(start=start, end=as_of).date))
     if len(business_days) < 2:
         return None
 

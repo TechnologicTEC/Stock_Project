@@ -73,6 +73,13 @@ def test_format_amount_converts_and_labels_with_the_symbol():
     assert currency.format_amount(None, "USD", 1.0) == "—"  # missing values stay a dash
 
 
+def test_format_amount_puts_the_minus_sign_before_the_symbol():
+    """Holdings showed a loss as "$-1,361.52"; the bot page already wrote "-$4.02"."""
+    assert currency.format_amount(-1361.52, "USD", 1.0) == "-$1,361.52"
+    assert currency.format_amount(-1000.0, "NZD", 2.0) == "-NZ$2,000.00"
+    assert currency.format_amount(0.0, "USD", 1.0) == "$0.00"
+
+
 def test_get_rate_nzd_keeps_the_last_rate_when_both_sources_are_down():
     """A day-old rate beats showing the whole page in USD."""
     from datetime import timedelta

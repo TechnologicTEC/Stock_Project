@@ -3,7 +3,7 @@ Unit tests for engine/projections.py (Phase 5.5, Section 6.11). The core math
 is exercised on synthetic return series with no I/O; the two wrappers mock the
 price/value history so they stay network- and DB-free.
 """
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -165,7 +165,7 @@ def test_project_portfolio_holds_current_shares_constant_and_adds_cash():
     with patch("engine.projections.portfolio.list_holdings", return_value=[holding]), \
          patch("engine.projections.portfolio.get_wallet_balance", return_value=50.0), \
          patch("engine.projections.portfolio.get_value_history", no_history), \
-         patch("engine.projections.price_history.price_series", side_effect=fake_price_series):
+         patch("engine.projections.price_history.price_series", side_effect=fake_price_series),          patch("engine.projections.price_history.trading_days", return_value=[]):
         result = proj.project_portfolio(horizon_days=182, as_of=date(2024, 1, 2))
 
     assert result is not None
@@ -173,6 +173,28 @@ def test_project_portfolio_holds_current_shares_constant_and_adds_cash():
     assert result.start_value == pytest.approx(2 * 100.0 + 50.0)   # shares*price + cash
     assert not result.insufficient_data
     no_history.assert_not_called()   # the jumpy contribution series must NOT be used
+
+
+def test_the_portfolio_projection_counts_only_days_the_market_traded():
+    """It valued the book on every weekday, so ~9 holidays a year sat in the
+    history as flat days — "259 trading days" in a year of ~250, and a
+    volatility estimate about 2% too low."""
+    holding = {"id": 1, "ticker": "AAPL", "shares": 2.0, "cost_basis": 100.0,
+               "purchase_date": date(2023, 1, 1), "asset_type": None}
+    as_of = date(2024, 1, 2)
+    weekdays = list(pd.bdate_range(as_of - timedelta(days=365), as_of).date)
+    traded = [d for i, d in enumerate(weekdays) if i % 28 != 5]          # drop ~9 "holidays"
+    seen = {}
+
+    def fake_price_series(ticker, start, end, business_days, source="yfinance"):
+        seen["days"] = list(business_days)
+        return pd.Series([100.0 + (i % 3) for i in range(len(business_days))], index=business_days)
+
+    with patch("engine.projections.portfolio.list_holdings", return_value=[holding]),          patch("engine.projections.portfolio.get_wallet_balance", return_value=0.0),          patch("engine.projections.price_history.price_series", side_effect=fake_price_series),          patch("engine.projections.price_history.trading_days", return_value=traded):
+        result = proj.project_portfolio(horizon_days=182, as_of=as_of)
+
+    assert seen["days"] == traded
+    assert result.n_return_days == len(traded) - 1
 
 
 def test_project_portfolio_none_when_no_holdings():

@@ -74,7 +74,7 @@ def test_portfolio_page_shows_holdings_value_distinct_from_cost_basis():
     m = {metric.label: metric.value for metric in at.metric}
     assert m["Holdings value"] == "$1,000.00"     # current market value (was previously not shown at all)
     assert m["Cost basis"] == "$1,500.00"          # what was paid
-    assert m["Total gain / loss"] == "$-500.00"    # the difference
+    assert m["Total gain / loss"] == "-$500.00"    # the difference, sign before the symbol
     assert m["Total value"] == "$1,000.00"         # holdings value + $0 wallet
 
 

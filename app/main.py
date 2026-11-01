@@ -26,7 +26,8 @@ gate("main")  # resolve the signed-in user and scope the DB to them (Phase B)
 
 
 def _money(value) -> str:
-    return f"${value:,.2f}" if value is not None else "—"
+    # Sign before the symbol ("-$3.10"): the wallet and EPS estimates can be negative.
+    return currency.format_amount(value, "USD", 1.0)
 
 
 holdings = portfolio.list_holdings()
@@ -284,7 +285,7 @@ with c_right:
             f'<td class="val">{e["days_until"]}d</td>'
             f'<td class="co">{date.fromisoformat(e["date"]).strftime("%b %d")}'
             f'{" · " + _EARNINGS_HOUR[e["hour"]] if e.get("hour") in _EARNINGS_HOUR else ""}</td>'
-            f'<td class="val">{("$%.2f" % e["eps_estimate"]) if e.get("eps_estimate") is not None else "—"}</td>'
+            f'<td class="val">{_money(e.get("eps_estimate"))}</td>'
             f"</tr>"
             for e in upcoming[:6]
         )

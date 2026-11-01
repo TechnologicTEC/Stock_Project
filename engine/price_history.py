@@ -181,6 +181,26 @@ def close_on_or_before(ticker: str, day: date, source: str | None = None,
     return float(closes.iloc[-1]) if len(closes) else None
 
 
+MARKET_CALENDAR_TICKER = "SPY"
+
+
+def trading_days(start: date, end: date, source: str | None = None) -> list[date]:
+    """The days the market traded in [start, end]: the dates SPY has a bar for.
+
+    Weekdays are not trading days — about 9 a year are holidays, and today has
+    no bar until the close. Anything that annualises over 252 trading days, or
+    reads daily returns, should run on these rather than pd.bdate_range, which
+    turns each holiday into a flat day. Empty when SPY can't be read; callers
+    then fall back to weekdays."""
+    try:
+        source = source or canonical_source()
+        ensure_cached(MARKET_CALENDAR_TICKER, start, end, source)
+        bars = cache.get_price_history(MARKET_CALENDAR_TICKER, source, start, end)
+        return sorted({b["date"] for b in bars})
+    except Exception:
+        return []
+
+
 def price_series(ticker: str, start: date, end: date, business_days, source: str | None = None) -> pd.Series:
     """Close prices reindexed onto `business_days`, forward/back-filled to
     cover gaps (weekends already excluded by using business days; holidays

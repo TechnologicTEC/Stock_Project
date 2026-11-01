@@ -118,3 +118,16 @@ def test_a_name_that_needs_no_raw_choice_leaves_nothing_behind():
          _patch("engine.data_sources.alpaca_client.get_bars_and_mode", return_value=([], "split")):
         ph._alpaca_bars("APH", _d(2026, 6, 1), _d(2026, 6, 30))
     assert _cache.get_value("price_mode:APH") is None
+
+
+def test_trading_days_are_the_days_spy_has_a_bar():
+    """The market's own calendar — weekdays minus holidays (and today before its bar)."""
+    from datetime import date as _d
+    from unittest.mock import patch as _patch
+
+    from engine import price_history as ph
+
+    bars = [{"date": _d(2026, 1, d), "open": 1, "high": 1, "low": 1, "close": 1.0, "volume": 1}
+            for d in (2, 5, 6, 7, 8)]                                      # no bar on the 1st (a holiday)
+    with _patch("engine.price_history.yfinance_client.get_historical_ohlcv", return_value=bars):
+        assert ph.trading_days(_d(2026, 1, 1), _d(2026, 1, 8)) == [_d(2026, 1, d) for d in (2, 5, 6, 7, 8)]

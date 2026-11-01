@@ -118,4 +118,6 @@ def format_amount(amount_usd: float | None, currency: str, rate: float) -> str:
     so a table of many values doesn't re-resolve it each cell. None -> '—'."""
     if amount_usd is None:
         return "—"
-    return f"{symbol(currency)}{amount_usd * rate:,.2f}"
+    value = amount_usd * rate
+    # The sign goes before the symbol: "-$1,361.52", not "$-1,361.52".
+    return f"{'-' if value < 0 else ''}{symbol(currency)}{abs(value):,.2f}"
