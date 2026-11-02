@@ -107,13 +107,18 @@ def market_status_text(clock: dict | None) -> tuple[str, str]:
 
 
 def _fmt_et(iso: str | None) -> str | None:
-    """Format an Alpaca ISO timestamp (already in US/Eastern with offset) as a
-    readable 'Mon Jul 06, 09:30 AM ET'."""
+    """An Alpaca ISO timestamp (US/Eastern, with offset) in NZ time first, New
+    York in brackets: 'Tue 3 Nov, 3:30am NZ (9:30am Mon in New York)'."""
     if not iso:
         return None
     try:
         from datetime import datetime
-        return datetime.fromisoformat(iso).strftime("%a %b %d, %I:%M %p ET")
+
+        from engine.time_utils import nz_time
+        t = datetime.fromisoformat(iso)
+        hour = t.hour % 12 or 12
+        ny = f"{hour}:{t.minute:02d}{'am' if t.hour < 12 else 'pm'} {t:%a} in New York"
+        return f"{nz_time(t)} ({ny})"
     except (TypeError, ValueError):
         return iso
 

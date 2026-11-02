@@ -256,8 +256,19 @@ if dashboard.recent_orders:
     def _money(v):
         return f"${v:,.2f}" if v is not None else "—"
 
+    def _when(iso):
+        """Alpaca's ISO time (UTC), shown in NZ time."""
+        from datetime import datetime
+
+        from engine.time_utils import nz_time
+        try:
+            return nz_time(datetime.fromisoformat(str(iso).replace("Z", "+00:00")),
+                           weekday=False, zone=False)
+        except (TypeError, ValueError):
+            return (iso or "")[:16].replace("T", " ")
+
     rows = "".join(
-        f'<tr><td class="co">{(o["submitted_at"] or "")[:16].replace("T", " ")}</td>'
+        f'<tr><td class="co">{_when(o.get("submitted_at"))}</td>'
         f'<td><span class="tick">{o["symbol"]}</span></td>'
         f'<td>{_theme.badge_html(o["side"].upper(), "b" if o["side"] == "buy" else "s")}</td>'
         f'<td class="num">{o["qty"]:g}</td>'
@@ -270,7 +281,7 @@ if dashboard.recent_orders:
     _theme.panel(
         "Recent orders",
         '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-        '<th>Submitted</th><th>Symbol</th><th>Side</th><th class="num">Qty</th>'
+        '<th>Submitted (NZ)</th><th>Symbol</th><th>Side</th><th class="num">Qty</th>'
         '<th>Type</th><th class="num">Limit</th><th>Status</th>'
         '<th class="num">Filled</th></tr></thead>'
         f"<tbody>{rows}</tbody></table></div>",

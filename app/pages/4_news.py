@@ -18,6 +18,7 @@ from app import _theme
 from app._auth import gate
 from db.session import init_db
 from engine import earnings, news, portfolio, watchlist
+from engine.time_utils import nz_time
 
 st.set_page_config(page_title="News — Investment Co-Pilot", page_icon="📰", layout="wide")
 _theme.apply()
@@ -148,7 +149,8 @@ if view == "📰 News":
                     "Sentiment": _emoji_label(h["sentiment_label"]),
                     "Headline": h["headline"],
                     "Source": h["source"],
-                    "Published": pd.to_datetime(h["published_at"]).strftime("%Y-%m-%d %H:%M"),
+                    "Published (NZ)": nz_time(pd.to_datetime(h["published_at"]).to_pydatetime(),
+                                              weekday=False, zone=False),
                     "Link": h["url"],
                 }
                 for h in analysis.headlines

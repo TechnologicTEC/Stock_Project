@@ -43,6 +43,7 @@ from engine import auth
 from engine.bot import journal, performance, risk
 from engine.bot import positions as bot_positions
 from engine.bot import strategies as bot_strategies
+from engine.time_utils import nz_time
 
 st.set_page_config(page_title="Trading Bot — Investment Co-Pilot", page_icon="📊", layout="wide")
 _theme.apply()
@@ -364,7 +365,7 @@ def _last_run_summary(decisions: list[dict]) -> str:
         did.append(f"{sells} sell{'s' if sells != 1 else ''}")
     if blocked:
         did.append(f"{blocked} blocked")
-    return (f"last run {newest['decided_at']:%d %b %H:%M} UTC · "
+    return (f"last run {nz_time(newest['decided_at'])} · "
             + (", ".join(did) if did else "nothing to do"))
 
 
@@ -488,16 +489,16 @@ _theme.panel(
     + (f' · <span class="dim">{len(disabled)} disabled</span>' if disabled else "")
     + "</td></tr>"
     f'<tr><td class="dim">Last decision</td><td class="val">'
-    f'{_esc(last_decided.strftime("%d %b %H:%M UTC")) if last_decided else "never"}</td></tr>'
+    f'{_esc(nz_time(last_decided)) if last_decided else "never"}</td></tr>'
     f'<tr><td class="dim">Next scheduled run</td><td class="val">'
-    f'{_next_run[0].strftime("%d %b %H:%M UTC")} '
+    f'{nz_time(_next_run[0])} '
     f'<span class="dim">· the {_next_run[1]} · GitHub usually starts it 2–5 h late '
     "(the pre-market one up to 10 h), and the after-close run waits for the nightly "
     "price refresh</span></td></tr>"
     f'<tr><td class="dim">Global switch</td><td>{switch_html} '
     f'<span class="dim">{switch_note}</span></td></tr>'
     "</tbody></table>",
-    tag=f"as of {now.strftime('%H:%M UTC')}",
+    tag=f"as of {nz_time(now, date=False)}",
 )
 
 
@@ -925,7 +926,7 @@ for tab, r in zip(tabs, tab_rows):
         with st.expander(f"Recent decisions — {_last_run_summary(r['decisions'])}"):
             if recent:
                 body = "".join(
-                    f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
+                    f'<tr><td class="dim num">{nz_time(d["decided_at"], weekday=False, zone=False)}</td>'
                     f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
                     f'<td>{_esc((d["action"] or "").title())}</td>'
                     f'<td>{_esc(d["reason"])}</td>'
@@ -938,7 +939,7 @@ for tab, r in zip(tabs, tab_rows):
                 _theme.panel(
                     "Recent decisions",
                     '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-                    '<th>When</th><th>Ticker</th><th>Action</th><th>Reason</th><th>Result</th>'
+                    '<th>When (NZ)</th><th>Ticker</th><th>Action</th><th>Reason</th><th>Result</th>'
                     f"</tr></thead><tbody>{body}</tbody></table></div>",
                     tag=f"{len(recent)} of {len(r['decisions'])}",
                 )
@@ -1029,7 +1030,7 @@ for tab, r in zip(tabs, tab_rows):
 # Deliberately NOT _last_run_summary here: that summarises one run_id, which
 # belongs to a single strategy. "7 buys" on a label that says "every strategy"
 # would be a wrong number rather than a short one.
-_journal_label = (f"newest {last_decided:%d %b %H:%M} UTC" if last_decided
+_journal_label = (f"newest {nz_time(last_decided)}" if last_decided
                   else "nothing journalled yet")
 
 with st.expander(f"Decision journal — every strategy · {_journal_label}"):
@@ -1060,7 +1061,7 @@ with st.expander(f"Decision journal — every strategy · {_journal_label}"):
 
     if entries:
         body = "".join(
-            f'<tr><td class="dim num">{d["decided_at"]:%d %b %H:%M}</td>'
+            f'<tr><td class="dim num">{nz_time(d["decided_at"], weekday=False, zone=False)}</td>'
             f'<td class="dim">{_esc(_label_by_name.get(d["strategy"], d["strategy"]))}</td>'
             f'<td><span class="tick">{_esc(d["ticker"] or "—")}</span></td>'
             f'<td>{_esc((d["action"] or "").title())}</td>'
@@ -1073,7 +1074,7 @@ with st.expander(f"Decision journal — every strategy · {_journal_label}"):
         _theme.panel(
             "All decisions",
             '<div class="cp-scroll"><table class="cp-table"><thead><tr>'
-            '<th>When</th><th>Strategy</th><th>Ticker</th><th>Action</th><th>Reason</th>'
+            '<th>When (NZ)</th><th>Strategy</th><th>Ticker</th><th>Action</th><th>Reason</th>'
             f"<th>Result</th></tr></thead><tbody>{body}</tbody></table></div>",
             tag=f"{len(entries)} rows",
         )

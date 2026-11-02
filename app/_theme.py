@@ -495,7 +495,8 @@ def top_bar(email: str | None = None, role: str | None = None) -> None:
     is_open = _us_market_open(now)
     state = "MKT OPEN" if is_open else "MKT CLOSED"
     dot = "open" if is_open else "closed"
-    stamp = now.strftime("%d %b · %H:%M UTC")
+    from engine.time_utils import nz_time
+    stamp = nz_time(now, weekday=False).replace(", ", " · ")     # "2 Nov · 12:50pm NZ"
 
     identity = ""
     if email or role:

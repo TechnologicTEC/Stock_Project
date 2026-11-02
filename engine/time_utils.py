@@ -9,6 +9,28 @@ deprecated as of Python 3.12) while keeping that naive-UTC convention
 consistent everywhere it's used.
 """
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+# The owner is in New Zealand. Everything is STORED and computed in UTC; these
+# are only for showing a time to a person.
+NZ = ZoneInfo("Pacific/Auckland")
+
+
+def to_nz(dt: datetime) -> datetime:
+    """A stored instant in NZ time. Naive means UTC — the DB's convention."""
+    aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return aware.astimezone(NZ)
+
+
+def nz_time(dt: datetime, *, weekday: bool = True, date: bool = True, zone: bool = True) -> str:
+    """e.g. "Mon 2 Nov, 5:30pm NZ". Built by hand: %-I and %-d don't exist on
+    Windows, where the tests run."""
+    t = to_nz(dt)
+    hour = t.hour % 12 or 12
+    clock = f"{hour}:{t.minute:02d}{'am' if t.hour < 12 else 'pm'}"
+    day = " ".join(p for p in ((t.strftime("%a") if weekday and date else ""),
+                               (f"{t.day} {t.strftime('%b')}" if date else "")) if p)
+    return (f"{day}, {clock}" if day else clock) + (" NZ" if zone else "")
 
 
 def utcnow() -> datetime:

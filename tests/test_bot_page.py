@@ -1125,3 +1125,14 @@ def test_equity_says_which_close_it_is_from():
     last = _curve()[-1]["date"]
     assert f"at {last:%d %b}" in body
     assert f"({last:%d %b})" in body
+
+
+def test_times_on_the_page_are_in_nz_time():
+    """The owner is in New Zealand; the page read every time in UTC."""
+    at = _run()
+    body = _body(at)
+    assert not re.search(r"\d UTC", body)                       # no "21:45 UTC" left anywhere
+    nz = r"\w{3} \d{1,2} \w{3}, \d{1,2}:\d{2}(am|pm) NZ"
+    assert re.search(r"Last decision</td><td class=\"val\">" + nz, body)
+    assert re.search(r"Next scheduled run</td><td class=\"val\">" + nz, body)
+    assert "<th>When (NZ)</th>" in body

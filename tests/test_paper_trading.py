@@ -62,7 +62,9 @@ def test_market_status_text_open_closed_and_unknown():
 
     sev, msg = paper_trading.market_status_text({"is_open": False, "next_open": "2026-07-06T09:30:00-04:00"})
     assert sev == "info"
-    assert "Market closed" in msg and "Jul 06" in msg      # ET timestamp formatted readably
+    assert "Market closed" in msg
+    # NZ time first (NZST in July: 9:30am Monday in New York is 1:30am Tuesday), New York after.
+    assert "Tue 7 Jul, 1:30am NZ (9:30am Mon in New York)" in msg
 
     assert paper_trading.market_status_text(None)[1] == "Market status unavailable."
 
