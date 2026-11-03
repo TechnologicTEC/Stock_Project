@@ -49,7 +49,7 @@ code · **649 tests** · 4 scheduled GitHub Actions
 | **News & Earnings** | FinBERT headline sentiment; SEC 8-K press-release key-figure extraction |
 | **AI Assistant** | Deterministic intent router (17 tools), with Gemini as an optional free-form layer |
 | **Creator Signals** | Auto-scans a YouTuber's uploads → transcript → LLM ticker extraction → screener → repeat-mention leaderboard + email digest |
-| **Trading Bot** | Five strategies (golden cross, composite top 15, Strong Buy threshold, creator conviction, top decile) each trading its own $10k Alpaca *paper* account on a GitHub Actions schedule, with a decision journal, curves against SPY, and a per-strategy stop |
+| **Trading Bot** | Five strategies (golden cross, composite top 15, Strong Buy threshold, creator conviction, top decile) each trading its own $10k Alpaca *paper* account on a GitHub Actions schedule, with a decision journal, curves against SPY, and a per-strategy stop (owner only) |
 
 **Where the data comes from** (all free tier): Finnhub · yfinance/Alpaca · SEC
 EDGAR XBRL · FRED · ECB · Google News RSS · GDELT via BigQuery · YouTube Data API
@@ -60,6 +60,17 @@ users today — the deployed app connects as `postgres`, which bypasses RLS),
 Postgres RLS closing the Supabase auto-API, a least-privilege `NOBYPASSRLS`
 role provisioned but not yet switched on (see *Accounts* below), and a
 Fernet-encrypted per-user API-key vault.
+
+**Times are shown in NZ time** (the owner is in New Zealand): the top bar, the
+bot page's runs and journal, headline and order times, and the market-open
+message (`engine/time_utils.nz_time`). Everything is still stored and decided in
+UTC — the display is the only thing converted.
+
+**Bot cash rule**: positions are sized from 95% of each account; buys may dip into
+half of the 5% cash cushion, and never take cash below $0 or buy part of a
+position (`risk.CUSHION_BUYS_MAY_USE`, `executor.fund`). A buy a monthly
+rebalance couldn't pay for is retried on later runs that month
+(`screener_common.refused_this_month`).
 
 ## What it found
 
@@ -297,7 +308,9 @@ ad-hoc), pick which ones to screen, and click **Run screener**. You'll get:
 
 **News & Earnings** page: pick a ticker (holdings/watchlist or ad-hoc), and
 get FinBERT-scored headlines with a 0–100 overall sentiment (50 = neutral),
-or the Earnings view's beat/miss history plus the latest SEC 8-K release.
+or the Earnings view: the latest SEC 8-K **results** release (Item 2.02) with its
+sentiment. Past beat/miss isn't shown — Finnhub's free plan returns no past
+EPS actuals, and the page says so.
 
 **Backtest** page: pick a ticker, a technical strategy, a period, and a
 starting capital, then **Run backtest** to see it charted against buy-&-hold
@@ -389,10 +402,18 @@ tests.
   to `.streamlit/secrets.toml` (template in `.streamlit/secrets.toml.example`)
   and list who's who in `OWNER_EMAILS` / `FRIEND_EMAILS` (`.env`); anyone else
   who signs in is a **guest**, and guests can also "Continue as guest" without an
-  account. Owners/friends see every page; guests are limited to Main, Portfolio,
-  Health, Backtest and the Assistant (a shared, seeded demo portfolio so those
-  pages aren't empty). `DEV_LOGIN_EMAIL` locally impersonates a friend/guest
-  without signing in.
+  account. Owners/friends see every page; guests are limited to the Dashboard,
+  Holdings, Health & Projections, Backtest and the Assistant (a shared, seeded
+  demo portfolio so those pages aren't empty). `DEV_LOGIN_EMAIL` locally
+  impersonates a friend/guest without signing in.
+- **The guest demo is read-only, enforced.** Every anonymous visitor shares it,
+  so its change controls are hidden and `db/session.py` refuses any write to a
+  user-owned row while the session is read-only (`ReadOnlyError`). Its ledger is
+  settled by `engine/auth` when a guest arrives (the funding deposit is seeded
+  before the buys, so the demo holds $1,000 of cash, not −$3,100).
+- **Friends can look, not steer.** They see every page, but only the owner can
+  stop or resume a bot strategy, or add/disable a Creator Signals channel (the
+  creator bot trades what every active channel says).
 - **Data is isolated per user** automatically — holdings, transactions,
   watchlist, cash and saved scores are all scoped by `user_id` centrally in
   `db/session.py` (no per-query filters to forget), so no one sees anyone else's.
@@ -415,7 +436,12 @@ tests.
   host's *read-only market-data* keys (Finnhub / FRED / EDGAR) so its charts
   aren't empty — never the host's Alpaca account or Gemini quota. So a friend can
   never silently spend the host's paper account or LLM credits, and a guest can
-  only ever *read* market data.
+  only ever *read* market data. One deliberate exception: **price history**
+  is read with the host's Alpaca pair when a visitor has none of their own
+  (`alpaca_client._market_data_keys`), so everyone reads the same cached series
+  instead of guests falling back to Yahoo. That pair only ever builds a market-
+  data client; trading always uses the user's own (`_require_keys`), and Alpaca
+  clients are cached per key pair, never shared between users.
 
 ## How portfolio health is computed (Section 6.4)
 
@@ -620,9 +646,12 @@ mean is remapped for display onto a **0–100 scale where 50 = neutral**
 users kept reading a raw "−8/100" as broken rather than "slightly
 net-negative", and a 0–100 grade is the intuitive convention; a caption on
 the page explains it (and that it's *headline-only*, so it can differ from
-your own read of the full article). The **Earnings** view pairs Finnhub's
-beat/miss numbers (EPS actual vs. estimate per quarter) with the company's
-latest **SEC 8-K EX-99.1 press release**, pulled and text-extracted from EDGAR
+your own read of the full article). The **Earnings** view was built to pair
+Finnhub's beat/miss numbers (EPS actual vs. estimate per quarter) with the
+company's latest **SEC 8-K EX-99.1 press release**, but the free plan returns no
+past actuals, so only the release shows. It is the newest 8-K filed under Item
+2.02 (results) — any 8-K can carry an EX-99.1, and ADI's newest in Nov 2026 was
+an acquisition — pulled and text-extracted from EDGAR
 (`edgar_client.get_8k_press_release`) and run through the same sentiment model.
 
 Three design choices carried over from the rest of the build:
