@@ -225,17 +225,29 @@ def test_the_runner_places_a_buy_the_cash_covers_beyond_the_cushion(recorded):
     assert float(client.submitted[0].notional) == pytest.approx(2_526.59)
 
 
-def test_a_buy_that_would_dip_into_the_cushion_waits_and_says_why(recorded):
-    """$2,600 of cash covers the $2,526.59 — but only by spending the $500 kept
-    for a sale that opens lower than planned. Refused, and the journal names the
-    cushion rather than implying the money isn't there."""
+def test_a_buy_that_would_spend_more_than_half_the_cushion_waits_and_says_why(recorded):
+    """$2,600 of cash covers the $2,526.59 — but only by spending $426.59 of the
+    $500 cushion. Buys may dip into half of it (risk.CUSHION_BUYS_MAY_USE, Tane
+    3 Nov 2026); the other $250 stays for a sale that opens lower than planned.
+    Refused, and the journal names the cushion rather than implying the money
+    isn't there."""
     client = _account_with(2_600.00)
     targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
     _run(recorded, dry_run=False, targets=targets, client=client)
     assert client.submitted == []
     row = next(r for r in recorded if r.get("blocked_by") == risk.INSUFFICIENT_CASH)
-    assert "$2,100.00 available" in row["reason"]
-    assert "$500.00 more is held back as the cash cushion" in row["reason"]
+    assert "$2,350.00 available" in row["reason"]
+    assert "$250.00 more is held back as the cash cushion" in row["reason"]
+
+
+def test_a_buy_that_dips_into_less_than_half_the_cushion_goes_through(recorded):
+    """$2,800 of cash: the buy spends $226.59 of the $500 cushion — inside the
+    half buys may use — and leaves $273.41, never below zero."""
+    client = _account_with(2_800.00)
+    targets = [Target(ticker="AMD", notional=2_526.59, reason="conviction")]
+    _run(recorded, dry_run=False, targets=targets, client=client)
+    assert [getattr(o, "symbol", None) for o in client.submitted] == ["AMD"]
+    assert not [r for r in recorded if r.get("blocked_by") == risk.INSUFFICIENT_CASH]
 
 
 def test_the_runner_journals_a_buy_it_cannot_afford_at_all(recorded):

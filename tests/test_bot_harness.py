@@ -915,14 +915,15 @@ def test_retry_buys_alone_may_use_the_cushion():
     assert [o.ticker for o in funded] == ["ZION"] and not short
 
 
-def test_the_cushion_still_applies_when_anything_else_is_traded():
+def test_half_the_cushion_still_applies_when_anything_else_is_traded():
     from engine.bot import executor as ex
 
     retry = ex.Order(ticker="ZION", side="buy", reason="r", notional=585.57, refill=True)
     sale = ex.Order(ticker="AMCR", side="sell", reason="r", qty=10.0)
     plain = ex.Order(ticker="MU", side="buy", reason="r", notional=585.57)
     for orders in ([retry, sale], [retry, plain], [plain]):
-        assert ex.cushion_for(orders, equity=9_245.77, cash=1_040.13) == pytest.approx(462.29, abs=0.01)
+        # Half of it: buys may dip into the other half (Tane, 3 Nov 2026).
+        assert ex.cushion_for(orders, equity=9_245.77, cash=1_040.13) == pytest.approx(231.14, abs=0.01)
 
 
 def test_a_retry_still_never_takes_cash_below_zero():
@@ -931,3 +932,33 @@ def test_a_retry_still_never_takes_cash_below_zero():
     orders = [ex.Order(ticker="ZION", side="buy", reason="r", notional=585.57, refill=True)]
     funded, short = ex.fund(orders, [], cash=500.0, keep=ex.cushion_for(orders, equity=9_245.77, cash=500.0))
     assert not funded and short
+
+
+
+def test_a_rebalance_buy_may_dip_into_half_the_cushion():
+    """Monday 2 Nov: composite's last buy, ZION ($592.94), was refused with
+    $500.94 left because all $468.11 of cushion was held back. The cushion is
+    there so cash never goes negative; dipping slightly into it through price
+    movement is fine (Tane, 3 Nov). Half of it held back lets that buy through."""
+    from engine.bot import executor as ex
+
+    equity, cash = 9_362.17, 530.52
+    orders = [ex.Order(ticker="AMCR", side="sell", reason="r", notional=1_000.00),
+              ex.Order(ticker="MU", side="buy", reason="r", notional=561.47),
+              ex.Order(ticker="ZION", side="buy", reason="r", notional=592.94)]
+    keep_all = risk.cushion_to_keep(equity, cash)
+    _, short_then = ex.fund(orders, [], cash=cash, keep=keep_all)
+    assert [g.order.ticker for g in short_then] == ["ZION"]
+    assert short_then[0].available == pytest.approx(500.94, abs=0.01)          # Monday's refusal
+
+    funded, short_now = ex.fund(orders, [], cash=cash, keep=ex.cushion_for(orders, equity=equity, cash=cash))
+    assert not short_now and "ZION" in [o.ticker for o in funded]
+
+
+def test_half_the_cushion_is_still_never_spent():
+    from engine.bot import executor as ex
+
+    orders = [ex.Order(ticker="MU", side="buy", reason="r", notional=400.0)]
+    funded, short = ex.fund(orders, [], cash=500.0,
+                            keep=ex.cushion_for(orders, equity=10_000.0, cash=500.0))
+    assert not funded and short[0].available == pytest.approx(250.0)          # 500 - half of 500

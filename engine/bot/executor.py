@@ -150,8 +150,9 @@ def plan(
 def cushion_for(orders: list[Order], *, equity: float, cash: float) -> float:
     """The cash this run's buys may not touch. Pure.
 
-    Normally the cushion (`risk.cushion_to_keep`): it is there for a sale that
-    fills below the price it was counted at, leaving a same-run buy short. A run
+    Normally half the cushion (`risk.cushion_to_keep` less what buys may dip
+    into, `risk.CUSHION_BUYS_MAY_USE`): it is there for a sale that fills below
+    the price it was counted at, leaving a same-run buy short. A run
     whose orders are ONLY retry buys (`Order.refill`) has no sale to come up
     short, so it may use the cushion — Tane, 3 Nov 2026, after composite could
     spend $577.84 above its cushion and ZION's full slot was $585.57. The buy is
@@ -160,7 +161,8 @@ def cushion_for(orders: list[Order], *, equity: float, cash: float) -> float:
     """
     if orders and all(o.side == "buy" and o.refill for o in orders):
         return 0.0
-    return risk.cushion_to_keep(equity, cash)
+    # Otherwise buys may dip into part of it (risk.CUSHION_BUYS_MAY_USE).
+    return risk.cushion_to_keep(equity, cash) * (1.0 - risk.CUSHION_BUYS_MAY_USE)
 
 
 @dataclass(frozen=True)

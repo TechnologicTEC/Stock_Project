@@ -178,6 +178,15 @@ def position_notional(equity: float, target_slots: int, max_position_pct: float)
 # among them — so instead each sell-and-replace leaves ~5% of the sale behind.
 CASH_CUSHION = 0.05
 
+# How much of that cushion a run's buys may spend. Tane, 3 Nov 2026: the
+# cushion is there so cash never goes NEGATIVE, and dipping slightly into it
+# through price movement is fine. Half stays held back for the risk it was built
+# for — a same-run sale filling below its counted price. Positions are still
+# SIZED from 95% (position_notional), so the cushion is still built; this only
+# lets a buy that would otherwise miss by a few dollars go through. On 2 Nov
+# composite's ZION was refused $92 short with all $468 of cushion held back.
+CUSHION_BUYS_MAY_USE = 0.5
+
 
 def cushion_to_keep(equity: float, cash: float) -> float:
     """How much of the current cash is cushion, and so off-limits to planned buys.
