@@ -107,8 +107,10 @@ with k2:
         nzd_rate, fx = None, {}
     st.metric("In NZD",
               currency.format_amount(holdings_value, "NZD", nzd_rate) if nzd_rate else "—",
-              f"@ {fx['usd_per_nzd']:.4f} USD/NZD" if fx.get("usd_per_nzd") else None,
-              delta_color="off")
+              # Worded as the Holdings page words it; "USD/NZD" read backwards
+              # by the market convention, and a rate has no up or down arrow.
+              f"1 USD = {fx['nzd_per_usd']:.4f} NZD" if fx.get("nzd_per_usd") else None,
+              delta_color="off", delta_arrow="off")
     if fx.get("as_of"):
         st.caption(f"{fx.get('source', 'FX')} · {fx['as_of']}")
 wallet = summary["wallet_balance"]

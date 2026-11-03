@@ -67,6 +67,26 @@ def test_dashboard_shows_snapshot_movers_and_creator_signals():
     assert "PLTR" in md and "3×" in md                  # creator repeat mention
 
 
+def test_nzd_card_states_the_rate_one_way_round():
+    # It read "@ 0.5627 USD/NZD" under a grey up arrow (Nov 2026): backwards by
+    # the market convention, and a rate isn't a move. Worded as the Holdings page.
+    fx = {"usd_per_nzd": 0.5627, "nzd_per_usd": 1 / 0.5627, "as_of": "2026-11-02",
+          "source": "ECB (frankfurter.app)"}
+    with patch("engine.portfolio.list_holdings", return_value=[{"ticker": "NVDA"}]), \
+         patch("engine.portfolio.get_portfolio_summary", return_value=_summary()), \
+         patch("engine.portfolio.get_live_valuation", return_value=[]), \
+         patch("engine.creator_signals.mention_leaderboard", return_value=[]), \
+         patch("engine.currency.get_rate", return_value=1 / 0.5627), \
+         patch("engine.currency.rate_info", return_value=fx):
+        at = AppTest.from_file(_MAIN)
+        at.run(timeout=30)
+    assert not at.exception
+    card = next(m for m in at.metric if m.label == "In NZD")
+    assert card.value == "NZ$14,422.82"                 # $8,115.72 / 0.5627
+    assert card.delta == "1 USD = 1.7771 NZD"
+    assert card.proto.direction == card.proto.MetricDirection.NONE   # no arrow
+
+
 def test_dashboard_shows_upcoming_earnings():
     from datetime import date, timedelta
     soon = (date.today() + timedelta(days=2)).isoformat()
