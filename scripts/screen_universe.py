@@ -165,6 +165,9 @@ def main() -> None:
 
     elapsed = (time.time() - started) / 60
     print(f"\nscored {payload['n_scored']}/{payload['n_requested']} in {elapsed:.1f} min", flush=True)
+    if payload.get("withheld"):
+        print(f"left out, under half the scoring weight had data: {', '.join(payload['withheld'])}",
+              flush=True)
     if payload.get("stale_price"):
         print(f"withheld for prices over {screener.MAX_PRICE_AGE_DAYS} days old (stopped "
               f"trading?): {', '.join(payload['stale_price'])}", flush=True)

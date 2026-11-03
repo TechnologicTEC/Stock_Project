@@ -147,6 +147,44 @@ def _next_scheduled_run(now: datetime) -> tuple[datetime, str]:
     return best
 
 
+# GitHub starts the pre-market run up to ~10 h after its cron, so a slot this
+# recent with no decision since it is still coming, not missed.
+RUN_LATE_WINDOW = timedelta(hours=12)
+
+
+def _due_run(now: datetime, last_decided: datetime | None) -> tuple[datetime, str] | None:
+    """The scheduled run whose time has passed but which hasn't run yet, if any.
+
+    `_next_scheduled_run` only looks forward, so for the hours GitHub sits on a
+    run it named tomorrow's slot as "next" while tonight's was still to come
+    (3 Nov 2026: 7pm NZ, the 5:30pm pre-market run not yet started, and the page
+    said Wed 10:45am). `last_decided` is naive UTC, as the journal stores it."""
+    latest = None
+    for (hour, minute, days), kind in ((AFTER_CLOSE_RUN, "after-close run"),
+                                       (PRE_MARKET_RUN, "pre-market run")):
+        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot > now:
+            slot -= timedelta(days=1)
+        while slot.weekday() not in days:
+            slot -= timedelta(days=1)
+        if latest is None or slot > latest[0]:
+            latest = (slot, kind)
+    slot, _kind = latest
+    if now - slot > RUN_LATE_WINDOW:
+        return None
+    if last_decided is not None and last_decided.replace(tzinfo=timezone.utc) >= slot:
+        return None
+    return latest
+
+
+def _days_live(first_date, now: datetime) -> int | None:
+    """Calendar days since the strategy's first recorded session (Tane, 3 Nov
+    2026: "days live" means days, not the count of trading sessions)."""
+    if first_date is None:
+        return None
+    return (now.date() - first_date).days
+
+
 _STATUS_BADGE = {
     journal.FILLED: "sb", journal.SUBMITTED: "b",
     journal.BLOCKED: "s", journal.ERROR: "s",
@@ -459,7 +497,9 @@ bench_summary = performance.summarise(
 
 now = datetime.now(timezone.utc)
 last_decided = max((d["decided_at"] for r in rows for d in r["decisions"][:1]), default=None)
-max_days = max((r["summary"]["days"] for r in rows), default=0)
+max_days = max((r["summary"]["days"] for r in rows), default=0)   # sessions, for the Sharpe error
+calendar_days = max((d for r in rows
+                     if (d := _days_live(r["summary"]["first_date"], now)) is not None), default=0)
 
 # BOT_TRADING_ENABLED is a GitHub Actions *repo variable*, so it is normally
 # absent from the app's own environment. Absent must not be reported as "off" —
@@ -478,6 +518,17 @@ else:
                    "order would be placed from this environment.")
 
 _next_run = _next_scheduled_run(now)
+_due = _due_run(now, last_decided)
+if _due:
+    _run_html = (f'the {_due[1]} due {_esc(nz_time(_due[0]))} '
+                 '<span class="dim">· not started yet — GitHub usually starts it 2–5 h late (the '
+                 f'pre-market one up to 10 h) · then the {_next_run[1]}, '
+                 f'{_esc(nz_time(_next_run[0]))}</span>')
+else:
+    _run_html = (f'{_esc(nz_time(_next_run[0]))} '
+                 f'<span class="dim">· the {_next_run[1]} · GitHub usually starts it 2–5 h late '
+                 "(the pre-market one up to 10 h), and the after-close run waits for the nightly "
+                 "price refresh</span>")
 killed = [r["label"] for r in rows if r["config"].get("killed")]
 disabled = [r["label"] for r in rows if not r["config"].get("enabled")]
 
@@ -490,11 +541,7 @@ _theme.panel(
     + "</td></tr>"
     f'<tr><td class="dim">Last decision</td><td class="val">'
     f'{_esc(nz_time(last_decided)) if last_decided else "never"}</td></tr>'
-    f'<tr><td class="dim">Next scheduled run</td><td class="val">'
-    f'{nz_time(_next_run[0])} '
-    f'<span class="dim">· the {_next_run[1]} · GitHub usually starts it 2–5 h late '
-    "(the pre-market one up to 10 h), and the after-close run waits for the nightly "
-    "price refresh</span></td></tr>"
+    f'<tr><td class="dim">Next scheduled run</td><td class="val">{_run_html}</td></tr>'
     f'<tr><td class="dim">Global switch</td><td>{switch_html} '
     f'<span class="dim">{switch_note}</span></td></tr>'
     "</tbody></table>",
@@ -520,7 +567,8 @@ if se_at_one is not None:
     # top-level child becomes its own column — several <b>s would lay the
     # sentence out as a row of narrow blocks instead of a paragraph.
     _theme.advice(
-        f"<span><b>Day {max_days}.</b> At this sample size the standard error on an annualised "
+        f"<span><b>Day {calendar_days}</b> ({max_days} trading sessions). At this sample size the "
+        "standard error on an annualised "
         f"Sharpe of 1.0 is <b>±{se_at_one:.1f}</b> — several times any gap in the table below. Read "
         f"the ranking as a scoreboard in progress, not a result: pinning a Sharpe to ±0.5 takes "
         f"about <b>{days_needed:,} trading days</b> (~{days_needed / 252:.0f} years). Return and "
@@ -715,7 +763,8 @@ for tab, r in zip(tabs, tab_rows):
             _stat("Sharpe", sharpe_html, cls=sharpe_cls, se=sharpe_se),
             _stat("Max drawdown", _pct(s["max_drawdown"]),
                   cls="down" if s["max_drawdown"] else "dim"),
-            _stat("Days live", f"{s['days']}"),
+            _stat("Days live", f"{_days_live(s['first_date'], now) or 0}",
+                  se=f"{s['days']} sessions"),
         )
 
         # ---- this strategy's own account value, with SPY dashed behind it ----
@@ -787,7 +836,26 @@ for tab, r in zip(tabs, tab_rows):
                 seen_tickers.add(note.get("ticker"))
                 unique_notes.append(note)
         if unique_notes:
-            body = "".join(f'<p class="cp-note">{_esc(n["reason"])}</p>' for n in unique_notes)
+            # The journalled reason is written in the present tense ("still 1.2682
+            # shares"). Once the name is sold that stops being true, but the loss
+            # stays in the equity — APH was sold on 1 Oct 2026 and the note kept
+            # describing a position the account no longer held.
+            held_now_set = _bot_panels._held(r["name"], r["view"])
+            exits = {}
+            for fill in _cache.bot_fills(r["name"]):       # oldest first
+                t = (fill.get("ticker") or "").upper()
+                if fill.get("action") == "sell" and fill.get("qty"):
+                    exits[t] = fill.get("decided_at")
+            body = ""
+            for n in unique_notes:
+                t = (n.get("ticker") or "").upper()
+                body += f'<p class="cp-note">{_esc(n["reason"])}</p>'
+                if t not in held_now_set:
+                    sold = exits.get(t)
+                    when = f" on {sold:%d %b %Y}" if sold else ""
+                    body += (f'<p class="cp-note"><b>Since sold{_esc(when)}</b> at that halved '
+                             "ledger value, so the shortfall is now a permanent part of this "
+                             "account's equity rather than an open position.</p>")
             _theme.panel(
                 "Account value includes a broker artefact",
                 body + '<p class="cp-foot">Alpaca\'s paper accounts do not process stock '
@@ -824,7 +892,10 @@ for tab, r in zip(tabs, tab_rows):
             _stat("Position size",
                   f'equity × {_tidy_pct((1 - risk.CASH_CUSHION) * min(1 / slots, cfg.get("max_position_pct") or 1.0))}'
                   if slots else "—",
-                  se=f"{_tidy_pct(risk.CASH_CUSHION)} kept as cash"),
+                  # The rule for a NEW buy. "kept as cash" read as a description
+                  # of the account, beside golden cross's $0 of cash: its SPY was
+                  # bought at 100% on 1 Sep and is held, never resized.
+                  se=f"new buys leave {_tidy_pct(risk.CASH_CUSHION)} in cash"),
         )
 
         # ---- open positions ----

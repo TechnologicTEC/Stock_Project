@@ -276,7 +276,9 @@ else:
         f"projected): {subject} actually returned **{projection.observed_annual_return_pct:+.0f}%** over the past "
         "year. "
         + ("The portfolio projection values your current holdings held constant across the year, so it isn't "
-           "distorted by money you added or withdrew — but it does assume today's mix, not your past one."
+           "distorted by money you added or withdrew — but it does assume today's mix, not your past one. "
+           "It **includes your wallet cash**, which earns nothing here, so this return is lower than the "
+           "stocks-only trailing return in the risk metrics above."
            if subject == "Your portfolio" else "")
     )
 

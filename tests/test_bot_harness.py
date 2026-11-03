@@ -235,6 +235,17 @@ def test_plan_trims_when_the_position_has_grown_past_target():
     assert orders[0].side == "sell" and orders[0].notional == pytest.approx(1_000.0)
 
 
+def test_a_buy_into_a_held_name_says_it_is_a_top_up():
+    """2 Nov 2026: a rebalance top-up carried only the strategy's reason ("held
+    rather than churned") under a Buy, which read as if nothing was bought.
+    Trims already said "Trimming to target"; top-ups now say theirs."""
+    held = [executor.Position("SPY", qty=20.0, market_value=9_000.0)]
+    top_up = executor.plan([_target(10_000.0)], held, equity=10_000.0)[0]
+    assert top_up.side == "buy" and top_up.reason == "Topping up to target. because"
+    new = executor.plan([_target(10_000.0)], [], equity=10_000.0)[0]
+    assert new.reason == "because"                       # an opening buy keeps its own reason
+
+
 def test_plan_closes_a_dropped_name_in_full_by_qty():
     """By qty, not notional — a notional sell can leave fractional dust behind."""
     held = [executor.Position("AAPL", qty=3.5, market_value=700.0)]

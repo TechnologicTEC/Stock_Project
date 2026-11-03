@@ -229,7 +229,9 @@ def test_sharpe_is_blank_on_a_short_run_but_return_still_shows():
 def test_banner_quantifies_the_error_bar_instead_of_just_warning():
     at = _run(curve=_curve(n=34))
     body = _body(at)
-    assert "Day 34" in body
+    # The day is a calendar day (Tane, 3 Nov 2026); the error bar still rests on
+    # the sessions, and the banner says how many.
+    assert re.search(r"Day \d+</b> \(34 trading sessions\)", body)
     assert "±" in body and "trading days" in body
 
 
@@ -286,7 +288,7 @@ def test_the_banner_survives_every_length_of_short_history(days):
     assert not at.exception, at.exception
     body = _body(at)
     # Whichever branch it takes, it has to say something about the sample size.
-    assert ("Not enough history to compare yet" in body) or (f"Day {days}." in body)
+    assert ("Not enough history to compare yet" in body) or (f"({days} trading sessions)" in body)
 
 
 def test_the_error_bar_appears_as_soon_as_it_can_be_estimated():
@@ -294,7 +296,7 @@ def test_the_error_bar_appears_as_soon_as_it_can_be_estimated():
     answers — so that is the first day the real banner should appear rather
     than the placeholder."""
     body = _body(_run(curve=_curve(n=3)))
-    assert "Day 3." in body
+    assert "(3 trading sessions)" in body
     assert "±" in body and "trading days" in body
 
 
@@ -973,6 +975,23 @@ def test_an_unapplied_split_is_called_out_on_the_tab():
     assert "do not process stock splits" in body
 
 
+def test_a_split_note_for_a_name_since_sold_says_so():
+    """APH was sold on 1 Oct 2026 and the note kept saying "still 1.2682 shares".
+    The loss stays in the equity, so the note stays — in the past tense."""
+    sold = _fills() + [{"ticker": "APH", "decided_at": datetime(2026, 10, 1, 21, 45),
+                        "action": journal.SELL, "qty": 1.2682, "notional": None,
+                        "reason": "No longer in the target book.", "status": journal.FILLED}]
+    body = _body(_run(decisions=[_split_note(), _decision()], fills=sold))
+    assert "Since sold on 01 Oct 2026" in body
+    assert "permanent part of this account's equity" in body
+    # Still held (the default view holds SPY only, so make it hold APH): no such line.
+    held = _account_view(positions=[{"ticker": "APH", "qty": 1.2682, "avg_entry_price": 157.7,
+                                     "current_price": 86.0, "market_value": 109.0,
+                                     "unrealized_pl": -91.0, "unrealized_plpc": -0.45,
+                                     "change_today_pct": 0.0}])
+    assert "Since sold" not in _body(_run(decisions=[_split_note(), _decision()], view=held))
+
+
 def test_the_note_says_no_order_can_recover_it():
     """The wrong reading is 'so buy the missing shares' — it does not undo the
     write-down, it spends cash to rebuild the position."""
@@ -1040,17 +1059,19 @@ def test_every_reason_the_screen_can_give_has_a_label():
 
 
 
-def _next_run(now):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("bot_page_for_schedule", PAGE_PATH)
+def _schedule_helpers():
     src = Path(PAGE_PATH).read_text(encoding="utf-8")
     # Only the schedule helpers: executing the whole page would render it.
     start = src.index("# Both runs in .github/workflows/trade-bot.yml")
     end = src.index("_STATUS_BADGE = {")
     head = src[start:end]
-    ns = {"datetime": datetime, "timedelta": timedelta}
+    ns = {"datetime": datetime, "timedelta": timedelta, "timezone": timezone}
     exec(head[:head.index("def _sparkline")] + head[head.index("def _next_scheduled_run"):], ns)
-    return ns["_next_scheduled_run"](now)
+    return ns
+
+
+def _next_run(now):
+    return _schedule_helpers()["_next_scheduled_run"](now)
 
 
 @pytest.mark.parametrize("now, expected, kind", [
@@ -1070,6 +1091,31 @@ def _next_run(now):
 ])
 def test_next_scheduled_run_follows_both_crons(now, expected, kind):
     assert _next_run(now) == (expected, kind)
+
+
+def test_a_run_github_has_not_started_yet_is_named_as_due():
+    """3 Nov 2026, 7pm NZ: the 5:30pm pre-market run hadn't started and the page
+    named Wednesday 10:45am as the next run, as if none were coming tonight."""
+    due = _schedule_helpers()["_due_run"]
+    now = datetime(2026, 11, 3, 6, 8, tzinfo=timezone.utc)
+    before_slot = datetime(2026, 11, 3, 3, 12)          # naive UTC, as journalled
+    slot = datetime(2026, 11, 3, 4, 30, tzinfo=timezone.utc)
+    assert due(now, before_slot) == (slot, "pre-market run")
+    # It has run: nothing is due, and the page goes back to the next slot.
+    assert due(now, datetime(2026, 11, 3, 5, 50)) is None
+    # Never run at all counts as not started.
+    assert due(now, None) == (slot, "pre-market run")
+    # Past the late window it is missed, not "due" — the log check reports those.
+    assert due(datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc), before_slot) is None
+
+
+def test_days_live_counts_calendar_days():
+    """Tane, 3 Nov 2026: days live are days. 1 Sep to 3 Nov is 63, not the 44
+    trading sessions the page showed."""
+    from datetime import date
+    days = _schedule_helpers()["_days_live"]
+    assert days(date(2026, 9, 1), datetime(2026, 11, 3, 6, 0, tzinfo=timezone.utc)) == 63
+    assert days(None, datetime(2026, 11, 3, tzinfo=timezone.utc)) is None
 
 
 
@@ -1136,5 +1182,6 @@ def test_times_on_the_page_are_in_nz_time():
     assert not re.search(r"\d UTC", body)                       # no "21:45 UTC" left anywhere
     nz = r"\w{3} \d{1,2} \w{3}, \d{1,2}:\d{2}(am|pm) NZ"
     assert re.search(r"Last decision</td><td class=\"val\">" + nz, body)
-    assert re.search(r"Next scheduled run</td><td class=\"val\">" + nz, body)
+    # A run whose slot has passed but GitHub hasn't started is named first.
+    assert re.search(r"Next scheduled run</td><td class=\"val\">(the [\w-]+ run due )?" + nz, body)
     assert "<th>When (NZ)</th>" in body

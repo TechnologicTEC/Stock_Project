@@ -894,6 +894,21 @@ def test_the_leaderboard_withholds_a_name_scored_on_too_little_data():
     assert [r["ticker"] for r in lb["rows"]] == ["KO"]
     assert lb["n_withheld"] == 1
     assert lb["n_scored"] == 1
+    # Named, so the page can say which (VYLR, Nov 2026: "1 name withheld" alone
+    # read like a fault).
+    assert lb["withheld"] == ["VRT"]
+
+
+def test_a_repair_keeps_names_withheld_by_the_run_unless_rescreened():
+    thin = _sr("VRT", 77.1, {"valuation": None, "growth": None, "profitability": None})
+    lb = screener.build_leaderboard([thin, _sr("KO", 70.0), _sr("PEP", 65.0)])
+    # Re-screening PEP alone leaves VRT withheld.
+    out = screener.repair_leaderboard(lb, [_sr("PEP", 66.0)])
+    assert out["withheld"] == ["VRT"] and out["n_withheld"] == 1
+    # Re-screening VRT on full data brings it into the ranking.
+    out = screener.repair_leaderboard(lb, [_sr("VRT", 77.1)])
+    assert out["withheld"] == [] and out["n_withheld"] == 0
+    assert "VRT" in {r["ticker"] for r in out["rows"]}
 
 
 def test_a_name_missing_one_factor_still_makes_the_leaderboard():

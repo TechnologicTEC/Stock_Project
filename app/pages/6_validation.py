@@ -154,7 +154,7 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
             f"run {uni.get('generated_at', '—')}"
         )
         st.markdown(
-            "Unlike the pooled run above, this ranks names **against each other on each date** — the only "
+            "Unlike the pooled run below, this ranks names **against each other on each date** — the only "
             "thing the Screener actually claims (\"this stock is better than that one\"), rather than mixing "
             "it with \"is now a good time to own stocks\", which it can't know."
         )
@@ -163,7 +163,9 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
         u1.metric("Cross-sectional IC", f"{o['mean_ic']:+.3f}" if o["mean_ic"] is not None else "—",
                   help="Average per-date rank correlation between score and the following return, across names.")
         u2.metric("t-stat", f"{o['t_stat']:+.2f}" if o["t_stat"] is not None else "—",
-                  help="Deflated for overlapping return windows. |t| > 1.96 = distinguishable from zero.")
+                  help="Deflated for overlapping return windows. Distinguishable from zero above "
+                       f"|t| = {uni.get('t_single', 1.96)} — Student's t at this many independent "
+                       "dates, stricter than the large-sample 1.96.")
         u3.metric("Independent dates", f"{o['n_dates_eff']} of {o['n_dates']}",
                   help="Sampling a return more often than its own horizon re-measures the same move, so "
                        "the dates sampled are NOT all independent trials.")
@@ -172,7 +174,7 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
 
         if not o.get("significant"):
             st.warning(
-                "**Still not statistically significant.** The binding constraint is *independent time "
+                "**Not statistically significant.** The binding constraint is *independent time "
                 f"periods*, not tickers: {o['n_dates']} sampled dates collapse to **{o['n_dates_eff']}** "
                 "once overlapping windows are removed. More names sharpen each date's estimate, but only a "
                 "longer look-back (or a shorter horizon) buys more independent periods. Not a reweighting "
@@ -190,7 +192,7 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
             )
 
         def _verdict_badge(f):
-            """Significance as a pill. A factor that clears 1.96 but not the
+            """Significance as a pill. A factor that clears the single-test bar but not the
             multiple-comparison bar is called MARGINAL in the faint amber style —
             that's precisely what a false positive looks like, so it must not read
             like a win."""
@@ -233,17 +235,19 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
             tag=f"bar |t| > {uni.get('t_threshold', 1.96)}",
         )
         thr, n_tests = uni.get("t_threshold"), uni.get("n_tests")
+        single = uni.get("t_single", 1.96)
         if thr:
             # Worked out from the stored test count rather than written down: the
             # bar is set by how many factors this run actually tested (4 when
             # analyst and sentiment are off), and "6 factors, ~26%" was wrong then.
             luck = 1 - 0.95 ** (n_tests or 1)
             st.caption(
-                f"⚖️ The bar here is **|t| > {thr}**, not the familiar 1.96, because we test "
+                f"⚖️ The bar here is **|t| > {thr}**, not the single-test {single}, because we test "
                 f"**{n_tests} factors against the same data at once**. With {n_tests} factors there's a "
-                f"~{luck:.0%} chance at least one clears 1.96 by pure luck — so reporting whichever one "
-                "does would be p-hacking by accident. Rows marked **MARGINAL** passed 1.96 but not this "
-                "bar: that's exactly what a false positive looks like."
+                f"~{luck:.0%} chance at least one clears {single} by pure luck — so reporting whichever one "
+                f"does would be p-hacking by accident. Rows marked **MARGINAL** passed {single} but not this "
+                "bar: that's exactly what a false positive looks like. Both bars use Student's t at "
+                f"{o['n_dates_eff']} independent dates rather than the large-sample normal (1.96)."
             )
         analyst_note = (
             "And the **analyst confidence** factor is **not included** in this run — it reconstructs "
@@ -255,7 +259,7 @@ with st.expander("🌍 Validate across the S&P 500 — does the score rank stock
         )
         st.caption(
             "**IC-IR** is consistency (mean ÷ spread): a small IC that shows up every date beats a big one "
-            "that flips sign. **Read against the pooled run above — where a factor's sign flips between the "
+            "that flips sign. **Read against the pooled run below — where a factor's sign flips between the "
             "two, the personal-holdings number is the one to distrust**, because those are stocks you chose.\n\n"
             "Caveats, honestly: the universe is **today's** index, so failed companies are missing "
             "(survivorship bias — it inflates return *levels*, but hits every factor alike, which is why "

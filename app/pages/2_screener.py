@@ -141,9 +141,13 @@ def _render_leaderboard() -> None:
         # score, so the count is the only place their absence is visible.
         withheld = sum(lb.get("n_withheld") or 0 for _n, lb in parts)
         if withheld:
+            # Named once the run records them (payloads from 8 Nov 2026 on).
+            names = sorted({t for _n, lb in parts for t in (lb.get("withheld") or ())})
+            which = f" ({', '.join(names)})" if names else ""
             st.info(
-                f"**{withheld} name{'s' if withheld != 1 else ''} withheld from this ranking** — "
-                "their data provider lookups failed, leaving under half the scoring weight. A "
+                f"**{withheld} name{'s' if withheld != 1 else ''} withheld from this ranking**{which} — "
+                "under half the scoring weight had real data behind it: usually a lookup that "
+                "failed, or a company too new to have filed results yet (a fresh spin-off). A "
                 "score built on momentum and sentiment alone isn't comparable with one built on "
                 "all six factors, so they're left out rather than ranked against names that have "
                 "the full picture.",

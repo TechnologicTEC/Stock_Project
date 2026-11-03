@@ -135,7 +135,7 @@ with _theme.section("Mentioned more than once", tag="last 3 months"):
                 unsafe_allow_html=True)
             score = entry["screener_score"]
             c[5].markdown(
-                f'<span class="cp-num">{score:.0f}</span><span class="cp-dim">/100</span>'
+                f'<span class="cp-num">{score:.1f}</span><span class="cp-dim">/100</span>'
                 if score is not None else '<span class="cp-dim">—</span>',
                 unsafe_allow_html=True)
             _add_button(c[6], entry["ticker"], key=f"lb_add_{entry['ticker']}")
@@ -172,6 +172,8 @@ for sig in signals:
         c[1].write(m["company_name"] or "—")
         # A paid segment is shown, but as what it is rather than as a view.
         c[2].write("💲 Sponsored" if m.get("sponsored") else _STANCE.get(m["stance"], "· —"))
-        c[3].write(f"{m['screener_score']:.0f}/100" if m["screener_score"] is not None else "—")
+        # One decimal, as the leaderboard shows it: rounded to a whole number,
+        # 74.95 read "75/100 · Buy" beside another "75/100 · Strong Buy".
+        c[3].write(f"{m['screener_score']:.1f}/100" if m["screener_score"] is not None else "—")
         c[4].write(m["recommendation"] or "—")
         _add_button(c[5], m["ticker"], key=f"add_{sig['video_id']}_{m['ticker']}")

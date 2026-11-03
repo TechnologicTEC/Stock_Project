@@ -81,6 +81,14 @@ composite score has a cross-sectional information coefficient of **+0.051
 professional equity factor models achieve, and nothing like a stock picker.
 About **two-thirds is genuine stock selection**; the rest is sector tilt.
 
+**Borderline, not settled.** Five years of 3-month returns give only about 20
+independent dates, so the honest bar is Student's t at 19 degrees of freedom —
+**|t| > 2.09**, not the large-sample 1.96 (the app used 1.96 until 3 Nov 2026).
+The Oct run clears it narrowly (p ≈ 0.045); the 1 Nov run, **+0.049 (t = 1.99)**
+on 498 names over the same years, does not (p ≈ 0.06). The pages now say
+"not statistically significant" for that run, and the projection's lean is off
+until a run clears the bar.
+
 **It did not replicate on mid caps.** The same test on the S&P 400 (399 names,
 five years, Oct 2026) found **+0.015 (t = 0.72)** — no measurable edge. The
 trading bots merge the S&P 400 into their ranking from November 2026 anyway,
@@ -90,7 +98,10 @@ Two findings that changed the roadmap:
 
 - **The composite works; none of its four measurable factors does** (all inside
   the noise band). It's an ensemble of weak signals — so factor reweighting was
-  **rejected on evidence** rather than opinion.
+  **rejected on evidence** rather than opinion. The 1 Nov 2026 run is the one
+  exception: **valuation alone, t = 3.08**, clears the multiple-test bar. It
+  covers the same five years as the runs before it, so it is a re-measurement,
+  not an independent replication, and reweighting stays rejected.
 - **Two pre-registered scoring changes were tested and both failed**, one
   significantly worse. Absolute, sector-aware curves beat both cross-sectional and
   sector-relative percentile scoring. The 2016–2021 holdout was never spent.
@@ -1086,7 +1097,8 @@ below is kept for the reasoning), **Creator Signals**, the weekly **S&P 500
 leaderboard**, and the **cross-sectional validation** work — which is where the
 project stopped adding features and started measuring whether the ones it has
 actually work. The honest answer (IC +0.046 to +0.051 on the S&P 500, none on
-the S&P 400, no single factor significant, two
+the S&P 400, no single factor significant until valuation's t = 3.08 on the
+1 Nov 2026 re-run of the same years, two
 scoring "improvements" that failed) is summarised at the top and written up in
 [`docs/scoring-experiment-plan.md`](docs/scoring-experiment-plan.md).
 

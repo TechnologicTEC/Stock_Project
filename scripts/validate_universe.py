@@ -159,7 +159,7 @@ def main() -> None:
         t = f"{f['t_stat']:+.2f}" if f["t_stat"] is not None else "   --"
         ir = f"{f['ic_ir']:+.2f}" if f["ic_ir"] is not None else "   --"
         hit = f"{f['hit_rate']:.2f}" if f["hit_rate"] is not None else "  --"
-        # A factor that clears 1.96 but not the corrected bar is the classic false
+        # A factor that clears the single-test bar but not the corrected one is the classic false
         # positive — call it out rather than letting it read as a discovery.
         if f["significant"]:
             verdict = "YES"
@@ -169,9 +169,10 @@ def main() -> None:
             verdict = "no"
         print(f"{f['label']:36s} {mic:>8s} {t:>7s} {ir:>7s} {hit:>5s}  {verdict}")
     print(f"{'='*72}")
-    print(f"Significance bar |t| > {summary['t_threshold']} (Bonferroni over {summary['n_tests']} "
-          f"factors tested at once — NOT 1.96; with 6 factors there's a ~26% chance one clears "
-          f"1.96 by pure luck).")
+    print(f"Significance bars on Student's t at {overall['n_dates_eff']} independent dates: overall "
+          f"|t| > {summary['t_single']}, each factor |t| > {summary['t_threshold']} (Bonferroni over "
+          f"{summary['n_tests']} factors tested at once — with several factors, one clearing the "
+          f"single-test bar by pure luck is likely).")
     print("Survivorship bias: today's index only — fine for ranking factors against "
           "each other, not for absolute returns.")
     print("Saved to the shared cache; the Validation page reads it.", flush=True)

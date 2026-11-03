@@ -102,12 +102,22 @@ if result is not None and not result.error:
     bh_end = result.buy_hold.total_return_pct if result.buy_hold else None
     spy_end = result.spy.total_return_pct if result.spy else None
 
+    def _vs(other):
+        """Which side is ahead, in words. "+20.4 pts vs strategy" under SPY's
+        number, with a green arrow, read as SPY being ahead when it was behind."""
+        if strat_end is None or other is None:
+            return None
+        gap = strat_end - other
+        if abs(gap) < 0.05:
+            return "level with the strategy"
+        return f"strategy {'ahead' if gap > 0 else 'behind'} by {abs(gap):.1f} pts"
+
     m1, m2, m3 = st.columns(3)
     m1.metric(f"{result.strategy_label}", _pct(strat_end))
-    m2.metric(f"{result.ticker} buy & hold", _pct(bh_end),
-              f"{strat_end - bh_end:+.1f} pts vs strategy" if strat_end is not None and bh_end is not None else None)
-    m3.metric("SPY buy & hold", _pct(spy_end),
-              f"{strat_end - spy_end:+.1f} pts vs strategy" if strat_end is not None and spy_end is not None else None)
+    m2.metric(f"{result.ticker} buy & hold", _pct(bh_end), _vs(bh_end),
+              delta_color="off", delta_arrow="off")
+    m3.metric("SPY buy & hold", _pct(spy_end), _vs(spy_end),
+              delta_color="off", delta_arrow="off")
 
     def _crow(name, m, *, lead=False):
         cells = ["—"] * 5 if m is None else [
@@ -133,7 +143,9 @@ if result is not None and not result.error:
         + _crow("SPY buy & hold", result.spy)
         + "</tbody></table>"
         '<div class="cp-foot">'
-        f"{result.trades} strategy trade(s) · risk-free rate for Sharpe: {result.risk_free_rate_source}. "
+        # Counted from day two: buy & hold's opening buy read as "0 trades".
+        f"{result.trades} position change(s) after the first day · risk-free rate for Sharpe: "
+        f"{result.risk_free_rate_source}. "
         "Returns are hypothetical, in USD, and ignore trading costs.</div>",
         tag=f"{result.ticker}",
     )

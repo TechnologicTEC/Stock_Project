@@ -497,7 +497,9 @@ def test_summarize_universe_corrects_factor_significance_for_multiple_comparison
     s = sv.summarize_universe(pts, horizon_days=91, step_days=91)
 
     assert s["n_tests"] == 3                                     # only factors with a t-stat count
-    assert s["t_threshold"] == round(sv.bonferroni_t_threshold(3), 2)
+    df = s["overall"]["n_dates_eff"] - 1
+    assert s["t_threshold"] == round(sv.bonferroni_t_threshold(3, df=df), 2)
+    assert s["t_single"] == round(sv.t_critical(0.05, df), 2)
     assert s["t_threshold"] > 1.96                               # testing 3 at once costs more
     for f in s["factor_ic"].values():
         assert "significant_uncorrected" in f                    # kept, not silently overwritten
@@ -505,12 +507,54 @@ def test_summarize_universe_corrects_factor_significance_for_multiple_comparison
             assert f["significant_uncorrected"]                  # corrected is strictly stricter
 
 
+def test_t_critical_matches_students_t():
+    # Checked against scipy.stats.t.ppf; the app carries no scipy.
+    assert round(sv.t_critical(0.05, 19), 3) == 2.093
+    assert round(sv.t_critical(0.05, 10), 3) == 2.228
+    assert round(sv.t_critical(0.05 / 4, 19), 3) == 2.759
+    assert round(sv.t_critical(0.05, None), 2) == 1.96            # large-sample limit
+
+
+def test_the_1_nov_run_is_not_significant_at_its_independent_dates():
+    """Audit, 3 Nov 2026: t = 1.99 on 20 independent dates was called significant
+    against the normal's 1.96. Student's t at 19 df needs 2.09 (p ~ 0.06)."""
+    stored = {"overall": {"mean_ic": 0.049, "t_stat": 1.99, "n_dates": 61, "n_dates_eff": 20,
+                          "hit_rate": 0.66, "significant": True},
+              "factor_ic": {"valuation": {"label": "Valuation", "mean_ic": 0.076, "t_stat": 3.08,
+                                          "significant": True, "significant_uncorrected": True},
+                            "growth": {"label": "Growth", "mean_ic": 0.02, "t_stat": 0.75,
+                                       "significant": False, "significant_uncorrected": False},
+                            "sentiment": {"label": "Sentiment", "mean_ic": None, "t_stat": None,
+                                          "significant": False}},
+              "n_tests": 2, "t_threshold": 2.24}
+    out = sv.recheck_significance(stored)
+    assert out["overall"]["significant"] is False
+    assert out["factor_ic"]["valuation"]["significant"] is True       # 3.08 clears either way
+    assert out["factor_ic"]["sentiment"]["significant"] is False      # never tested
+    assert out["t_single"] == 2.09 and out["t_threshold"] == round(sv.t_critical(0.025, 19), 2)
+    assert stored["overall"]["significant"] is True                    # the stored copy is untouched
+    # The Oct run, t = 2.15 on the same 20 dates, still passes.
+    oct_run = dict(stored, overall=dict(stored["overall"], t_stat=2.15))
+    assert sv.recheck_significance(oct_run)["overall"]["significant"] is True
+
+
+def test_load_universe_result_applies_the_current_rule():
+    sv.save_universe_result({"universe": "sp500",
+                             "overall": {"mean_ic": 0.049, "t_stat": 1.99, "n_dates": 61,
+                                         "n_dates_eff": 20, "significant": True},
+                             "factor_ic": {}})
+    assert sv.load_universe_result("sp500")["overall"]["significant"] is False
+
+
 def test_a_single_tested_factor_needs_no_correction():
     # Only momentum has scores -> one test -> the alpha budget isn't being split.
     days = [date(2022, 1, 1) + timedelta(days=91 * i) for i in range(12)]
     pts = [p for i, d in enumerate(days) for p in _perfect_date(d, flip=(i in (0, 1, 2)))]
     s = sv.summarize_universe(pts, horizon_days=91, step_days=91)
-    assert s["n_tests"] == 1 and s["t_threshold"] == 1.96
+    # One test keeps the single-test bar: Student's t at the run's own
+    # independent dates (12 here, so 11 df), not the large-sample 1.96.
+    df = s["overall"]["n_dates_eff"] - 1
+    assert s["n_tests"] == 1 and s["t_threshold"] == round(sv.t_critical(0.05, df), 2) == 2.2
 
 
 def test_summarize_universe_reports_overall_and_per_factor_cross_sectional_ics():
@@ -566,18 +610,24 @@ def test_track_record_flags_when_the_ic_excludes_news_sentiment():
     # Validated with news ON -> no exclusion caveat.
     projections.remember_validation_ic("NVDA", 0.05, n=20, include_news=True)
     tr = sv.track_record("NVDA")
-    assert tr["covers_news"] is True and tr["scope_note"] == ""
+    assert tr["covers_news"] is True and "fundamentals/momentum core" not in tr["scope_note"]
 
 
 def test_track_record_is_none_when_never_validated():
     assert sv.track_record("NEVERVALIDATED") is None
 
 
-def test_negative_ic_track_record_warns_it_worked_against_you():
+def test_negative_ic_track_record_is_reported_with_its_noise():
+    # Audit, 3 Nov 2026: "the rating has worked against you here" read as a
+    # finding about the stock, from ~4 independent periods. The negative read
+    # stays; it now says how little one stock can show.
     from engine import projections
     projections.remember_validation_ic("BBAI", -0.15, n=12)
     tr = sv.track_record("BBAI")
-    assert tr["stance"] == "negative" and "worked against you" in tr["text"]
+    assert tr["stance"] == "negative" and "negatively related" in tr["text"]
+    assert "worked against you" not in tr["text"]
+    assert "about 4 independent 3-month periods" in tr["scope_note"]
+    assert "too noisy to judge the rating by" in tr["scope_note"]
 
 
 def test_outlier_swings_the_raw_trend_but_not_the_rank_ic():

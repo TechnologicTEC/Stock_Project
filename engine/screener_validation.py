@@ -37,6 +37,31 @@ _SCORE_BANDS = [(0, 40, "0–40 (Sell)"), (40, 60, "40–60 (Hold)"),
                 (60, 75, "60–75 (Buy)"), (75, 101, "75–100 (Strong Buy)")]
 
 
+SIGNIFICANCE_ALPHA = 0.05      # two-sided, for one pre-specified test
+
+
+def t_critical(alpha: float, df: float | None) -> float:
+    """The |t| a two-sided test at `alpha` must clear with `df` degrees of freedom.
+
+    The cross-sectional t-stat rests on ~20 independent dates, not hundreds, so
+    the normal's 1.96 is too lenient: at 19 degrees of freedom the bar is 2.09.
+    The 1 Nov 2026 S&P 500 run (t = 1.99) was called significant against 1.96
+    and has p ~ 0.06 against the right bar (Tane, 3 Nov 2026: use the honest one).
+
+    Student-t quantile from the normal one by the Cornish-Fisher expansion (Hill
+    1970) — no scipy, as elsewhere here. Within 0.005 of the exact value from
+    df 5 up, at the single-test and Bonferroni bars used here (checked against
+    scipy); `df` None (or very large) gives the normal quantile."""
+    z = NormalDist().inv_cdf(1 - alpha / 2)
+    if df is None or df <= 0 or df > 1e6:
+        return z
+    v = float(df)
+    return (z + (z**3 + z) / (4 * v)
+            + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * v**2)
+            + (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / (384 * v**3)
+            + (79 * z**9 + 776 * z**7 + 1482 * z**5 - 1920 * z**3 - 945 * z) / (92160 * v**4))
+
+
 def news_sentiment_available() -> bool:
     """Whether the historical news factor can actually be reconstructed *here*.
 
@@ -143,8 +168,7 @@ def track_record(ticker: str) -> dict | None:
     if not rec or rec.get("information_coefficient") is None:
         return None
     ic = rec["information_coefficient"]
-    stance, text = "negative", ("has been NEGATIVELY related to returns for this ticker — "
-                                "the rating has worked against you here")
+    stance, text = "negative", ("has been negatively related to returns for this ticker so far")
     for threshold, tier_stance, tier_text in _IC_TIERS:
         if ic >= threshold:
             stance, text = tier_stance, tier_text
@@ -156,6 +180,16 @@ def track_record(ticker: str) -> dict | None:
     scope_note = "" if covers_news else (
         " Measured on the fundamentals/momentum core — the live news-sentiment factor can't be "
         "reconstructed historically, so it's excluded from this IC."
+    )
+    # A single stock's IC is too noisy to judge it by (audit, 3 Nov 2026): ~22
+    # monthly scores against 3-month returns overlap down to a handful of
+    # independent periods, and the verdict ("worked against you") read as a
+    # finding. The S&P 500 run is the test with power; say so beside it.
+    n = rec.get("n")
+    independent = round(n * DEFAULT_STEP_DAYS / DEFAULT_HORIZON_DAYS) if n else None
+    scope_note += (
+        f" One stock is a small sample{f' — about {independent} independent 3-month periods' if independent else ''}"
+        " — so this is too noisy to judge the rating by; the S&P 500 validation is the test that can."
     )
     return {"ic": round(ic, 3), "n": rec.get("n"), "as_of": rec.get("as_of"),
             "stance": stance, "text": text, "covers_news": covers_news, "scope_note": scope_note}
@@ -700,7 +734,7 @@ def cross_sectional_ic(points: list[dict], *, factor: str | None = None,
 
     if sd > 0:
         t_stat = mean_ic / (sd / math.sqrt(eff))
-        significant = abs(t_stat) > 1.96
+        significant = abs(t_stat) > t_critical(SIGNIFICANCE_ALPHA, eff - 1)
     else:
         # Every date produced the identical IC. A t-stat needs variance to divide
         # by, so it stays undefined (None, never inf — this dict gets JSON-cached).
@@ -723,7 +757,8 @@ def cross_sectional_ic(points: list[dict], *, factor: str | None = None,
 FAMILY_ALPHA = 0.05    # family-wise error rate across the whole factor table
 
 
-def bonferroni_t_threshold(n_tests: int, alpha: float = FAMILY_ALPHA) -> float:
+def bonferroni_t_threshold(n_tests: int, alpha: float = FAMILY_ALPHA,
+                           df: float | None = None) -> float:
     """The |t| a factor must clear when `n_tests` factors are tested at once.
 
     Testing every factor against the same data and reporting whichever crosses
@@ -734,9 +769,46 @@ def bonferroni_t_threshold(n_tests: int, alpha: float = FAMILY_ALPHA) -> float:
     factors need |t| > ~2.64.
 
     Conservative (it assumes the tests are independent, and correlated factors make
-    it stricter than necessary), which is the right way to be wrong here."""
+    it stricter than necessary), which is the right way to be wrong here.
+    `df` is the independent dates less one (see `t_critical`)."""
     n = max(1, n_tests)
-    return NormalDist().inv_cdf(1 - alpha / (2 * n))
+    return t_critical(alpha / n, df)
+
+
+def recheck_significance(result: dict) -> dict:
+    """Re-derive a stored universe result's verdicts from its own t-stats and
+    independent-date counts, under today's rule.
+
+    Results are cached for months (UNIVERSE_RESULT_TTL_SECONDS) with the
+    `significant` flags baked in, so a change to the rule would otherwise reach
+    the pages only at the next monthly run. The numbers are untouched; only the
+    yes/no read off them is. Returns a new dict."""
+    if not result or not result.get("overall"):
+        return result
+    out = dict(result, overall=dict(result["overall"]))
+    o = out["overall"]
+    eff = o.get("n_dates_eff") or 0
+    if eff <= 1:
+        return result               # no record of the independent dates: nothing to re-derive from
+    df = eff - 1
+    if o.get("t_stat") is not None:
+        o["significant"] = abs(o["t_stat"]) > t_critical(SIGNIFICANCE_ALPHA, df)
+    factors = {k: dict(v) for k, v in (result.get("factor_ic") or {}).items()}
+    tested = [f for f in factors.values() if f.get("t_stat") is not None]
+    if tested:
+        # The run's own count of factors tested (untested ones carry no t-stat).
+        n_tests = result.get("n_tests") or len(tested)
+        bar = bonferroni_t_threshold(n_tests, df=df)
+        single = t_critical(SIGNIFICANCE_ALPHA, df)
+        for f in factors.values():
+            t = f.get("t_stat")
+            f["significant_uncorrected"] = bool(t is not None and abs(t) > single)
+            f["significant"] = bool(t is not None and abs(t) > bar)
+        out["t_threshold"] = round(bar, 2)
+        out["t_single"] = round(single, 2)
+        out["n_tests"] = n_tests
+    out["factor_ic"] = factors
+    return out
 
 
 def summarize_universe(points: list[dict], *, horizon_days: int = DEFAULT_HORIZON_DAYS,
@@ -749,7 +821,9 @@ def summarize_universe(points: list[dict], *, horizon_days: int = DEFAULT_HORIZO
     whole table at once, so a single factor clearing the naive 1.96 is what chance
     looks like, not a discovery. `significant` uses the corrected threshold;
     `significant_uncorrected` is kept so the difference is visible rather than
-    hidden. The overall score is a single pre-specified test, so it keeps 1.96."""
+    hidden. The overall score is a single pre-specified test, so it is held to
+    the single-test bar — both bars on Student's t at the run's independent
+    dates (`t_critical`), not the normal's 1.96."""
     from engine import screener
 
     overall = cross_sectional_ic(points, horizon_days=horizon_days, step_days=step_days,
@@ -762,7 +836,9 @@ def summarize_universe(points: list[dict], *, horizon_days: int = DEFAULT_HORIZO
 
     # Only factors that actually produced a t-stat count against the budget.
     tested = [f for f in factors.values() if f["t_stat"] is not None]
-    threshold = bonferroni_t_threshold(len(tested))
+    eff = overall.get("n_dates_eff") or 0
+    df = eff - 1 if eff > 1 else None
+    threshold = bonferroni_t_threshold(len(tested), df=df)
     for f in factors.values():
         f["significant_uncorrected"] = f["significant"]
         f["significant"] = bool(f["t_stat"] is not None and abs(f["t_stat"]) > threshold)
@@ -776,6 +852,7 @@ def summarize_universe(points: list[dict], *, horizon_days: int = DEFAULT_HORIZO
         "step_days": step_days,
         "n_tests": len(tested),
         "t_threshold": round(threshold, 2),
+        "t_single": round(t_critical(SIGNIFICANCE_ALPHA, df), 2),
         "generated_at": date.today().isoformat(),
     }
 
@@ -834,4 +911,5 @@ def save_universe_result(summary: dict) -> None:
 
 
 def load_universe_result(name: str = "sp500") -> dict | None:
-    return cache.get_value(universe_result_key(name), ttl_seconds=UNIVERSE_RESULT_TTL_SECONDS) or None
+    stored = cache.get_value(universe_result_key(name), ttl_seconds=UNIVERSE_RESULT_TTL_SECONDS)
+    return recheck_significance(stored) if stored else None

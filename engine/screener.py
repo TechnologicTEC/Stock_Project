@@ -1228,8 +1228,8 @@ def build_leaderboard(results: list[ScreenerResult], *, universe: str = "sp500")
         "n_scored": len(ranked),
         "n_requested": len(results),
         "n_no_sector": _count_without_sector(scored),
-        "n_withheld": sum(1 for r in results if r.overall_score is not None
-                          and _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9),
+        "n_withheld": len(_withheld(results)),
+        "withheld": _withheld(results),
         "stale_price": sorted(r.ticker for r in results if _stale_price(r, today)),
         "rows": ranked,
     }
@@ -1286,11 +1286,23 @@ def repair_leaderboard(payload: dict, results: list[ScreenerResult]) -> dict:
     out["n_scored"] = len(out["rows"])
     out["repaired_at"] = date.today().isoformat()
     out["n_repaired"] = len(added)
-    out["n_withheld"] = sum(1 for r in results if _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9)
+    # Names withheld before and not re-screened stay withheld; a re-screened one
+    # is withheld only if it still falls short.
+    out["withheld"] = sorted(set(payload.get("withheld") or ()) - set(fresh_by_ticker)
+                             | set(_withheld(results)))
+    out["n_withheld"] = len(out["withheld"]) if "withheld" in payload else len(_withheld(results))
     out["stale_price"] = sorted(set(payload.get("stale_price") or ())
                                 - set(fresh_by_ticker)
                                 | {r.ticker for r in results if _stale_price(r, today)})
     return out
+
+
+def _withheld(results: list[ScreenerResult]) -> list[str]:
+    """Tickers scored on too little of the weight to rank (MIN_FACTOR_WEIGHT).
+    Named in the payload so the page can say which — "1 name withheld" alone
+    read like a fault (VYLR, a month-old spin-off with no filings yet, Nov 2026)."""
+    return sorted(r.ticker for r in results if r.overall_score is not None
+                  and _weight_covered(r) < MIN_FACTOR_WEIGHT - 1e-9)
 
 
 def _weight_covered(result: ScreenerResult) -> float:
