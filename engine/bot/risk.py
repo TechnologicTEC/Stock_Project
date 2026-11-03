@@ -161,8 +161,9 @@ def position_notional(equity: float, target_slots: int, max_position_pct: float)
 
 
 # The cash cushion — Tane's rule, 29 Sep 2026, all five strategies. Positions are
-# sized from 95% of the account, so a full book leaves 5% in cash, and
-# `executor.fund` never plans a buy that spends cushion the account already has.
+# sized from 95% of the account, so a full book leaves 5% in cash. Since 3 Nov
+# 2026 buys may spend up to half of it (CUSHION_BUYS_MAY_USE, below), and a run
+# of retry buys alone all of it (executor.cushion_for); never below $0.
 #
 # Why it exists: when a sale pays for a buy in the same run, the sale's price
 # isn't known until the next open, and the stock opens lower about half the
@@ -189,7 +190,8 @@ CUSHION_BUYS_MAY_USE = 0.5
 
 
 def cushion_to_keep(equity: float, cash: float) -> float:
-    """How much of the current cash is cushion, and so off-limits to planned buys.
+    """How much of the current cash is cushion. Buys may dip into part of it —
+    see executor.cushion_for for how much a given run must leave.
 
     Up to CASH_CUSHION of the account, but never more than the cash that is
     actually there — the cushion is protected once built, not demanded before

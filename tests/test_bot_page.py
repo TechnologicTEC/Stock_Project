@@ -1082,6 +1082,8 @@ def test_how_it_works_states_the_cash_cushion_and_counts_trading_strategies():
     assert "equity × 95% × min(1/30, 20%)" in text
     assert "all 1 trading strategies" in text or "all 1 trading" in text
     assert "cash for the whole position" in text
+    assert "dip into up to 50% of that" in text                # Tane, 3 Nov 2026
+    assert "retries, on later runs that month" in text
 
 
 def test_a_friend_can_watch_but_not_stop_or_resume():
