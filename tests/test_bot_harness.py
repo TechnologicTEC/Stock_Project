@@ -889,3 +889,45 @@ def test_the_attempt_count_does_not_bleed_across_similar_tickers():
     assert journal.attempt_number("top_decile_long", "MU", "buy", day) == 2
     assert journal.attempt_number("top_decile_long", "MUX", "buy", day) == 1
     assert journal.attempt_number("top_decile_long", "MU", "sell", day) == 1
+
+
+# --------------------------------------------------------------------------
+# A retry buy may use the cushion when nothing is being sold (Tane, 3 Nov 2026).
+# The cushion is for a sale that fills below the price it was counted at; a run
+# of retry buys alone has no sale to come up short. 3 Nov: composite could spend
+# $577.84 above its cushion and ZION's full slot was $585.57.
+# --------------------------------------------------------------------------
+
+def test_a_retry_target_becomes_a_retry_order():
+    from engine.bot import executor as ex
+
+    orders = ex.plan([ex.Target(ticker="ZION", notional=585.57, reason="r", refill=True)], [],
+                     equity=9_245.77)
+    assert orders and orders[0].refill is True
+
+
+def test_retry_buys_alone_may_use_the_cushion():
+    from engine.bot import executor as ex
+
+    orders = [ex.Order(ticker="ZION", side="buy", reason="r", notional=585.57, refill=True)]
+    assert ex.cushion_for(orders, equity=9_245.77, cash=1_040.13) == 0.0
+    funded, short = ex.fund(orders, [], cash=1_040.13, keep=0.0)
+    assert [o.ticker for o in funded] == ["ZION"] and not short
+
+
+def test_the_cushion_still_applies_when_anything_else_is_traded():
+    from engine.bot import executor as ex
+
+    retry = ex.Order(ticker="ZION", side="buy", reason="r", notional=585.57, refill=True)
+    sale = ex.Order(ticker="AMCR", side="sell", reason="r", qty=10.0)
+    plain = ex.Order(ticker="MU", side="buy", reason="r", notional=585.57)
+    for orders in ([retry, sale], [retry, plain], [plain]):
+        assert ex.cushion_for(orders, equity=9_245.77, cash=1_040.13) == pytest.approx(462.29, abs=0.01)
+
+
+def test_a_retry_still_never_takes_cash_below_zero():
+    from engine.bot import executor as ex
+
+    orders = [ex.Order(ticker="ZION", side="buy", reason="r", notional=585.57, refill=True)]
+    funded, short = ex.fund(orders, [], cash=500.0, keep=ex.cushion_for(orders, equity=9_245.77, cash=500.0))
+    assert not funded and short

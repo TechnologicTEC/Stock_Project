@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from engine.bot import decile_spread, executor, journal
+from engine.bot import decile_spread, executor, journal, risk
 from engine.bot import strategies
 from engine.bot.executor import Position
 from engine.bot.strategies import top_decile_long as tdl
@@ -516,3 +516,30 @@ def test_on_a_merged_ranking_the_snapshot_records_the_book_against_an_equal_bott
     assert payload["top"] == [f"T{i:03d}" for i in range(1, 51)]
     assert payload["bottom"] == [f"T{i:03d}" for i in range(851, 901)]
     assert payload["universe"] == 900
+
+
+# --------------------------------------------------------------------------
+# A slot the month's rebalance couldn't pay for is filled on a later run
+# (Tane, 3 Nov 2026; see the composite tests for the case that prompted it).
+# --------------------------------------------------------------------------
+
+def _refused(day, ticker):
+    d = _decision(day, status=journal.BLOCKED, action=journal.BUY)
+    d.update(ticker=ticker, blocked_by=risk.INSUFFICIENT_CASH)
+    return d
+
+
+def test_a_top_decile_buy_the_rebalance_could_not_pay_for_is_retried():
+    held = [f"T{i:03d}" for i in range(1, 50)]                       # 49 of 50
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1)),
+                                     _refused(TODAY - timedelta(days=1), "T050")])
+    targets = {t.ticker: t for t in tdl.build(ctx)}
+    assert "T050" in targets and targets["T050"].sizing != executor.HOLD
+    assert len(targets) == 50
+
+
+def test_a_refused_name_no_longer_in_the_top_decile_is_left():
+    held = [f"T{i:03d}" for i in range(1, 50)]
+    ctx = _ctx(held=held, decisions=[_rebalance(TODAY - timedelta(days=1)),
+                                     _refused(TODAY - timedelta(days=1), "T300")])
+    assert "T300" not in {t.ticker for t in tdl.build(ctx)}

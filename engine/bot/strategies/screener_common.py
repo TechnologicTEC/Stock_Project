@@ -353,6 +353,39 @@ def due_for_trim(ctx, notional: float, *, start: date_, until: date_, mark: str)
             if p.market_value > notional and p.ticker.upper() not in done}
 
 
+def refused_this_month(ctx) -> list[str]:
+    """Names this month's runs planned to buy and could not pay for, still unbought.
+
+    For the monthly strategies, whose rebalance sizes every slot at exactly
+    95% / slots: its last buy can come up a few dollars short (2 Nov 2026:
+    composite's ZION, $92), and with the book only one name short the monthly
+    gate held that slot in cash until the next month. Tane, 3 Nov: retry it on a
+    later run — from this month's own list, never a re-ranking — once the cash
+    for the whole position is there (executor.fund still refuses part-buys).
+
+    Read from the journal, oldest first: a buy refused for cash adds the name, a
+    buy that reached Alpaca since removes it. Held names are left out.
+    """
+    from engine.bot import journal, risk
+
+    pending: list[str] = []
+    for d in reversed((ctx.extras or {}).get("decisions") or []):     # oldest first
+        when = d.get("decided_at")
+        day = when.date() if hasattr(when, "date") else when
+        if day is None or (day.year, day.month) != (ctx.today.year, ctx.today.month):
+            continue
+        ticker = (d.get("ticker") or "").upper()
+        if not ticker or d.get("action") != journal.BUY:
+            continue
+        if d.get("status") in (journal.SUBMITTED, journal.FILLED):
+            pending = [t for t in pending if t != ticker]
+        elif (d.get("status") == journal.BLOCKED and d.get("blocked_by") == risk.INSUFFICIENT_CASH
+              and ticker not in pending):
+            pending.append(ticker)
+    held = ctx.held_tickers()
+    return [t for t in pending if t not in held]
+
+
 def runs_since_buy(ctx, ticker: str) -> int | None:
     """How many runs have happened since this name was last bought.
 

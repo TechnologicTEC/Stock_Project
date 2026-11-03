@@ -482,8 +482,10 @@ def run(strategy: str, *, dry_run: bool = False, pre_market: bool = False,
     if committed:
         _log(f"  ${committed:,.2f} already committed to unfilled buys")
     cash_now = account["cash"] - committed
-    # The cushion already built is off-limits to planned buys (risk.CASH_CUSHION).
-    keep = risk.cushion_to_keep(equity, cash_now)
+    # The cushion already built is off-limits to planned buys (risk.CASH_CUSHION),
+    # except to a run of retry buys alone, with no sale to come up short
+    # (executor.cushion_for).
+    keep = executor.cushion_for(orders, equity=equity, cash=cash_now)
     if keep:
         _log(f"  ${keep:,.2f} held back as the cash cushion")
     orders, short = executor.fund(orders, positions, cash=cash_now, keep=keep)

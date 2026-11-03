@@ -153,10 +153,23 @@ def build(ctx) -> list[Target]:
     # returning [] — is what stops the planner reading "nothing to do" as
     # "sell everything".
     if not is_rebalance_run(ctx):
-        return [
+        held_book = [
             Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t), len(rows)))
             for t in sorted(held)
+        ]
+        # A slot this month's rebalance couldn't pay for, bought in full once the
+        # cash is there — only while the name is still in the top decile, or the
+        # next rebalance would sell what this run bought (screener_common).
+        in_book = {(r.get("ticker") or "").upper() for r in book_rows(ctx, rows)}
+        slots = int(ctx.config.get("target_slots") or decile_size(rows))
+        refills = [t for t in common.refused_this_month(ctx) if t in in_book][:max(0, slots - len(held))]
+        return held_book + [
+            Target(ticker=t, notional=notional, refill=True,
+                   reason=f"Rank {(lookup.get(t) or {}).get('rank')} of {len(rows)} · decile 1 — "
+                          f"filling a slot this month's rebalance couldn't pay for, now the cash "
+                          f"is there.")
+            for t in refills
         ]
 
     # Rebalance: the top decile *is* the book. Anything held and absent from it

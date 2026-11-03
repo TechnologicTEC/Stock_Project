@@ -62,10 +62,22 @@ def build(ctx) -> list[Target]:
     # "sell everything" to the planner, so "do nothing this run" has to be
     # written as "these are still my targets".
     if not is_rebalance_run(ctx, rows):
-        return [
+        held_book = [
             Target(ticker=t, notional=notional, sizing=executor.HOLD,
                    reason=_hold_reason(lookup.get(t)))
             for t in sorted(held)
+        ]
+        # A slot this month's rebalance couldn't pay for, bought in full once the
+        # cash is there — only while the name is still inside the buffer, or the
+        # next rebalance would sell what this run bought.
+        room = max(0, slots - len(held))
+        refills = [t for t in common.refused_this_month(ctx)
+                   if kept_at_rebalance(lookup.get(t))][:room]
+        return held_book + [
+            Target(ticker=t, notional=notional, refill=True,
+                   reason=f"Rank {_rank_of(lookup.get(t))} of {len(rows)} — filling a slot this "
+                          f"month's rebalance couldn't pay for, now the cash is there.")
+            for t in refills
         ]
 
     # Rebalance. Keep what's still inside the buffer, then fill the rest from the

@@ -840,3 +840,67 @@ def test_a_merged_rebalance_sells_a_mid_cap_that_fell_out_as_before():
         positions=(Position(ticker="AA", qty=1.0, market_value=600.0),),
         extras={"rows": rows, "decisions": [], "leaderboard": payload})
     assert "AA" not in {t.ticker for t in comp.build(ctx)}
+
+
+# --------------------------------------------------------------------------
+# A slot the month's rebalance couldn't pay for is filled on a later run.
+# 2 Nov 2026: composite's last buy (ZION) came up $92 short — every slot sized
+# at 95% / 15 — and with 14 of 15 held the monthly gate left that slot in cash
+# until December. Tane, 3 Nov: fill it on a later run, from this month's list.
+# --------------------------------------------------------------------------
+
+def _refused(day, ticker, notional=633.33):
+    return _decision(day, ticker=ticker, action=journal.BUY, status=journal.BLOCKED,
+                     blocked_by=risk.INSUFFICIENT_CASH, notional=notional,
+                     reason=f"Not enough cash: ${notional} wanted")
+
+
+def test_a_buy_the_rebalance_could_not_pay_for_is_retried_on_a_later_run():
+    held = [f"T{i:02d}" for i in range(1, 15)]                       # 14 of 15
+    ctx = _ctx(_rows(), held=held, decisions=[_refused(TODAY - timedelta(days=1), "T15")])
+    targets = {t.ticker: t for t in comp.build(ctx)}
+    assert set(targets) == set(held) | {"T15"}
+    fill = targets["T15"]
+    assert fill.sizing != executor.HOLD and fill.notional == pytest.approx(9_500.0 / 15)
+    assert "couldn't pay for" in fill.reason
+    assert all(targets[t].sizing == executor.HOLD for t in held)       # nothing else re-levelled
+
+
+def test_only_this_months_refusals_are_retried():
+    held = [f"T{i:02d}" for i in range(1, 15)]
+    last_month = TODAY.replace(day=1) - timedelta(days=2)
+    ctx = _ctx(_rows(), held=held, decisions=[_decision(TODAY - timedelta(days=1)),
+                                              _refused(last_month, "T15")])
+    assert "T15" not in {t.ticker for t in comp.build(ctx)}
+
+
+def test_a_refused_name_bought_since_is_not_bought_again():
+    held = [f"T{i:02d}" for i in range(1, 15)]
+    decisions = [_decision(TODAY - timedelta(days=1), ticker="T15", action=journal.BUY,
+                           status=journal.SUBMITTED),                       # newest first
+                 _refused(TODAY - timedelta(days=2), "T15")]
+    assert "T15" not in {t.ticker for t in comp.build(_ctx(_rows(), held=held, decisions=decisions))}
+
+
+def test_a_refused_name_that_has_fallen_past_the_buffer_is_left():
+    held = [f"T{i:02d}" for i in range(1, 15)]
+    rows = _rows()
+    for r in rows:                                   # T15 is now rank 40
+        if r["ticker"] == "T15":
+            r["rank"] = 40
+    ctx = _ctx(rows, held=held, decisions=[_refused(TODAY - timedelta(days=1), "T15")])
+    assert "T15" not in {t.ticker for t in comp.build(ctx)}
+
+
+def test_a_full_book_retries_nothing():
+    held = [f"T{i:02d}" for i in range(1, 16)]
+    ctx = _ctx(_rows(), held=held, decisions=[_refused(TODAY - timedelta(days=1), "T20")])
+    assert "T20" not in {t.ticker for t in comp.build(ctx)}
+
+
+def test_the_strategies_mark_their_retries():
+    held = [f"T{i:02d}" for i in range(1, 15)]
+    targets = {t.ticker: t for t in comp.build(
+        _ctx(_rows(), held=held, decisions=[_refused(TODAY - timedelta(days=1), "T15")]))}
+    assert targets["T15"].refill is True
+    assert not any(targets[t].refill for t in held)

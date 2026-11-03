@@ -62,6 +62,9 @@ class Target:
     notional: float
     reason: str
     sizing: str = "level"
+    # A retry of a buy this month's rebalance couldn't pay for
+    # (screener_common.refused_this_month). See `cushion_for`.
+    refill: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ class Order:
     reason: str
     notional: float | None = None   # buys and partial trims
     qty: float | None = None        # full exits, to avoid leaving dust behind
+    refill: bool = False            # carried from its Target; see cushion_for
 
 
 def band_for(equity: float) -> float:
@@ -135,12 +139,28 @@ def plan(
 
         if gap > 0:
             orders.append(Order(ticker=ticker, side="buy", notional=round(gap, 2),
-                                reason=target.reason))
+                                reason=target.reason, refill=target.refill))
         else:
             orders.append(Order(ticker=ticker, side="sell", notional=round(-gap, 2),
                                 reason=f"Trimming to target. {target.reason}"))
 
     return orders
+
+
+def cushion_for(orders: list[Order], *, equity: float, cash: float) -> float:
+    """The cash this run's buys may not touch. Pure.
+
+    Normally the cushion (`risk.cushion_to_keep`): it is there for a sale that
+    fills below the price it was counted at, leaving a same-run buy short. A run
+    whose orders are ONLY retry buys (`Order.refill`) has no sale to come up
+    short, so it may use the cushion — Tane, 3 Nov 2026, after composite could
+    spend $577.84 above its cushion and ZION's full slot was $585.57. The buy is
+    still whole and still has to fit in the cash itself (`fund`), so the account
+    never goes negative.
+    """
+    if orders and all(o.side == "buy" and o.refill for o in orders):
+        return 0.0
+    return risk.cushion_to_keep(equity, cash)
 
 
 @dataclass(frozen=True)
@@ -171,10 +191,12 @@ def fund(orders: list[Order], positions: list[Position], *,
     the cash.
 
     This briefly did the opposite — cut a buy down to the cash on hand — and was
-    reversed on 28 Sep. The known cost of refusing, accepted with it: a monthly
-    rebalance sizes its buys off equity and its sells off the last marked price,
-    so its final buy can come up a few dollars short and that slot then sits in
-    cash until the next month.
+    reversed on 28 Sep. The known cost of refusing: a monthly rebalance sizes its
+    buys off equity and its sells off the last marked price, so its final buy can
+    come up a few dollars short. Since 3 Nov 2026 that slot is retried on later
+    runs that month, in full, once the cash is there
+    (screener_common.refused_this_month); before, it sat in cash until the next
+    month.
 
     Sells in the same plan pay for the buys. A rebalance sells names to buy
     others from a book that is already fully invested, so ignoring the proceeds
