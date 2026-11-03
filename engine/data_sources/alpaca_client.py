@@ -53,6 +53,28 @@ def from_alpaca(symbol: str) -> str:
     return (symbol or "").strip().upper().replace(".", "-")
 
 
+def all_positions(client) -> list:
+    """`client.get_all_positions()`, surviving a field value alpaca-py doesn't know.
+
+    alpaca-py validates each position's `exchange` against a fixed list, and the
+    Texas Stock Exchange isn't on it (still missing in 0.44.0). On 3 Nov 2026
+    Alpaca moved TCBI's listing to "TXSE", and the whole call raised for the one
+    account that held it — the bot page lost its live view, and the runner reads
+    positions the same way. On that error this reads the same endpoint raw and
+    hands back each position with the same attribute names, values as Alpaca
+    sent them (strings), which every caller already converts. Only the parse is
+    skipped; the request and its data are identical. (Same gap as
+    `get_all_assets`, Oct 2026, which is read raw for the same reason.)"""
+    from types import SimpleNamespace
+
+    from pydantic import ValidationError
+
+    try:
+        return client.get_all_positions()
+    except ValidationError:
+        return [SimpleNamespace(**p) for p in client.get("/positions")]
+
+
 # A one-day move this large is almost always a corporate-action artefact rather
 # than a price. Real ones happen (GL fell 53% on a short-seller report), which
 # is why this only triggers a COMPARISON rather than a correction.
@@ -431,7 +453,7 @@ def get_positions() -> list[dict]:
             "unrealized_plpc": (_num(p.unrealized_plpc) or 0.0) * 100.0,  # fraction -> %
             "change_today_pct": (_num(p.change_today) or 0.0) * 100.0,
         }
-        for p in _trading_client().get_all_positions()
+        for p in all_positions(_trading_client())
     ]
 
 

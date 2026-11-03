@@ -97,3 +97,79 @@ def test_a_broken_account_is_not_reported_as_missing_keys():
                side_effect=__import__("engine.bot.accounts", fromlist=["x"]).BotAccountError("bad endpoint")):
         view = live.account_view("ALPACA_CREATOR_CONVICTION")
     assert view["missing_keys"] is False and view["error"] == "bad endpoint"
+
+
+# --------------------------------------------------------------------------
+# An exchange alpaca-py doesn't know.
+#
+# 3 Nov 2026: Alpaca moved TCBI's listing to the Texas Stock Exchange, "TXSE",
+# which alpaca-py's Position model rejects (0.44.0 too). The whole positions call
+# raised for top_decile_long — the page lost its live view, and the runner reads
+# positions the same way. The fake below does what alpaca-py does: GET
+# /positions, then validate the payload with alpaca's own model.
+# --------------------------------------------------------------------------
+
+_TCBI = {"asset_id": "8ccae427-5dd0-45b3-b5fe-7ba5e422c766", "symbol": "TCBI", "exchange": "TXSE",
+         "asset_class": "us_equity", "asset_marginable": False, "qty": "1.749587157",
+         "qty_available": "1.749587157", "avg_entry_price": "104.156", "side": "long",
+         "market_value": "182.167015", "cost_basis": "182.23", "unrealized_pl": "-0.062985",
+         "unrealized_plpc": "-0.00035", "unrealized_intraday_pl": "0",
+         "unrealized_intraday_plpc": "0", "current_price": "104.12", "lastday_price": "104.12",
+         "change_today": "0"}
+_SPY = dict(_TCBI, symbol="SPY", exchange="ARCA", qty="13.1254", market_value="9853.12",
+            current_price="750.69", avg_entry_price="761.88")
+
+
+class _RawClient:
+    """alpaca-py's TradingClient as far as positions go: `get` is the raw
+    request, `get_all_positions` parses it with the library's model."""
+
+    def __init__(self, raw):
+        self.raw = raw
+
+    def get(self, path):
+        assert path == "/positions"
+        return [dict(p) for p in self.raw]
+
+    def get_all_positions(self):
+        from typing import List
+
+        from alpaca.trading.models import Position
+        from pydantic import TypeAdapter
+        return TypeAdapter(List[Position]).validate_python(self.get("/positions"))
+
+    def get_account(self):
+        return SimpleNamespace(equity="9634.00", cash="671.50", status="ACTIVE")
+
+    def get_orders(self, filter=None):
+        return []
+
+
+def test_alpaca_py_really_rejects_the_texas_exchange():
+    """Guards the premise: if a release learns TXSE, this fails and the raw
+    fallback can be reviewed rather than kept on faith."""
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        _RawClient([_TCBI]).get_all_positions()
+
+
+def test_positions_listed_on_an_unknown_exchange_are_still_read():
+    from engine.bot import executor
+    from engine.data_sources.alpaca_client import all_positions
+
+    client = _RawClient([_SPY, _TCBI])
+    assert [p.symbol for p in all_positions(client)] == ["SPY", "TCBI"]
+    book = {p.ticker: p for p in executor.current_positions(client)}
+    assert book["TCBI"].qty == 1.749587157 and book["TCBI"].market_value == 182.167015
+    with patch("engine.bot.accounts.clients_for", return_value=(client, None)):
+        view = live.account_view("ALPACA_TOP_DECILE_LONG")
+    assert view["available"] and view["error"] is None
+    tcbi = next(p for p in view["positions"] if p["ticker"] == "TCBI")
+    assert tcbi["current_price"] == 104.12 and tcbi["unrealized_plpc"] == -0.00035
+
+
+def test_a_known_exchange_still_goes_through_the_library():
+    from engine.data_sources.alpaca_client import all_positions
+    from alpaca.trading.models import Position
+    assert all(isinstance(p, Position) for p in all_positions(_RawClient([_SPY])))

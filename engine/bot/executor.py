@@ -138,8 +138,12 @@ def plan(
             continue
 
         if gap > 0:
+            # A buy into a name already held is a top-up, and says so the way a
+            # trim does — on its own the strategy's reason ("held rather than
+            # churned") read as if nothing had been bought (2 Nov 2026).
+            reason = f"Topping up to target. {target.reason}" if current > 0 else target.reason
             orders.append(Order(ticker=ticker, side="buy", notional=round(gap, 2),
-                                reason=target.reason, refill=target.refill))
+                                reason=reason, refill=target.refill))
         else:
             orders.append(Order(ticker=ticker, side="sell", notional=round(-gap, 2),
                                 reason=f"Trimming to target. {target.reason}"))
@@ -315,7 +319,7 @@ def committed_to_buys(orders) -> float:
 
 
 def current_positions(client) -> list[Position]:
-    from engine.data_sources.alpaca_client import from_alpaca
+    from engine.data_sources.alpaca_client import all_positions, from_alpaca
 
     return [
         Position(
@@ -323,7 +327,7 @@ def current_positions(client) -> list[Position]:
             qty=float(p.qty or 0.0),
             market_value=float(p.market_value or 0.0),
         )
-        for p in client.get_all_positions()
+        for p in all_positions(client)
     ]
 
 

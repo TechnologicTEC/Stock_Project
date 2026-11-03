@@ -57,12 +57,14 @@ def account_view(key_env_prefix: str) -> dict:
         view["error"] = f"{type(exc).__name__}: {exc}"
         return view
 
+    from engine.data_sources.alpaca_client import all_positions
+
     try:
         account = client.get_account()
         view["equity"] = float(account.equity or 0.0)
         view["cash"] = float(account.cash or 0.0)
         view["status"] = str(getattr(account.status, "value", account.status))
-        view["positions"] = [_position(p) for p in client.get_all_positions()]
+        view["positions"] = [_position(p) for p in all_positions(client)]
         view["available"] = True
     except Exception as exc:                              # noqa: BLE001
         view["error"] = f"Alpaca read failed: {type(exc).__name__}: {exc}"
