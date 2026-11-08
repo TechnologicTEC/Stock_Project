@@ -91,3 +91,23 @@ def test_history_contents_maps_roles_and_trims():
     assert len(contents) <= chat_llm.MAX_HISTORY_MESSAGES
     assert contents[0]["role"] == "user"
     assert all(c["role"] in ("user", "model") for c in contents)
+
+
+# --------------------------------------------------------------------------
+# The SDK pin
+# --------------------------------------------------------------------------
+
+def test_every_requirements_file_keeps_google_genai_below_3():
+    """google-genai 3.0.0 (Nov 2026) talks to API v1, which refuses the JSON mode
+    the creator scan uses ("JSON mode is not enabled for api version v1"). The
+    scan then fell back to the keyword match: every stance "unknown", no sponsor
+    check by the model. Unpinned, CI picked 3.0.0 up the day it came out."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    loose = []
+    for path in sorted(root.glob("requirements*.txt")):
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            spec = ln.split("#")[0].strip().replace(" ", "")
+            if spec.lower().startswith("google-genai") and "<3" not in spec:
+                loose.append(f"{path.name}: {spec}")
+    assert not loose, f"google-genai not held below 3: {loose}"

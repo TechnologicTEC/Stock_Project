@@ -54,7 +54,9 @@ google-cloud-bigquery>=3.0
 # Powers the free-form chat mode via Google Gemini (free tier), calling the same
 # chat tools. Without a GEMINI_API_KEY the assistant falls back to the
 # deterministic template responder, so this is optional.
-google-genai>=1.0
+# <3: google-genai 3.0.0 (Nov 2026) talks to API v1, which refuses the JSON mode
+# the creator scan relies on ("JSON mode is not enabled for api version v1").
+google-genai>=1.0,<3
 
 # --- Database ---
 # SQLite is built in (default local DB). For a hosted Postgres (multi-user /
