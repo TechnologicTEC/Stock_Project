@@ -111,6 +111,28 @@ def test_a_genuine_bug_still_falls_back_rather_than_blocking_forever():
     assert got == {"AAPL", "TSLA"}
 
 
+# google-genai 3.0.0 (7 Nov 2026): every call failed with this 400, which is not
+# retryable, so a new video was stored from the dictionary with every stance
+# "unknown". The creator scan now passes allow_fallback=False for a grace period.
+_SDK_BREAK = ("400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'JSON mode is not enabled "
+              "for api version v1. Use api version v1beta instead.', 'status': 'INVALID_ARGUMENT'}}")
+
+
+def test_a_model_failure_defers_while_the_fallback_is_not_allowed(caplog):
+    with patch("engine.ticker_extraction._llm_available", return_value=True),          patch("engine.ticker_extraction._extract_llm", side_effect=RuntimeError(_SDK_BREAK)):
+        with pytest.raises(ticker_extraction.TransientExtractionError):
+            ticker_extraction.extract_mentions("I like AAPL and $TSLA", allow_fallback=False)
+    assert "video deferred to retry" in caplog.text           # the daily log check reports WARNING lines
+
+
+def test_a_model_failure_falls_back_loudly_once_allowed(caplog):
+    with patch("engine.ticker_extraction._llm_available", return_value=True),          patch("engine.ticker_extraction._extract_llm", side_effect=RuntimeError(_SDK_BREAK)):
+        got = ticker_extraction.extract_mentions("I like AAPL and $TSLA", allow_fallback=True)
+    assert {m.ticker for m in got} == {"AAPL", "TSLA"}
+    assert {m.stance for m in got} == {"unknown"}
+    assert "using the keyword match" in caplog.text            # no longer silent
+
+
 # --------------------------------------------------------------------------
 # check_names — does the ticker belong to the company the speaker named?
 #

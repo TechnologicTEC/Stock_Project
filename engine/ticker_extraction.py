@@ -347,11 +347,19 @@ def _validate(mentions: list[Mention]) -> list[Mention]:
     return out
 
 
-def extract_mentions(text: str, *, use_llm: bool = True) -> list[Mention]:
+def extract_mentions(text: str, *, use_llm: bool = True, allow_fallback: bool = True) -> list[Mention]:
     """Tickers discussed in `text`, validated against the SEC list. LLM primary
     (if configured), deterministic dictionary otherwise. Raises
     TransientExtractionError if the LLM failed for a retryable reason (quota),
-    so the caller can defer rather than store the sparse fallback as final."""
+    so the caller can defer rather than store the sparse fallback as final.
+
+    Any OTHER model failure also defers while `allow_fallback` is False. That
+    is the creator scan's grace period: google-genai 3.0.0 (7 Nov 2026) made
+    every call fail with a 400, which is not retryable by the list above, so a
+    new video was stored from the dictionary — every stance "unknown" — and
+    never read again. Deferring for a while gives a fix time to land; after
+    that the caller passes True and the dictionary is used, so a lasting break
+    can't leave a video unread forever."""
     if not text or not text.strip():
         return []
     if use_llm and _llm_available():
@@ -364,5 +372,10 @@ def extract_mentions(text: str, *, use_llm: bool = True) -> list[Mention]:
         except Exception as exc:
             if _is_transient(exc):
                 raise TransientExtractionError(str(exc)) from exc
-            # non-transient (e.g. bad SDK) → fall through to the dictionary
+            if not allow_fallback:
+                logger.warning("Extraction: model failed (%s: %s); video deferred to retry",
+                               type(exc).__name__, exc)
+                raise TransientExtractionError(f"model failed: {type(exc).__name__}: {exc}") from exc
+            logger.warning("Extraction: model failed (%s: %s); using the keyword match "
+                           "(stances will be unknown)", type(exc).__name__, exc)
     return _validate(_extract_dictionary(text))

@@ -14,6 +14,7 @@ from db.models import Creator, CreatorVideo, VideoMention
 from db.session import get_session
 from engine import creator_signals
 from engine.ticker_extraction import Mention
+from engine.ticker_extraction import extract_mentions as _real_extract_mentions  # before the stub
 from engine.time_utils import utcnow
 
 
@@ -210,6 +211,48 @@ def test_transient_extraction_failure_leaves_flag_unset_for_retry():
         assert s.execute(select(VideoMention)).first() is None
     assert summary.get("extract_deferred") == 1
 
+
+
+# --------------------------------------------------------------------------
+# A model failure that isn't obviously temporary (google-genai 3.0.0, 7 Nov 2026:
+# a 400 on every call). The REAL extract_mentions runs here, not a stub: the
+# video waits MODEL_FAILURE_GRACE for Gemini, then takes the keyword match.
+# --------------------------------------------------------------------------
+
+def _seed_pending(vid, stored_ago):
+    creator_signals.seed_default_creators()
+    with get_session() as s:
+        cid = s.execute(select(Creator.id)).scalar_one()
+        s.add(CreatorVideo(creator_id=cid, video_id=vid, title="t", url="u", transcript_status="ok",
+                           transcript="I like AAPL and $TSLA", processed_at=utcnow() - stored_ago))
+
+
+def _extract_with_a_broken_model():
+    summary = {}
+    with patch("engine.ticker_extraction.extract_mentions", new=_real_extract_mentions),          patch("engine.ticker_extraction._llm_available", return_value=True),          patch("engine.ticker_extraction._extract_llm",
+               side_effect=RuntimeError("400 INVALID_ARGUMENT. JSON mode is not enabled for api version v1")),          patch("engine.ticker_extraction.sec_tickers.ticker_set", return_value=frozenset({"AAPL", "TSLA"})),          patch("engine.ticker_extraction.sec_tickers.name_to_ticker", return_value={}),          patch("engine.ticker_extraction.sec_tickers.ticker_to_title", return_value={}),          patch("engine.sponsorship.sponsored_tickers", return_value=set()),          patch("engine.screener.screen_tickers", return_value=[]),          patch("engine.creator_digest.send_digest", return_value=False):
+        creator_signals._extract_pending(summary)
+    return summary
+
+
+def test_a_broken_model_defers_a_new_video_instead_of_storing_unknown_stances():
+    _seed_pending("NEW", stored_ago=timedelta(hours=6))
+    summary = _extract_with_a_broken_model()
+    with get_session() as s:
+        v = s.execute(select(CreatorVideo).where(CreatorVideo.video_id == "NEW")).scalar_one()
+        assert v.mentions_extracted_at is None                       # read again next scan
+        assert s.execute(select(VideoMention)).first() is None       # nothing stored meanwhile
+    assert summary.get("extract_deferred") == 1
+
+
+def test_after_the_grace_period_the_keyword_match_is_kept():
+    _seed_pending("OLD", stored_ago=creator_signals.MODEL_FAILURE_GRACE + timedelta(hours=1))
+    _extract_with_a_broken_model()
+    with get_session() as s:
+        v = s.execute(select(CreatorVideo).where(CreatorVideo.video_id == "OLD")).scalar_one()
+        rows = s.execute(select(VideoMention).where(VideoMention.video_id == "OLD")).scalars().all()
+    assert v.mentions_extracted_at is not None                       # not left unread forever
+    assert sorted((r.ticker, r.stance) for r in rows) == [("AAPL", "unknown"), ("TSLA", "unknown")]
 
 def test_add_creator_resolves_and_inserts_then_reactivates():
     resolved = {"channel_id": "UCnew1234567890abcdef22", "display_name": "New Guy", "handle": "@newguy"}

@@ -35,6 +35,14 @@ DEFAULT_CREATORS = [
 # transcript, so it is never extracted from (extraction reads status "ok").
 _PERSIST_STATUSES = {"ok", "no_captions", "not_english"}
 
+# How long a video waits for Gemini when the model fails for a reason that is not
+# obviously temporary (a broken SDK, a changed API). Each scan in that window
+# retries it and logs a WARNING the daily log check reports; after it, the
+# keyword match is stored so a lasting break can't leave a video unread forever.
+# Two days: two daily log checks, and time to pin or fix a library. Measured
+# from when the video was stored (processed_at).
+MODEL_FAILURE_GRACE = timedelta(days=2)
+
 
 def seed_default_creators() -> int:
     """Insert any DEFAULT_CREATORS not already present. Returns how many added.
@@ -118,13 +126,14 @@ def _process_video(creator: Creator, video: dict, summary: dict) -> None:
     print(f"    {video['video_id']} {status} ({chars} chars): {video['title'][:60]}", flush=True)
 
 
-def _screen_and_store_mentions(video_id: str, transcript: str) -> int:
+def _screen_and_store_mentions(video_id: str, transcript: str, *, allow_fallback: bool = True) -> int:
     """Extract tickers, snapshot each one's screener score, store `video_mentions`.
     Returns the count. Raises if extraction should be retried later (e.g. the LLM
     hit a transient quota error) — the caller then leaves the retry flag unset."""
     from engine import screener  # local: heavy import kept off module load
 
-    mentions = ticker_extraction.extract_mentions(transcript)  # may raise TransientExtractionError
+    # may raise TransientExtractionError (also for any model failure while allow_fallback is False)
+    mentions = ticker_extraction.extract_mentions(transcript, allow_fallback=allow_fallback)
     if not mentions:
         print(f"    {video_id} mentions: none", flush=True)
         return 0
@@ -176,7 +185,7 @@ def _extract_pending(summary: dict, limit: int = 25) -> list[str]:
     flag is set; a transient/failed extraction leaves it unset to try again.
     Returns the ids of videos that yielded at least one mention (for the digest)."""
     with get_session() as s:
-        pending = [(v.video_id, v.transcript) for v in s.execute(
+        pending = [(v.video_id, v.transcript, v.processed_at) for v in s.execute(
             select(CreatorVideo).where(
                 CreatorVideo.transcript_status == "ok",
                 CreatorVideo.transcript.is_not(None),
@@ -185,9 +194,12 @@ def _extract_pending(summary: dict, limit: int = 25) -> list[str]:
         ).scalars().all()]
 
     with_mentions: list[str] = []
-    for video_id, transcript in pending:
+    now = utcnow()
+    for video_id, transcript, processed_at in pending:
+        # Inside the grace period a model failure defers; after it, the keyword match is kept.
+        past_grace = processed_at is None or now - processed_at >= MODEL_FAILURE_GRACE
         try:
-            found = _screen_and_store_mentions(video_id, transcript)
+            found = _screen_and_store_mentions(video_id, transcript, allow_fallback=past_grace)
             summary["mentions"] = summary.get("mentions", 0) + found
             _mark_extracted(video_id)
             if found:
