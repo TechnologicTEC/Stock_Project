@@ -23,6 +23,19 @@
 # them MOG.A; engine/data_sources/alpaca_client converts at its boundary. Moog's B
 # shares are not in the index, so there is no second class to drop.
 # 400 tickers.
+#
+# Refreshed 2026-11-17, checked against S&P's announcements, SEC's ticker list and
+# Alpaca (active, tradable, bars back to 2024):
+#   out  OKTA -> GKOS    Okta moved up to the S&P 500 on 4 Nov; Glaukos took its
+#                        seat (SEC CIK 1192448)
+#   out  ROKU -> JHX     Roku bought by Fox (0.9799 FOXA + $95.30 cash, 6 Nov);
+#                        James Hardie took its seat 11 Nov (SEC CIK 1159152)
+#   out  TCBI -> TXCP    Texas Capital renamed 9 Nov, same CUSIP and SEC CIK
+#                        (1077428); Alpaca's TXCP bars run back past the rename.
+#                        Wikipedia still said TCBI. top_decile_long holds it, and
+#                        Alpaca carried the shares over to TXCP; left as TCBI, its
+#                        price goes stale and the 1 Dec rebalance would have sold
+#                        it as "no longer listed".
 AA
 AAL
 AAON
@@ -184,6 +197,7 @@ GBCI
 GEF
 GGG
 GHC
+GKOS
 GLPI
 GME
 GMED
@@ -217,6 +231,7 @@ IRT
 ITT
 JAZZ
 JEF
+JHX
 JLL
 KBH
 KBR
@@ -281,7 +296,6 @@ OC
 OGE
 OGS
 OHI
-OKTA
 OLED
 OLLI
 ONB
@@ -325,7 +339,6 @@ RLI
 RMBS
 RNR
 ROIV
-ROKU
 RPM
 RRC
 RRX
@@ -366,7 +379,6 @@ STWD
 SUI
 SWX
 SYNA
-TCBI
 TEX
 THC
 THG
@@ -381,6 +393,7 @@ TRU
 TTC
 TTEK
 TTMI
+TXCP
 TXNM
 TXRH
 UBSI

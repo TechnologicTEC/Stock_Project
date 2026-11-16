@@ -38,6 +38,13 @@
 #                        trades, now in the S&P MidCap 400
 # No bot held any of the six.
 #
+# Refreshed 2026-11-17: KVUE had no price after 30 Oct and was being withheld.
+# Confirmed against S&P's 30 Oct 2026 announcement, SEC's ticker list and Alpaca:
+#   out  KVUE -> OKTA    Kenvue bought by Kimberly-Clark (0.14625 KMB + $3.50 cash
+#                        per share, 2 Nov); Okta took its seat 4 Nov, up from the
+#                        S&P 400 (SEC CIK 1660134)
+# No bot held KVUE.
+#
 # This file is the index verbatim, which lists three companies TWICE, once per
 # share class (GOOG/GOOGL, FOX/FOXA, NWS/NWSA). What we screen and trade is 500:
 # engine/universe.SECONDARY_SHARE_CLASSES drops the less liquid class of each
@@ -316,7 +323,6 @@ KMB
 KMI
 KO
 KR
-KVUE
 L
 LDOS
 LEN
@@ -390,6 +396,7 @@ NXPI
 O
 ODFL
 OKE
+OKTA
 OMC
 ON
 ORCL
