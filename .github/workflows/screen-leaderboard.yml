@@ -2,10 +2,11 @@ name: Leaderboards (weekly live screen)
 # Each run is titled after the list it screens, so the Actions list says which
 # one it was. Same rule as SCREEN_UNIVERSE below (a test keeps the two agreeing).
 run-name: >-
-  ${{ (github.event.schedule == '10 13 * * 6' || inputs.universe == 'sp400')
+  ${{ ((github.event.schedule || inputs.slot) == '10 13 * * 6' || inputs.universe == 'sp400')
   && 'S&P 400 leaderboard (mid caps)' || 'S&P 500 leaderboard' }}${{
   (inputs.universe_every != '' && inputs.universe_every != '1')
-  && format(' - sample, every {0}th name', inputs.universe_every) || '' }}
+  && format(' - sample, every {0}th name', inputs.universe_every) || '' }}${{
+  inputs.slot && format(' (timer {0})', inputs.slot) || '' }}
 
 # Runs the LIVE screener across the whole S&P 500 (Sundays) or S&P 400 (Saturdays)
 # and caches each ranked result, so the Screener page can show "highest-scoring
@@ -47,6 +48,10 @@ on:
     - cron: "10 13 * * 6"
   workflow_dispatch:
     inputs:
+      slot:
+        description: "Set by the Supabase timer: the schedule line this run stands in for. Leave blank."
+        required: false
+        default: ""
       universe:
         description: "Which list to screen: sp500 or sp400"
         required: false
@@ -59,7 +64,35 @@ on:
 concurrency: screen-leaderboard   # never overlap runs
 
 jobs:
+  # First job of every run. The Supabase timer starts each run on time
+  # (scripts/setup_github_timer.py); GitHub's own schedule stays on as the
+  # BACKUP. A late scheduled run stands down here when the timer already
+  # started its slot; every other run goes ahead (scripts/timer_guard.py).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/timer_guard.py
+          sparse-checkout-cone-mode: false
+      - id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/timer_guard.py
+
   screen:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     # Measured, not guessed: _gather_raw_data is ~3s/ticker but the SENTIMENT
     # factor (news fetch + FinBERT inference) dominates at ~10-13s/ticker, so 500
@@ -92,5 +125,5 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           EDGAR_USER_AGENT: ${{ secrets.EDGAR_USER_AGENT }}   # SEC requires an identifying UA
           UNIVERSE_EVERY: ${{ inputs.universe_every }}
-          SCREEN_UNIVERSE: ${{ github.event.schedule == '10 13 * * 6' && 'sp400' || inputs.universe || 'sp500' }}
+          SCREEN_UNIVERSE: ${{ (github.event.schedule || inputs.slot) == '10 13 * * 6' && 'sp400' || inputs.universe || 'sp500' }}
         run: python scripts/screen_universe.py

@@ -1077,36 +1077,39 @@ def _next_run(now):
 @pytest.mark.parametrize("now, expected, kind", [
     # Friday after the pre-market run: no Friday after-close run, no Saturday
     # runs; the next is SUNDAY 21:45 (the old code said Monday 21:45).
-    (datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc),
+    (datetime(2026, 10, 30, 13, 0, tzinfo=timezone.utc),
      datetime(2026, 11, 1, 21, 45, tzinfo=timezone.utc), "after-close run"),
     # Tuesday morning UTC: the pre-market run comes before the evening one.
     (datetime(2026, 10, 27, 1, 0, tzinfo=timezone.utc),
-     datetime(2026, 10, 27, 4, 30, tzinfo=timezone.utc), "pre-market run"),
-    # Tuesday afternoon UTC: that evening's after-close run.
-    (datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc),
+     datetime(2026, 10, 27, 12, 30, tzinfo=timezone.utc), "pre-market run"),
+    # Tuesday afternoon UTC, after the pre-market run: that evening's after-close run.
+    (datetime(2026, 10, 27, 13, 0, tzinfo=timezone.utc),
      datetime(2026, 10, 27, 21, 45, tzinfo=timezone.utc), "after-close run"),
     # Thursday night after 21:45: Friday's pre-market run.
     (datetime(2026, 10, 29, 22, 0, tzinfo=timezone.utc),
-     datetime(2026, 10, 30, 4, 30, tzinfo=timezone.utc), "pre-market run"),
+     datetime(2026, 10, 30, 12, 30, tzinfo=timezone.utc), "pre-market run"),
 ])
 def test_next_scheduled_run_follows_both_crons(now, expected, kind):
     assert _next_run(now) == (expected, kind)
 
 
 def test_a_run_github_has_not_started_yet_is_named_as_due():
-    """3 Nov 2026, 7pm NZ: the 5:30pm pre-market run hadn't started and the page
-    named Wednesday 10:45am as the next run, as if none were coming tonight."""
+    """3 Nov 2026, 7pm NZ: the pre-market run hadn't started and the page
+    named Wednesday 10:45am as the next run, as if none were coming tonight.
+    (The slot was 04:30 UTC then; it is 12:30 since the Supabase timer.)"""
     due = _schedule_helpers()["_due_run"]
-    now = datetime(2026, 11, 3, 6, 8, tzinfo=timezone.utc)
-    before_slot = datetime(2026, 11, 3, 3, 12)          # naive UTC, as journalled
-    slot = datetime(2026, 11, 3, 4, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 3, 14, 8, tzinfo=timezone.utc)
+    before_slot = datetime(2026, 11, 3, 11, 12)         # naive UTC, as journalled
+    slot = datetime(2026, 11, 3, 12, 30, tzinfo=timezone.utc)
     assert due(now, before_slot) == (slot, "pre-market run")
     # It has run: nothing is due, and the page goes back to the next slot.
-    assert due(now, datetime(2026, 11, 3, 5, 50)) is None
+    assert due(now, datetime(2026, 11, 3, 13, 50)) is None
     # Never run at all counts as not started.
     assert due(now, None) == (slot, "pre-market run")
-    # Past the late window it is missed, not "due" — the log check reports those.
-    assert due(datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc), before_slot) is None
+    # The after-close slot (21:45) takes over once it passes, so a pre-market
+    # run that never came is no longer named as due then.
+    assert due(datetime(2026, 11, 3, 22, 0, tzinfo=timezone.utc), before_slot) == (
+        datetime(2026, 11, 3, 21, 45, tzinfo=timezone.utc), "after-close run")
 
 
 def test_days_live_counts_calendar_days():

@@ -18,6 +18,10 @@ name: Trading bot
 # A halted run exits 0 — a stop working correctly is not a failure, so a red job
 # in Actions always means something is genuinely wrong.
 
+# A run the Supabase timer started is titled "<name> (timer <cron line>)";
+# scripts/timer_guard.py finds it by that title.
+run-name: ${{ inputs.slot && format('{0} (timer {1})', github.workflow, inputs.slot) || github.workflow }}
+
 on:
   schedule:
     # 21:45 UTC, SUNDAY THROUGH THURSDAY — 15 minutes after warm-cache's 21:30,
@@ -52,25 +56,27 @@ on:
     # 15 minutes between their schedules.
     - cron: "45 21 * * 0-4"
 
-    # 04:30 UTC, MONDAY THROUGH FRIDAY — the PRE-MARKET run, NZ evenings.
+    # 12:30 UTC, MONDAY THROUGH FRIDAY — the PRE-MARKET run, NZ small hours.
     #
-    # The morning run lands in the NZ afternoon, but creator videos are scanned
+    # The morning run lands in the NZ morning, but creator videos are scanned
     # later than that, so a mention found then waited for the NEXT morning's
     # run, whose order filled at the open after that — two days from video to
-    # fill. This run sits between the two: after the scan that picks up the
-    # creator's usual ~00:00-02:00 UTC upload, and before the US open.
+    # fill. This run sits between the two: after the scans that pick up the
+    # creator's usual ~00:00-02:00 UTC upload (the 06:00 and 12:00 UTC ones),
+    # and before the US open (13:30 UTC in EDT, 14:30 in EST).
     #
-    # It was 08:30 UTC until 27 Oct 2026, chosen on the belief that runs land
-    # ~2h late. They don't: across 28 Sep-27 Oct the 08:30 run began between
-    # 13:25 and 18:06 UTC (5-10 hours late), AFTER the 13:30 UTC open on every
-    # day but one, so its orders filled mid-session rather than at the open.
-    # GitHub's delays here have run 2-10 hours, so 04:30 lands ~06:30-14:30 UTC:
-    # before the 14:30 UTC open in EST (from 2 Nov) even at the worst delay seen,
-    # and before the 13:30 EDT open on all but the worst. One that does land
-    # late fills intraday, which check_fills grades separately.
+    # History, because the time only makes sense with it. It was 08:30 UTC
+    # until 27 Oct 2026, then 04:30 UTC, each chosen to absorb GitHub's delays:
+    # the 04:30 run actually began 6-9.5 hours late (10:46-13:45 UTC), i.e.
+    # around 12:30. From 17 Nov 2026 the Supabase timer starts runs ON TIME
+    # (scripts/setup_github_timer.py), so a 04:30 slot would really run at
+    # 04:30, before the creator scans it exists to wait for. 12:30 is when it
+    # has effectively been running, now on purpose. If the timer fails, this
+    # line's backup run lands hours late, near or after the close; its orders
+    # then fill at the next open, which check_fills grades separately.
     #
     # Mon-Fri because each run precedes THAT day's US session. In NZ it is
-    # 16:30 NZST / 17:30 NZDT, landing in the evening.
+    # 00:30 NZST / 01:30 NZDT the next day.
     #
     # It runs with --pre-market (see the `run` step), which trades normally but
     # writes no equity snapshot: no session has closed since the morning run
@@ -82,9 +88,13 @@ on:
     # KEEP IN STEP: the `run` step matches this exact string to detect the
     # pre-market run, app/pages/11_bot.py computes "next scheduled run" from
     # both crons, and tests check all three agree.
-    - cron: "30 4 * * 1-5"
+    - cron: "30 12 * * 1-5"
   workflow_dispatch:
     inputs:
+      slot:
+        description: "Set by the Supabase timer: the schedule line this run stands in for. Leave blank."
+        required: false
+        default: ""
       dry_run:
         # GitHub renders a boolean as a TICKBOX, and the description is its
         # only label — so it has to describe the tick, not the job. The old
@@ -111,7 +121,35 @@ on:
 concurrency: trade-bot        # never overlap runs
 
 jobs:
+  # First job of every run. The Supabase timer starts each run on time
+  # (scripts/setup_github_timer.py); GitHub's own schedule stays on as the
+  # BACKUP. A late scheduled run stands down here when the timer already
+  # started its slot; every other run goes ahead (scripts/timer_guard.py).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/timer_guard.py
+          sparse-checkout-cone-mode: false
+      - id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/timer_guard.py
+
   trade:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60      # up to 40 of it waiting for warm-cache (run_bot._wait_for_warm_cache)
     strategy:
@@ -156,12 +194,14 @@ jobs:
           ALPACA_CREATOR_CONVICTION_SECRET: ${{ secrets.ALPACA_CREATOR_CONVICTION_SECRET }}
           ALPACA_TOP_DECILE_LONG_KEY: ${{ secrets.ALPACA_TOP_DECILE_LONG_KEY }}
           ALPACA_TOP_DECILE_LONG_SECRET: ${{ secrets.ALPACA_TOP_DECILE_LONG_SECRET }}
-        # `github.event.schedule` is the cron string that fired, so the
+        # `github.event.schedule` is the cron string that fired (`inputs.slot`
+        # when the Supabase timer started the run for that line), so the
         # pre-market run is identified by its schedule rather than by the time
         # the runner happens to wake up — runs land hours late, so the clock is
-        # exactly the wrong thing to infer it from.
+        # exactly the wrong thing to infer it from. The timer always sends
+        # dry_run=false: a manual run still defaults to a dry run.
         run: |
           python scripts/run_bot.py \
             --strategy ${{ matrix.strategy }} \
             ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
-            ${{ (github.event.schedule == '30 4 * * 1-5' || github.event.inputs.pre_market == 'true') && '--pre-market' || '' }}
+            ${{ ((github.event.schedule || inputs.slot) == '30 12 * * 1-5' || github.event.inputs.pre_market == 'true') && '--pre-market' || '' }}

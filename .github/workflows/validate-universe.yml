@@ -22,6 +22,10 @@ name: Validate screener across the S&P 500
 # Runs MONTHLY (see the cron below) — this job is the single biggest consumer of
 # Supabase egress, and its answer barely moves between runs.
 
+# A run the Supabase timer started is titled "<name> (timer <cron line>)";
+# scripts/timer_guard.py finds it by that title.
+run-name: ${{ inputs.slot && format('{0} (timer {1})', github.workflow, inputs.slot) || github.workflow }}
+
 on:
   schedule:
     # 04:00 UTC on the 1st — MONTHLY, not weekly. Two reasons:
@@ -49,6 +53,10 @@ on:
     - cron: "0 16 1 * *"
   workflow_dispatch:
     inputs:
+      slot:
+        description: "Set by the Supabase timer: the schedule line this run stands in for. Leave blank."
+        required: false
+        default: ""
       universe_every:
         description: "Take every Nth name (1 = all ~500, 5 = a ~100-name sample)"
         required: false
@@ -61,7 +69,35 @@ on:
 concurrency: validate-universe   # never overlap runs
 
 jobs:
+  # First job of every run. The Supabase timer starts each run on time
+  # (scripts/setup_github_timer.py); GitHub's own schedule stays on as the
+  # BACKUP. A late scheduled run stands down here when the timer already
+  # started its slot; every other run goes ahead (scripts/timer_guard.py).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/timer_guard.py
+          sparse-checkout-cone-mode: false
+      - id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/timer_guard.py
+
   validate:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     # Thousands of reconstructions on a cold cache. 350 keeps us under GitHub's
     # 360-minute job ceiling while leaving room for a full 503-name cold run; a

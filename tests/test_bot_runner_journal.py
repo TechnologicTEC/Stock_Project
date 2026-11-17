@@ -553,7 +553,7 @@ def test_the_workflow_and_the_runner_agree_on_the_pre_market_schedule():
     text = (Path(__file__).resolve().parent.parent
             / ".github" / "workflows" / "trade-bot.yml").read_text(encoding="utf-8")
     crons = re.findall(r'^\s*-\s*cron:\s*"([^"]+)"', text, re.MULTILINE)
-    matched = re.findall(r"github\.event\.schedule == '([^']+)'", text)
+    matched = re.findall(r"\(github\.event\.schedule \|\| inputs\.slot\) == '([^']+)'", text)
 
     assert len(crons) == 2, crons
     assert len(matched) == 1, matched
@@ -925,7 +925,7 @@ def test_the_saturday_cron_is_the_one_that_screens_the_sp400():
     text = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
             / "screen-leaderboard.yml").read_text(encoding="utf-8")
     crons = re.findall(r'cron:\s*"([^"]+)"', text)
-    picked = re.search(r"github\.event\.schedule == '([^']+)' && 'sp400'", text).group(1)
+    picked = re.search(r"\(github\.event\.schedule \|\| inputs\.slot\) == '([^']+)' && 'sp400'", text).group(1)
     assert picked in crons and picked.split()[-1] == "6"
     assert len(crons) == 2 and picked != crons[0]
 
@@ -937,8 +937,8 @@ def test_the_leaderboard_runs_are_titled_after_the_list_they_screen():
     text = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
             / "screen-leaderboard.yml").read_text(encoding="utf-8")
     title = re.search(r"^run-name: >-\n((?:  .*\n)+)", text, re.MULTILINE).group(1)
-    titled = re.search(r"github\.event\.schedule == '([^']+)'", title).group(1)
-    screened = re.search(r"github\.event\.schedule == '([^']+)' && 'sp400'", text).group(1)
+    titled = re.search(r"\(github\.event\.schedule \|\| inputs\.slot\) == '([^']+)'", title).group(1)
+    screened = re.search(r"\(github\.event\.schedule \|\| inputs\.slot\) == '([^']+)' && 'sp400'", text).group(1)
     assert titled == screened
     assert "inputs.universe == 'sp400'" in title
     assert "'S&P 400 leaderboard" in title and "'S&P 500 leaderboard'" in title

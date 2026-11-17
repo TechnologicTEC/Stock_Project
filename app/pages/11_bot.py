@@ -57,7 +57,7 @@ BENCHMARK_LABEL = "SPY buy & hold"
 # Both runs in .github/workflows/trade-bot.yml, as (hour, minute, weekdays) in
 # UTC with Monday = 0. Must match the two cron lines; a test checks they do.
 AFTER_CLOSE_RUN = (21, 45, (6, 0, 1, 2, 3))   # "45 21 * * 0-4": Sun-Thu
-PRE_MARKET_RUN = (4, 30, (0, 1, 2, 3, 4))     # "30 4 * * 1-5": Mon-Fri
+PRE_MARKET_RUN = (12, 30, (0, 1, 2, 3, 4))    # "30 12 * * 1-5": Mon-Fri
 JOURNAL_LIMIT = 400                          # per strategy, for the trade count and reasons
 
 
@@ -147,7 +147,8 @@ def _next_scheduled_run(now: datetime) -> tuple[datetime, str]:
     return best
 
 
-# GitHub starts the pre-market run up to ~10 h after its cron, so a slot this
+# The Supabase timer starts runs on time, but its backup (GitHub's own schedule)
+# has started them up to ~10 h late, so a slot this
 # recent with no decision since it is still coming, not missed.
 RUN_LATE_WINDOW = timedelta(hours=12)
 

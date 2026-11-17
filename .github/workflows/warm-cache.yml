@@ -5,17 +5,54 @@ name: Warm caches (after US market close)
 # the chat assistant's "why is my portfolio moving" answers — are fast.
 # See scripts/warm_cache.py. Set WARM_NEWS=0 below to skip news (and FinBERT).
 
+# A run the Supabase timer started is titled "<name> (timer <cron line>)";
+# scripts/timer_guard.py finds it by that title.
+run-name: ${{ inputs.slot && format('{0} (timer {1})', github.workflow, inputs.slot) || github.workflow }}
+
 on:
   schedule:
     # 21:30 UTC on weekdays — shortly after the 4pm ET US close (works for both
     # EST and EDT). GitHub cron is UTC and can run a few minutes late; that's fine.
     - cron: "30 21 * * 1-5"
-  workflow_dispatch: {}   # adds a manual "Run workflow" button for testing
+  workflow_dispatch:      # a manual "Run workflow" button, and the Supabase timer
+    inputs:
+      slot:
+        description: "Set by the Supabase timer: the schedule line this run stands in for. Leave blank."
+        required: false
+        default: ""
 
 concurrency: warm-cache   # never overlap runs
 
 jobs:
+  # First job of every run. The Supabase timer starts each run on time
+  # (scripts/setup_github_timer.py); GitHub's own schedule stays on as the
+  # BACKUP. A late scheduled run stands down here when the timer already
+  # started its slot; every other run goes ahead (scripts/timer_guard.py).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/timer_guard.py
+          sparse-checkout-cone-mode: false
+      - id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/timer_guard.py
+
   warm:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25    # news scoring loads FinBERT (~first run downloads the model)
     steps:
